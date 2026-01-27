@@ -332,6 +332,22 @@ class listener implements EventSubscriberInterface
             return 1;
         }
 
+        // Detect fake Chrome build numbers (botnet pattern)
+        // Real Chrome 120+ builds are in the 6000-7999 range
+        // Fake bots use random build numbers (e.g. Chrome/122.0.4877.833)
+        // Skip reduced/frozen UA (Chrome/XXX.0.0.0) which is legitimate
+        if (preg_match('/Chrome\/(\d+)\.0\.(\d+)\.(\d+)/', $user_agent, $matches)) {
+            $chrome_major = (int)$matches[1];
+            $chrome_build = (int)$matches[2];
+            $chrome_patch = (int)$matches[3];
+
+            if (!($chrome_build === 0 && $chrome_patch === 0)) {
+                if ($chrome_major >= 120 && ($chrome_build < 6000 || $chrome_build > 7999)) {
+                    return 1;
+                }
+            }
+        }
+
         return 0;
     }
 
