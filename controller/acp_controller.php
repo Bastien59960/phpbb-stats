@@ -79,7 +79,7 @@ class acp_controller
 
         // Variables template
         $this->template->assign_vars([
-            'U_ACTION'        => $u_action,
+            'U_ACTION'        => append_sid($u_action),
             'FILTER_HOURS'    => $hours,
             'SHOW_BOTS'       => $show_bots,
         ]);

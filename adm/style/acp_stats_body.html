@@ -361,7 +361,7 @@
 <script>
 // Données des visiteurs par pays (générées par PHP)
 var mapData = {MAP_DATA_JSON};
-var baseAction = '{U_ACTION}';
+var baseAction = '{U_ACTION}'.replace(/&amp;/g, '&');
 
 // === FILTRES ===
 function applyFilters() {
