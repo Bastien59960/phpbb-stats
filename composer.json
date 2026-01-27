@@ -1,0 +1,28 @@
+{
+    "name": "bastien59960/stats",
+    "type": "phpbb-extension",
+    "description": "Statistiques avancées : Visiteurs, Robots, Flux de navigation et Temps passé.",
+    "version": "1.1.0",
+    "license": "GPL-2.0-only",
+    "authors": [
+        {
+            "name": "Bastien",
+            "role": "Developer"
+        }
+    ],
+    "require": {
+        "php": ">=7.1.3",
+        "phpbb/phpbb": ">=3.3.0"
+    },
+    "extra": {
+        "display-name": "Bastien59 Stats",
+        "soft-require": {
+            "phpbb/phpbb": ">=3.3.0"
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "bastien59960\\stats\\": "./"
+        }
+    }
+}

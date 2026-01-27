@@ -1,0 +1,22 @@
+services:
+    bastien59960.stats.acp.controller:
+        class: bastien59960\stats\controller\acp_controller
+        arguments:
+            - '@dbal.conn'
+            - '@template'
+            - '@request'
+            - '@user'
+            - '@config'
+            - '%core.table_prefix%'
+
+    bastien59960.stats.listener:
+        class: bastien59960\stats\event\listener
+        arguments:
+            - '@dbal.conn'
+            - '@request'
+            - '@user'
+            - '@config'
+            - '@template'
+            - '%core.table_prefix%'
+        tags:
+            - { name: event.listener }

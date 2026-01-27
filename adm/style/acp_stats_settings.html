@@ -1,0 +1,44 @@
+<!-- INCLUDE overall_header.html -->
+
+<h1>{L_ACP_STATS_SETTINGS}</h1>
+
+<p>{L_ACP_STATS_SETTINGS_EXPLAIN}</p>
+
+<form id="acp_stats_settings" method="post" action="{U_ACTION}">
+
+	<fieldset>
+		<legend>Parametres generaux</legend>
+		<dl>
+			<dt><label for="stats_enabled">Activer le tracking :</label><br /><span>Active ou desactive la collecte des statistiques.</span></dt>
+			<dd><input type="checkbox" id="stats_enabled" name="stats_enabled" value="1"<!-- IF STATS_ENABLED --> checked<!-- ENDIF --> /></dd>
+		</dl>
+	</fieldset>
+
+	<fieldset>
+		<legend>Retention des donnees</legend>
+		<dl>
+			<dt><label for="stats_retention_days">Retention humains (jours) :</label><br /><span>Nombre de jours de conservation des donnees des visiteurs humains (1-365).</span></dt>
+			<dd><input type="number" id="stats_retention_days" name="stats_retention_days" value="{STATS_RETENTION_DAYS}" min="1" max="365" style="width:80px;" /> jours</dd>
+		</dl>
+		<dl>
+			<dt><label for="stats_retention_bots">Retention bots (jours) :</label><br /><span>Nombre de jours de conservation des donnees des bots (1-30).</span></dt>
+			<dd><input type="number" id="stats_retention_bots" name="stats_retention_bots" value="{STATS_RETENTION_BOTS}" min="1" max="30" style="width:80px;" /> jours</dd>
+		</dl>
+	</fieldset>
+
+	<fieldset>
+		<legend>Sessions</legend>
+		<dl>
+			<dt><label for="stats_session_timeout">Timeout de session (minutes) :</label><br /><span>Duree d'inactivite avant qu'une nouvelle visite soit consideree comme une nouvelle session (5-120 minutes).</span></dt>
+			<dd><input type="number" id="stats_session_timeout" name="stats_session_timeout" value="{STATS_SESSION_TIMEOUT}" min="5" max="120" style="width:80px;" /> minutes</dd>
+		</dl>
+	</fieldset>
+
+	<fieldset class="submit-buttons">
+		<input class="button1" type="submit" id="submit" name="submit" value="{L_SUBMIT}" />&nbsp;
+		<input class="button2" type="reset" id="reset" name="reset" value="{L_RESET}" />
+		{S_FORM_TOKEN}
+	</fieldset>
+</form>
+
+<!-- INCLUDE overall_footer.html -->

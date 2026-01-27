@@ -1,0 +1,482 @@
+<!-- INCLUDE overall_header.html -->
+
+<h1>{L_ACP_STATS}</h1>
+<p>{L_ACP_STATS_EXPLAIN}</p>
+
+<style>
+/* === STYLES GLOBAUX === */
+.stats-dashboard { margin: 20px 0; }
+
+/* Cartes de statistiques */
+.stats-cards { display: flex; gap: 15px; flex-wrap: wrap; margin-bottom: 25px; }
+.stat-card { flex: 1; min-width: 150px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 20px; border-radius: 10px; text-align: center; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+.stat-card.bots { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+.stat-card.humans { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); }
+.stat-card.pages { background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%); }
+.stat-card.duration { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); }
+.stat-card .number { font-size: 32px; font-weight: bold; }
+.stat-card .label { font-size: 12px; opacity: 0.9; text-transform: uppercase; }
+
+/* Filtres */
+.filters-bar { background: #f5f5f5; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 20px; align-items: center; flex-wrap: wrap; }
+.filters-bar label { font-weight: bold; margin-right: 5px; }
+.filters-bar select, .filters-bar input[type="checkbox"] { margin-right: 15px; }
+
+/* Onglets */
+.tab-container { margin-top: 20px; }
+.tab-buttons { overflow: hidden; border-bottom: 2px solid #105289; display: flex; }
+.tab-btn { background: #f1f1f1; border: none; outline: none; cursor: pointer; padding: 12px 25px; font-size: 14px; border-radius: 8px 8px 0 0; margin-right: 3px; transition: all 0.2s; }
+.tab-btn:hover { background: #e0e0e0; }
+.tab-btn.active { background: #105289; color: #fff; font-weight: bold; }
+.tab-content { display: none; padding: 20px; border: 1px solid #ddd; border-top: none; background: #fff; border-radius: 0 0 8px 8px; }
+
+/* Graphes CSS */
+.charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px; }
+.chart-box { background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 15px; }
+.chart-box h4 { margin: 0 0 15px 0; padding-bottom: 10px; border-bottom: 2px solid #105289; color: #333; }
+.stat-row { margin-bottom: 8px; display: flex; align-items: center; }
+.stat-label { width: 35%; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 10px; }
+.stat-bar-container { flex: 1; background: #eee; height: 20px; border-radius: 4px; overflow: hidden; }
+.stat-bar { height: 100%; text-align: right; color: #fff; font-size: 11px; line-height: 20px; padding-right: 5px; white-space: nowrap; min-width: 25px; border-radius: 4px; }
+.stat-count { width: 50px; text-align: right; font-weight: bold; font-size: 12px; padding-left: 10px; }
+
+/* Couleurs des barres */
+.bar-blue { background: linear-gradient(90deg, #105289, #1a73e8); }
+.bar-orange { background: linear-gradient(90deg, #d35400, #e67e22); }
+.bar-green { background: linear-gradient(90deg, #27ae60, #2ecc71); }
+.bar-purple { background: linear-gradient(90deg, #8e44ad, #9b59b6); }
+.bar-red { background: linear-gradient(90deg, #c0392b, #e74c3c); }
+
+/* Tableau sessions */
+.sessions-table { width: 100%; border-collapse: collapse; }
+.sessions-table th { background: #105289; color: #fff; padding: 12px; text-align: left; }
+.sessions-table td { padding: 10px; border-bottom: 1px solid #eee; vertical-align: top; }
+.sessions-table tr:hover { background: #f9f9f9; }
+.sessions-table .session-row { background: #f5f5f5; border-top: 2px solid #ddd; }
+.sessions-table .page-row td { padding-left: 40px; font-size: 13px; color: #666; }
+
+/* Badges */
+.badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; }
+.badge-bot { background: #e74c3c; color: #fff; }
+.badge-bot-phpbb { background: #27ae60; color: #fff; }
+.badge-bot-detected { background: #e67e22; color: #fff; }
+.badge-human { background: #3498db; color: #fff; }
+.badge-member { background: #9b59b6; color: #fff; }
+.badge-referer { background: #8e44ad; color: #fff; }
+
+/* Session info */
+.session-info { line-height: 1.6; }
+.session-info .ip { font-family: monospace; font-weight: bold; }
+.session-info .time { color: #666; font-size: 12px; }
+.session-tech { font-size: 12px; color: #555; }
+.session-tech .ua { cursor: help; border-bottom: 1px dotted #999; }
+
+/* Pages count */
+.page-count { background: #eee; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+
+/* Referer */
+.referer-cell { max-width: 250px; word-wrap: break-word; font-size: 12px; }
+.referer-cell a { color: #105289; }
+.direct { color: #999; font-style: italic; }
+</style>
+
+<!-- Filtres -->
+<div class="filters-bar">
+    <div>
+        <label>Période :</label>
+        <select id="filter-hours" onchange="applyFilters()">
+            <option value="1"<!-- IF FILTER_HOURS == 1 --> selected<!-- ENDIF -->>1 heure</option>
+            <option value="6"<!-- IF FILTER_HOURS == 6 --> selected<!-- ENDIF -->>6 heures</option>
+            <option value="12"<!-- IF FILTER_HOURS == 12 --> selected<!-- ENDIF -->>12 heures</option>
+            <option value="24"<!-- IF FILTER_HOURS == 24 --> selected<!-- ENDIF -->>24 heures</option>
+            <option value="48"<!-- IF FILTER_HOURS == 48 --> selected<!-- ENDIF -->>48 heures</option>
+            <option value="168"<!-- IF FILTER_HOURS == 168 --> selected<!-- ENDIF -->>7 jours</option>
+            <option value="720"<!-- IF FILTER_HOURS == 720 --> selected<!-- ENDIF -->>30 jours</option>
+        </select>
+    </div>
+    <div>
+        <label><input type="checkbox" id="filter-bots" value="1"<!-- IF SHOW_BOTS --> checked<!-- ENDIF --> onchange="applyFilters()"> Afficher les bots</label>
+    </div>
+</div>
+
+<!-- Cartes de statistiques -->
+<div class="stats-cards">
+    <div class="stat-card pages">
+        <div class="number">{TOTAL_PAGEVIEWS}</div>
+        <div class="label">Pages vues (humains)</div>
+    </div>
+    <div class="stat-card humans">
+        <div class="number">{UNIQUE_VISITORS}</div>
+        <div class="label">Visiteurs uniques</div>
+    </div>
+    <div class="stat-card duration">
+        <div class="number">{AVG_DURATION_HUMANS}</div>
+        <div class="label">Duree moy. humains</div>
+    </div>
+    <div class="stat-card bots">
+        <div class="number">{TOTAL_BOTS}</div>
+        <div class="label">Bots uniques</div>
+    </div>
+    <div class="stat-card" style="background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);">
+        <div class="number">{BOT_PAGEVIEWS}</div>
+        <div class="label">Pages bots ({BOT_PERCENT}%)</div>
+    </div>
+    <div class="stat-card" style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);">
+        <div class="number">{AVG_DURATION_BOTS}</div>
+        <div class="label">Duree moy. bots</div>
+    </div>
+</div>
+
+<!-- Onglets -->
+<div class="tab-container">
+    <div class="tab-buttons">
+        <button class="tab-btn active" onclick="openTab(event, 'tab_dashboard')">Vue d'ensemble</button>
+        <button class="tab-btn" onclick="openTab(event, 'tab_sessions')">Sessions</button>
+        <button class="tab-btn" onclick="openTab(event, 'tab_pages')">Pages</button>
+        <button class="tab-btn" onclick="openTab(event, 'tab_map')">Carte</button>
+    </div>
+
+    <!-- ONGLET 1 : DASHBOARD -->
+    <div id="tab_dashboard" class="tab-content" style="display: block;">
+        <div class="charts-grid">
+            <!-- Sources de trafic -->
+            <div class="chart-box">
+                <h4>Sources de trafic</h4>
+                <!-- BEGIN STATS_REFERER -->
+                <div class="stat-row">
+                    <div class="stat-label" title="{STATS_REFERER.NAME}">{STATS_REFERER.NAME}</div>
+                    <div class="stat-bar-container"><div class="stat-bar bar-blue" style="width:{STATS_REFERER.PERCENT}%"></div></div>
+                    <div class="stat-count">{STATS_REFERER.COUNT}</div>
+                </div>
+                <!-- END STATS_REFERER -->
+                <!-- IF not STATS_REFERER --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+            </div>
+
+            <!-- OS -->
+            <div class="chart-box">
+                <h4>Systemes d'exploitation</h4>
+                <!-- BEGIN STATS_OS -->
+                <div class="stat-row">
+                    <div class="stat-label">{STATS_OS.NAME}</div>
+                    <div class="stat-bar-container"><div class="stat-bar bar-orange" style="width:{STATS_OS.PERCENT}%"></div></div>
+                    <div class="stat-count">{STATS_OS.COUNT}</div>
+                </div>
+                <!-- END STATS_OS -->
+                <!-- IF not STATS_OS --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+            </div>
+
+            <!-- Appareils -->
+            <div class="chart-box">
+                <h4>Types d'appareils</h4>
+                <!-- BEGIN STATS_DEVICE -->
+                <div class="stat-row">
+                    <div class="stat-label">{STATS_DEVICE.NAME}</div>
+                    <div class="stat-bar-container"><div class="stat-bar bar-green" style="width:{STATS_DEVICE.PERCENT}%"></div></div>
+                    <div class="stat-count">{STATS_DEVICE.COUNT}</div>
+                </div>
+                <!-- END STATS_DEVICE -->
+                <!-- IF not STATS_DEVICE --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+            </div>
+
+            <!-- Resolutions -->
+            <div class="chart-box">
+                <h4>Resolutions d'ecran</h4>
+                <!-- BEGIN STATS_RES -->
+                <div class="stat-row">
+                    <div class="stat-label">{STATS_RES.NAME}</div>
+                    <div class="stat-bar-container"><div class="stat-bar bar-purple" style="width:{STATS_RES.PERCENT}%"></div></div>
+                    <div class="stat-count">{STATS_RES.COUNT}</div>
+                </div>
+                <!-- END STATS_RES -->
+                <!-- IF not STATS_RES --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ONGLET 2 : SESSIONS -->
+    <div id="tab_sessions" class="tab-content">
+        <form method="post" action="{U_ACTION}" style="margin-bottom: 15px; text-align: right;">
+            <input type="submit" name="submit_clear" value="{L_ACP_BASTIEN59_STATS_CLEAR}" class="button2" onclick="return confirm('{L_ACP_BASTIEN59_STATS_CONFIRM}');" />
+            {S_FORM_TOKEN}
+        </form>
+
+        <table class="sessions-table">
+            <thead>
+                <tr>
+                    <th style="width:20%">Visiteur</th>
+                    <th style="width:15%">Appareil</th>
+                    <th style="width:30%">Page d'entree</th>
+                    <th style="width:15%">Source</th>
+                    <th style="width:10%">Pages</th>
+                </tr>
+            </thead>
+            <tbody>
+            <!-- BEGIN SESSIONS -->
+                <tr class="session-row">
+                    <td class="session-info">
+                        <!-- IF SESSIONS.IS_BOT -->
+                            <span class="badge badge-bot">BOT</span>
+                            <!-- IF SESSIONS.IS_PHPBB_BOT --><span class="badge badge-bot-phpbb">DB phpBB</span><!-- ELSE --><span class="badge badge-bot-detected">Inconnu</span><!-- ENDIF -->
+                        <!-- ELSE -->
+                            <span class="badge badge-human">Humain</span>
+                            <!-- IF SESSIONS.USERNAME == "Invite" --><span class="badge" style="background:#95a5a6; color:#fff;">Invite</span><!-- ENDIF -->
+                        <!-- ENDIF -->
+                        <!-- IF SESSIONS.USERNAME != "Invite" --><span class="badge badge-member">{SESSIONS.USERNAME}</span><!-- ENDIF -->
+                        <br>
+                        <span class="ip">{SESSIONS.IP}</span>
+                        <!-- IF SESSIONS.COUNTRY --><br><span style="font-size:14px;">{SESSIONS.COUNTRY}</span><!-- ENDIF -->
+                        <!-- IF SESSIONS.HOSTNAME --><br><small style="color:#888; font-size:10px;" title="{SESSIONS.HOSTNAME}">{SESSIONS.HOSTNAME}</small><!-- ENDIF -->
+                        <br>
+                        <span class="time">{SESSIONS.START_TIME}</span>
+                    </td>
+                    <td class="session-tech">
+                        <!-- IF SESSIONS.IS_BOT -->
+                        <strong style="color:#e74c3c;">{SESSIONS.BOT_NAME}</strong><br>
+                        <small style="word-break:break-all; color:#666; font-size:10px;">{SESSIONS.USER_AGENT}</small>
+                        <!-- ELSE -->
+                        <strong>{SESSIONS.OS}</strong><br>
+                        {SESSIONS.DEVICE}<br>
+                        <span class="ua" title="{SESSIONS.USER_AGENT}">UA</span> | {SESSIONS.RES}
+                        <!-- ENDIF -->
+                    </td>
+                    <td>
+                        <strong>{SESSIONS.LANDING_PAGE}</strong><br>
+                        <a href="{SESSIONS.LANDING_URL}" target="_blank" style="font-size:11px; color:#666; word-break:break-all;">{SESSIONS.LANDING_URL}</a>
+                    </td>
+                    <td class="referer-cell">
+                        <span class="badge badge-referer">{SESSIONS.REFERER_TYPE}</span><br>
+                        <small>{SESSIONS.REFERER}</small>
+                    </td>
+                    <td style="text-align:center">
+                        <span class="page-count">{SESSIONS.PAGE_COUNT} pages</span>
+                    </td>
+                </tr>
+                <!-- BEGIN PAGES -->
+                <tr class="page-row">
+                    <td style="text-align:right; color:#888;">
+                        &#8627; {SESSIONS.PAGES.TIME}
+                    </td>
+                    <td style="color:#888; font-size:11px;">{SESSIONS.PAGES.DURATION}</td>
+                    <td colspan="3">
+                        <strong>{SESSIONS.PAGES.TITLE}</strong><br>
+                        <a href="{SESSIONS.PAGES.URL}" target="_blank" style="font-size:11px; color:#888; word-break:break-all;">{SESSIONS.PAGES.URL}</a>
+                    </td>
+                </tr>
+                <!-- END PAGES -->
+            <!-- BEGINELSE -->
+                <tr>
+                    <td colspan="5" style="text-align:center; padding: 40px; color: #999;">
+                        <strong>Aucune session enregistree</strong><br>
+                        Les donnees apparaitront apres les premieres visites.
+                    </td>
+                </tr>
+            <!-- END SESSIONS -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- ONGLET 3 : TOP PAGES -->
+    <div id="tab_pages" class="tab-content">
+        <h3>Pages les plus visitees</h3>
+        <table class="sessions-table">
+            <thead>
+                <tr>
+                    <th>Page</th>
+                    <th style="width:15%">Visites</th>
+                    <th style="width:15%">Temps moyen</th>
+                </tr>
+            </thead>
+            <tbody>
+            <!-- BEGIN TOP_PAGES -->
+                <tr>
+                    <td><a href="{TOP_PAGES.URL}" target="_blank">{TOP_PAGES.TITLE}</a></td>
+                    <td style="text-align:center"><strong>{TOP_PAGES.VISITS}</strong></td>
+                    <td style="text-align:center">{TOP_PAGES.AVG_TIME}</td>
+                </tr>
+            <!-- BEGINELSE -->
+                <tr>
+                    <td colspan="3" style="text-align:center; padding: 40px; color: #999;">
+                        Aucune donnee disponible.
+                    </td>
+                </tr>
+            <!-- END TOP_PAGES -->
+            </tbody>
+        </table>
+    </div>
+
+    <!-- ONGLET 4 : CARTE -->
+    <div id="tab_map" class="tab-content">
+        <h3>Visiteurs par pays</h3>
+
+        <!-- Carte du monde jVectorMap -->
+        <div class="chart-box" style="margin-bottom:20px;">
+            <div id="world-map" style="width:100%; height:450px; background:#f8fafc;"></div>
+            <div style="display:flex; justify-content:center; align-items:center; gap:20px; margin-top:10px; padding:10px; background:#f5f5f5; border-radius:5px;">
+                <span style="font-size:12px; color:#666;">Legende :</span>
+                <span style="display:inline-block; width:20px; height:12px; background:#c8e6c9; border:1px solid #a5d6a7;"></span>
+                <span style="font-size:11px;">Peu</span>
+                <span style="display:inline-block; width:20px; height:12px; background:#66bb6a; border:1px solid #4caf50;"></span>
+                <span style="font-size:11px;">Moyen</span>
+                <span style="display:inline-block; width:20px; height:12px; background:#2e7d32; border:1px solid #1b5e20;"></span>
+                <span style="font-size:11px;">Beaucoup</span>
+            </div>
+        </div>
+
+        <div class="charts-grid">
+            <!-- Liste des pays -->
+            <div class="chart-box">
+                <h4>Top pays</h4>
+                <!-- BEGIN STATS_COUNTRY -->
+                <div class="stat-row">
+                    <div class="stat-label" style="width:45%;">
+                        <span style="font-size:18px;">{STATS_COUNTRY.FLAG}</span>
+                        {STATS_COUNTRY.NAME}
+                    </div>
+                    <div class="stat-bar-container">
+                        <div class="stat-bar bar-green" style="width:{STATS_COUNTRY.PERCENT}%"></div>
+                    </div>
+                    <div class="stat-count">{STATS_COUNTRY.VISITORS}</div>
+                </div>
+                <!-- END STATS_COUNTRY -->
+                <!-- IF not STATS_COUNTRY --><p style="color:#999; text-align:center;">Aucune donnee de geolocalisation</p><!-- ENDIF -->
+            </div>
+
+            <!-- Stats par continent -->
+            <div class="chart-box">
+                <h4>Repartition</h4>
+                <div id="map-stats-details">
+                    <p style="color:#666; font-size:13px; line-height:1.8;">
+                        <strong>Total pays :</strong> <span id="total-countries">0</span><br>
+                        <strong>Visiteurs geolocalises :</strong> <span id="total-geolocated">0</span>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Scripts (chargés APRES overall_footer.html qui inclut jQuery) -->
+<!-- INCLUDE overall_footer.html -->
+
+<script>
+// Données des visiteurs par pays (générées par PHP)
+var mapData = {MAP_DATA_JSON};
+var baseAction = '{U_ACTION}';
+
+// === FILTRES ===
+function applyFilters() {
+    var hours = document.getElementById('filter-hours').value;
+    var showBots = document.getElementById('filter-bots').checked ? 1 : 0;
+    var sep = (baseAction.indexOf('?') > -1) ? '&' : '?';
+    window.location.href = baseAction + sep + 'hours=' + hours + '&show_bots=' + showBots;
+}
+
+// === ONGLETS ===
+function openTab(evt, tabName) {
+    var tabcontent = document.getElementsByClassName('tab-content');
+    for (var i = 0; i < tabcontent.length; i++) {
+        tabcontent[i].style.display = 'none';
+    }
+    var tablinks = document.getElementsByClassName('tab-btn');
+    for (var i = 0; i < tablinks.length; i++) {
+        tablinks[i].className = tablinks[i].className.replace(' active', '');
+    }
+    document.getElementById(tabName).style.display = 'block';
+    evt.currentTarget.className += ' active';
+
+    // Initialiser la carte quand on ouvre l'onglet Carte
+    if (tabName === 'tab_map' && !window.mapInitialized) {
+        loadAndInitMap();
+    }
+    return false;
+}
+
+// === CARTE (chargement paresseux) ===
+function loadAndInitMap() {
+    document.getElementById('world-map').innerHTML = '<p style="text-align:center; padding:50px; color:#999;">Chargement de la carte...</p>';
+
+    // Charger le CSS
+    var css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdn.jsdelivr.net/npm/jvectormap@2.0.4/jquery-jvectormap.min.css';
+    document.head.appendChild(css);
+
+    // Charger jVectorMap JS puis le fichier de carte
+    loadScript('https://cdn.jsdelivr.net/npm/jvectormap@2.0.4/jquery-jvectormap.min.js', function() {
+        loadScript('https://cdn.jsdelivr.net/npm/jvectormap@2.0.4/tests/assets/jquery-jvectormap-world-mill-en.js', function() {
+            initWorldMap();
+        });
+    });
+}
+
+function loadScript(url, callback) {
+    var script = document.createElement('script');
+    script.src = url;
+    script.onload = callback;
+    script.onerror = function() {
+        document.getElementById('world-map').innerHTML = '<p style="text-align:center; padding:50px; color:#e74c3c;">Erreur de chargement de la carte. Verifiez votre connexion internet.</p>';
+    };
+    document.body.appendChild(script);
+}
+
+function initWorldMap() {
+    if (typeof jQuery === 'undefined' || typeof jQuery.fn.vectorMap === 'undefined') {
+        document.getElementById('world-map').innerHTML = '<p style="text-align:center; padding:50px; color:#e74c3c;">jVectorMap non disponible. jQuery ou la librairie de carte n\'a pas pu etre chargee.</p>';
+        return;
+    }
+
+    // Convertir les codes pays en majuscules pour jVectorMap
+    var mapDataUpper = {};
+    var totalVisitors = 0;
+    var totalCountries = 0;
+    for (var code in mapData) {
+        if (mapData.hasOwnProperty(code)) {
+            mapDataUpper[code.toUpperCase()] = mapData[code];
+            totalVisitors += mapData[code];
+            totalCountries++;
+        }
+    }
+
+    // Mettre a jour les stats
+    document.getElementById('total-countries').textContent = totalCountries;
+    document.getElementById('total-geolocated').textContent = totalVisitors;
+
+    jQuery('#world-map').vectorMap({
+        map: 'world_mill_en',
+        backgroundColor: '#f8fafc',
+        zoomOnScroll: true,
+        zoomButtons: true,
+        panOnDrag: true,
+        regionStyle: {
+            initial: {
+                fill: '#e0e0e0',
+                'fill-opacity': 1,
+                stroke: '#fff',
+                'stroke-width': 0.5,
+                'stroke-opacity': 1
+            },
+            hover: {
+                'fill-opacity': 0.8,
+                cursor: 'pointer'
+            }
+        },
+        series: {
+            regions: [{
+                values: mapDataUpper,
+                scale: ['#c8e6c9', '#66bb6a', '#2e7d32'],
+                normalizeFunction: 'polynomial',
+                min: 0,
+                max: Math.max.apply(null, Object.values(mapDataUpper)) || 1
+            }]
+        },
+        onRegionTipShow: function(e, el, code) {
+            var visitors = mapDataUpper[code] || 0;
+            if (visitors > 0) {
+                el.html('<strong>' + el.html() + '</strong><br>' + visitors + ' visiteur' + (visitors > 1 ? 's' : ''));
+            }
+        }
+    });
+
+    window.mapInitialized = true;
+}
+</script>
