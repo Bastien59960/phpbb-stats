@@ -1,4 +1,4 @@
-# Bastien59 Stats - Extension phpBB
+# Bastien59960 - Stats - Extension phpBB
 
 Extension de statistiques avancées pour phpBB 3.3+. Collecte et affiche les données de navigation des visiteurs directement dans le panneau d'administration.
 
