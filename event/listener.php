@@ -42,7 +42,7 @@ class listener implements EventSubscriberInterface
         'headlesschrome', 'phantomjs', 'selenium', 'puppeteer',
         'scrapy', 'nutch', 'archive.org_bot', 'ccbot',
         'applebot', 'petalbot', 'bytespider', 'gptbot', 'claudebot',
-        'amazonbot', 'dataprovider', 'megaindex', 'blexbot',
+        'chatgpt', 'amazonbot', 'dataprovider', 'megaindex', 'blexbot',
         'mj12bot', 'ahrefsbot', 'seznambot', 'yacybot',
     ];
 
@@ -345,6 +345,20 @@ class listener implements EventSubscriberInterface
                 if ($chrome_major >= 120 && ($chrome_build < 6000 || $chrome_build > 7999)) {
                     return 1;
                 }
+            }
+        }
+
+        // Detect ancient/fabricated browser versions
+        // Firefox < 30 (2014), impossible Gecko dates
+        if (preg_match('/Firefox\/(\d+)\./', $user_agent, $matches)) {
+            if ((int)$matches[1] < 30) {
+                return 1;
+            }
+        }
+        if (preg_match('/Gecko\/(\d{4})-/', $user_agent, $matches)) {
+            $gecko_year = (int)$matches[1];
+            if ($gecko_year > 2030 || $gecko_year < 2000) {
+                return 1;
             }
         }
 
