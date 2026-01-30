@@ -53,6 +53,11 @@ class acp_controller
         $show_bots = $this->request->variable('show_bots', 1);
         $bot_filter = ($show_bots) ? '' : ' AND is_bot = 0';
 
+        // Limite d'affichage (500 par défaut)
+        $display_limit = $this->request->variable('limit', 500);
+        if ($display_limit < 10) $display_limit = 10;
+        if ($display_limit > 5000) $display_limit = 5000;
+
         // ================================================================
         // 1. STATISTIQUES GLOBALES
         // ================================================================
@@ -61,7 +66,7 @@ class acp_controller
         // ================================================================
         // 2. LISTE DES SESSIONS (visiteurs uniques)
         // ================================================================
-        $this->assign_sessions($start_time, $bot_filter);
+        $this->assign_sessions($start_time, $bot_filter, $display_limit);
 
         // ================================================================
         // 3. GRAPHIQUES / STATISTIQUES AGRÉGÉES
@@ -75,11 +80,11 @@ class acp_controller
         $this->assign_stats_block('referer_type', 'STATS_REFERER_HUMANS', $start_time, ' AND is_bot = 0', 30);
         $this->assign_stats_block('referer_type', 'STATS_REFERER_BOTS', $start_time, ' AND is_bot = 1', 30);
 
-        // Referers complets cliquables (humains seulement, externes uniquement)
-        $this->assign_full_referers($start_time);
+        // Referers complets cliquables (externes uniquement)
+        $this->assign_full_referers($start_time, $display_limit);
 
         // Top pages visitées
-        $this->assign_top_pages($start_time, $bot_filter, 20);
+        $this->assign_top_pages($start_time, $bot_filter, $display_limit);
 
         // Statistiques par pays (pour la carte)
         $this->assign_country_stats($start_time, $bot_filter);
@@ -89,6 +94,7 @@ class acp_controller
             'U_ACTION'        => append_sid($u_action),
             'FILTER_HOURS'    => $hours,
             'SHOW_BOTS'       => $show_bots,
+            'DISPLAY_LIMIT'   => $display_limit,
         ]);
     }
 
@@ -157,7 +163,7 @@ class acp_controller
     /**
      * Liste des sessions avec pages visitées
      */
-    private function assign_sessions($start_time, $bot_filter)
+    private function assign_sessions($start_time, $bot_filter, $limit = 500)
     {
         // Récupérer les sessions uniques avec leur première entrée
         $sql = 'SELECT s.*,
@@ -168,7 +174,7 @@ class acp_controller
                 AND s.is_first_visit = 1
                 ORDER BY s.visit_time DESC';
 
-        $result = $this->db->sql_query_limit($sql, 100);
+        $result = $this->db->sql_query_limit($sql, $limit);
 
         while ($row = $this->db->sql_fetchrow($result)) {
             $session_id = $row['session_id'];
@@ -440,7 +446,7 @@ class acp_controller
     /**
      * Referers complets cliquables (externes uniquement)
      */
-    private function assign_full_referers($start_time)
+    private function assign_full_referers($start_time, $limit = 500)
     {
         $server_name = $this->request->server('SERVER_NAME', '');
 
@@ -472,7 +478,7 @@ class acp_controller
                 GROUP BY referer, referer_type, page_url, page_title, is_bot
                 ORDER BY total DESC';
 
-        $result = $this->db->sql_query_limit($sql, 100);
+        $result = $this->db->sql_query_limit($sql, $limit);
 
         while ($row = $this->db->sql_fetchrow($result)) {
             $ref = $row['referer'];

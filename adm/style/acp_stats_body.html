@@ -97,6 +97,18 @@
     <div>
         <label><input type="checkbox" id="filter-bots" value="1"<!-- IF SHOW_BOTS --> checked<!-- ENDIF --> onchange="applyFilters()"> Afficher les bots</label>
     </div>
+    <div>
+        <label>Limite :</label>
+        <select id="filter-limit" onchange="applyFilters()">
+            <option value="50"<!-- IF DISPLAY_LIMIT == 50 --> selected<!-- ENDIF -->>50</option>
+            <option value="100"<!-- IF DISPLAY_LIMIT == 100 --> selected<!-- ENDIF -->>100</option>
+            <option value="250"<!-- IF DISPLAY_LIMIT == 250 --> selected<!-- ENDIF -->>250</option>
+            <option value="500"<!-- IF DISPLAY_LIMIT == 500 --> selected<!-- ENDIF -->>500</option>
+            <option value="1000"<!-- IF DISPLAY_LIMIT == 1000 --> selected<!-- ENDIF -->>1 000</option>
+            <option value="2000"<!-- IF DISPLAY_LIMIT == 2000 --> selected<!-- ENDIF -->>2 000</option>
+            <option value="5000"<!-- IF DISPLAY_LIMIT == 5000 --> selected<!-- ENDIF -->>5 000</option>
+        </select>
+    </div>
 </div>
 
 <!-- Cartes de statistiques -->
@@ -466,8 +478,9 @@ function filterSessions() {
 function applyFilters() {
     var hours = document.getElementById('filter-hours').value;
     var showBots = document.getElementById('filter-bots').checked ? 1 : 0;
+    var limit = document.getElementById('filter-limit').value;
     var sep = (baseAction.indexOf('?') > -1) ? '&' : '?';
-    window.location.href = baseAction + sep + 'hours=' + hours + '&show_bots=' + showBots;
+    window.location.href = baseAction + sep + 'hours=' + hours + '&show_bots=' + showBots + '&limit=' + limit;
 }
 
 // === ONGLETS ===
