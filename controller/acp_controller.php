@@ -157,6 +157,7 @@ class acp_controller
             'BOT_PERCENT'           => $bot_percent,
             'AVG_DURATION_HUMANS'   => $this->format_duration($avg_duration_humans),
             'AVG_DURATION_BOTS'     => $this->format_duration($avg_duration_bots),
+            'L_STATS_BOT_PAGEVIEWS_LABEL' => sprintf($this->user->lang('STATS_BOT_PAGEVIEWS'), $bot_percent),
         ]);
     }
 
@@ -215,7 +216,8 @@ class acp_controller
                 'USER_AGENT'    => htmlspecialchars($row['user_agent'], ENT_COMPAT, 'UTF-8'),
                 'BOT_NAME'      => $this->extract_bot_name($row['user_agent']),
                 'IS_PHPBB_BOT'  => $is_phpbb_bot,
-                'USERNAME'      => ($row['user_id'] > 1) ? $this->get_username($row['user_id']) : 'Invité',
+                'USERNAME'      => ($row['user_id'] > 1) ? $this->get_username($row['user_id']) : $this->user->lang('STATS_GUEST'),
+                'IS_GUEST'      => ($row['user_id'] <= 1 && !$row['is_bot']) ? 1 : 0,
                 'IS_BOT'        => (int)$row['is_bot'],
                 'BOT_CLASS'     => ($row['is_bot']) ? 'bot' : 'human',
                 'BOT_SOURCE'    => htmlspecialchars($bot_source, ENT_COMPAT, 'UTF-8'),
@@ -225,6 +227,7 @@ class acp_controller
                 'REFERER'       => $this->format_referer($row['referer']),
                 'REFERER_TYPE'  => htmlspecialchars($row['referer_type'] ?? 'Direct', ENT_COMPAT, 'UTF-8'),
                 'PAGE_COUNT'    => (int)$row['page_count'],
+                'PAGES_COUNT_LABEL' => sprintf($this->user->lang('STATS_PAGES_COUNT'), (int)$row['page_count']),
             ]);
 
             // Assigner les pages de la session (à partir de la 2ème)
@@ -307,7 +310,7 @@ class acp_controller
     private function format_referer($referer)
     {
         if (empty($referer)) {
-            return '<span class="direct">Accès direct</span>';
+            return '<span class="direct">' . $this->user->lang('STATS_DIRECT_ACCESS') . '</span>';
         }
 
         // Limiter la longueur
@@ -329,7 +332,7 @@ class acp_controller
         $username = $this->db->sql_fetchfield('username');
         $this->db->sql_freeresult($result);
 
-        return $username ?: 'Utilisateur #' . $user_id;
+        return $username ?: sprintf($this->user->lang('STATS_USER_FALLBACK'), $user_id);
     }
 
     /**
@@ -420,7 +423,7 @@ class acp_controller
             return htmlspecialchars(ucfirst($matches[1]), ENT_COMPAT, 'UTF-8');
         }
 
-        return 'Bot suspect (UA/comportement)';
+        return $this->user->lang('STATS_BOT_UNKNOWN');
     }
 
     /**

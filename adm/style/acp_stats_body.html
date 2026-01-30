@@ -83,22 +83,22 @@
 <!-- Filtres -->
 <div class="filters-bar">
     <div>
-        <label>Période :</label>
+        <label>{L_STATS_PERIOD}</label>
         <select id="filter-hours" onchange="applyFilters()">
-            <option value="1"<!-- IF FILTER_HOURS == 1 --> selected<!-- ENDIF -->>1 heure</option>
-            <option value="6"<!-- IF FILTER_HOURS == 6 --> selected<!-- ENDIF -->>6 heures</option>
-            <option value="12"<!-- IF FILTER_HOURS == 12 --> selected<!-- ENDIF -->>12 heures</option>
-            <option value="24"<!-- IF FILTER_HOURS == 24 --> selected<!-- ENDIF -->>24 heures</option>
-            <option value="48"<!-- IF FILTER_HOURS == 48 --> selected<!-- ENDIF -->>48 heures</option>
-            <option value="168"<!-- IF FILTER_HOURS == 168 --> selected<!-- ENDIF -->>7 jours</option>
-            <option value="720"<!-- IF FILTER_HOURS == 720 --> selected<!-- ENDIF -->>30 jours</option>
+            <option value="1"<!-- IF FILTER_HOURS == 1 --> selected<!-- ENDIF -->>{L_STATS_1_HOUR}</option>
+            <option value="6"<!-- IF FILTER_HOURS == 6 --> selected<!-- ENDIF -->>{L_STATS_6_HOURS}</option>
+            <option value="12"<!-- IF FILTER_HOURS == 12 --> selected<!-- ENDIF -->>{L_STATS_12_HOURS}</option>
+            <option value="24"<!-- IF FILTER_HOURS == 24 --> selected<!-- ENDIF -->>{L_STATS_24_HOURS}</option>
+            <option value="48"<!-- IF FILTER_HOURS == 48 --> selected<!-- ENDIF -->>{L_STATS_48_HOURS}</option>
+            <option value="168"<!-- IF FILTER_HOURS == 168 --> selected<!-- ENDIF -->>{L_STATS_7_DAYS}</option>
+            <option value="720"<!-- IF FILTER_HOURS == 720 --> selected<!-- ENDIF -->>{L_STATS_30_DAYS}</option>
         </select>
     </div>
     <div>
-        <label><input type="checkbox" id="filter-bots" value="1"<!-- IF SHOW_BOTS --> checked<!-- ENDIF --> onchange="applyFilters()"> Afficher les bots</label>
+        <label><input type="checkbox" id="filter-bots" value="1"<!-- IF SHOW_BOTS --> checked<!-- ENDIF --> onchange="applyFilters()"> {L_STATS_SHOW_BOTS}</label>
     </div>
     <div>
-        <label>Limite :</label>
+        <label>{L_STATS_LIMIT}</label>
         <select id="filter-limit" onchange="applyFilters()">
             <option value="50"<!-- IF DISPLAY_LIMIT == 50 --> selected<!-- ENDIF -->>50</option>
             <option value="100"<!-- IF DISPLAY_LIMIT == 100 --> selected<!-- ENDIF -->>100</option>
@@ -115,37 +115,37 @@
 <div class="stats-cards">
     <div class="stat-card pages">
         <div class="number">{TOTAL_PAGEVIEWS}</div>
-        <div class="label">Pages vues (humains)</div>
+        <div class="label">{L_STATS_PAGEVIEWS_HUMANS}</div>
     </div>
     <div class="stat-card humans">
         <div class="number">{UNIQUE_VISITORS}</div>
-        <div class="label">Visiteurs uniques</div>
+        <div class="label">{L_STATS_UNIQUE_VISITORS}</div>
     </div>
     <div class="stat-card duration">
         <div class="number">{AVG_DURATION_HUMANS}</div>
-        <div class="label">Duree moy. humains</div>
+        <div class="label">{L_STATS_AVG_DURATION_HUMANS}</div>
     </div>
     <div class="stat-card bots">
         <div class="number">{TOTAL_BOTS}</div>
-        <div class="label">Bots uniques</div>
+        <div class="label">{L_STATS_UNIQUE_BOTS}</div>
     </div>
     <div class="stat-card" style="background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);">
         <div class="number">{BOT_PAGEVIEWS}</div>
-        <div class="label">Pages bots ({BOT_PERCENT}%)</div>
+        <div class="label">{L_STATS_BOT_PAGEVIEWS_LABEL}</div>
     </div>
     <div class="stat-card" style="background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);">
         <div class="number">{AVG_DURATION_BOTS}</div>
-        <div class="label">Duree moy. bots</div>
+        <div class="label">{L_STATS_AVG_DURATION_BOTS}</div>
     </div>
 </div>
 
 <!-- Onglets -->
 <div class="tab-container">
     <div class="tab-buttons">
-        <button class="tab-btn active" onclick="openTab(event, 'tab_dashboard')">Vue d'ensemble</button>
-        <button class="tab-btn" onclick="openTab(event, 'tab_sessions')">Sessions</button>
-        <button class="tab-btn" onclick="openTab(event, 'tab_pages')">Pages</button>
-        <button class="tab-btn" onclick="openTab(event, 'tab_map')">Carte</button>
+        <button class="tab-btn active" onclick="openTab(event, 'tab_dashboard')">{L_STATS_TAB_OVERVIEW}</button>
+        <button class="tab-btn" onclick="openTab(event, 'tab_sessions')">{L_STATS_TAB_SESSIONS}</button>
+        <button class="tab-btn" onclick="openTab(event, 'tab_pages')">{L_STATS_TAB_PAGES}</button>
+        <button class="tab-btn" onclick="openTab(event, 'tab_map')">{L_STATS_TAB_MAP}</button>
     </div>
 
     <!-- ONGLET 1 : DASHBOARD -->
@@ -153,7 +153,7 @@
         <div class="charts-grid">
             <!-- Sources de trafic HUMAINS -->
             <div class="chart-box">
-                <h4 style="color:#3498db;">Sources de trafic (Humains)</h4>
+                <h4 style="color:#3498db;">{L_STATS_TRAFFIC_HUMANS}</h4>
                 <!-- BEGIN STATS_REFERER_HUMANS -->
                 <div class="stat-row">
                     <div class="stat-label" title="{STATS_REFERER_HUMANS.NAME}">{STATS_REFERER_HUMANS.NAME}</div>
@@ -161,12 +161,12 @@
                     <div class="stat-count">{STATS_REFERER_HUMANS.COUNT}</div>
                 </div>
                 <!-- END STATS_REFERER_HUMANS -->
-                <!-- IF not STATS_REFERER_HUMANS --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+                <!-- IF not STATS_REFERER_HUMANS --><p style="color:#999; text-align:center;">{L_STATS_NO_DATA}</p><!-- ENDIF -->
             </div>
 
             <!-- Sources de trafic BOTS -->
             <div class="chart-box">
-                <h4 style="color:#e74c3c;">Sources de trafic (Bots)</h4>
+                <h4 style="color:#e74c3c;">{L_STATS_TRAFFIC_BOTS}</h4>
                 <!-- BEGIN STATS_REFERER_BOTS -->
                 <div class="stat-row">
                     <div class="stat-label" title="{STATS_REFERER_BOTS.NAME}">{STATS_REFERER_BOTS.NAME}</div>
@@ -174,12 +174,12 @@
                     <div class="stat-count">{STATS_REFERER_BOTS.COUNT}</div>
                 </div>
                 <!-- END STATS_REFERER_BOTS -->
-                <!-- IF not STATS_REFERER_BOTS --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+                <!-- IF not STATS_REFERER_BOTS --><p style="color:#999; text-align:center;">{L_STATS_NO_DATA}</p><!-- ENDIF -->
             </div>
 
             <!-- OS -->
             <div class="chart-box">
-                <h4>Systemes d'exploitation</h4>
+                <h4>{L_STATS_OS_TITLE}</h4>
                 <!-- BEGIN STATS_OS -->
                 <div class="stat-row">
                     <div class="stat-label">{STATS_OS.NAME}</div>
@@ -187,12 +187,12 @@
                     <div class="stat-count">{STATS_OS.COUNT}</div>
                 </div>
                 <!-- END STATS_OS -->
-                <!-- IF not STATS_OS --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+                <!-- IF not STATS_OS --><p style="color:#999; text-align:center;">{L_STATS_NO_DATA}</p><!-- ENDIF -->
             </div>
 
             <!-- Appareils -->
             <div class="chart-box">
-                <h4>Types d'appareils</h4>
+                <h4>{L_STATS_DEVICES_TITLE}</h4>
                 <!-- BEGIN STATS_DEVICE -->
                 <div class="stat-row">
                     <div class="stat-label">{STATS_DEVICE.NAME}</div>
@@ -200,12 +200,12 @@
                     <div class="stat-count">{STATS_DEVICE.COUNT}</div>
                 </div>
                 <!-- END STATS_DEVICE -->
-                <!-- IF not STATS_DEVICE --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+                <!-- IF not STATS_DEVICE --><p style="color:#999; text-align:center;">{L_STATS_NO_DATA}</p><!-- ENDIF -->
             </div>
 
             <!-- Resolutions -->
             <div class="chart-box">
-                <h4>Resolutions d'ecran</h4>
+                <h4>{L_STATS_RES_TITLE}</h4>
                 <!-- BEGIN STATS_RES -->
                 <div class="stat-row">
                     <div class="stat-label">{STATS_RES.NAME}</div>
@@ -213,21 +213,21 @@
                     <div class="stat-count">{STATS_RES.COUNT}</div>
                 </div>
                 <!-- END STATS_RES -->
-                <!-- IF not STATS_RES --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+                <!-- IF not STATS_RES --><p style="color:#999; text-align:center;">{L_STATS_NO_DATA}</p><!-- ENDIF -->
             </div>
         </div>
 
         <!-- Referers complets cliquables -->
         <div class="chart-box" style="margin-top:20px;">
-            <h4>Referers externes complets (cliquables)</h4>
+            <h4>{L_STATS_FULL_REFERERS}</h4>
             <table class="sessions-table" style="font-size:13px;">
                 <thead>
                     <tr>
-                        <th style="width:35%">Source (referer)</th>
-                        <th style="width:30%">Page de destination</th>
-                        <th style="width:10%">Type</th>
-                        <th style="width:8%">Visites</th>
-                        <th style="width:7%">Source</th>
+                        <th style="width:35%">{L_STATS_COL_SOURCE_REFERER}</th>
+                        <th style="width:30%">{L_STATS_COL_DESTINATION}</th>
+                        <th style="width:10%">{L_STATS_COL_TYPE}</th>
+                        <th style="width:8%">{L_STATS_COL_VISITS}</th>
+                        <th style="width:7%">{L_STATS_COL_SOURCE}</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -237,10 +237,10 @@
                         <td><a href="{FULL_REFERERS.DEST_URL}" target="_blank" style="color:#666; word-break:break-all;">{FULL_REFERERS.DEST_TITLE}</a></td>
                         <td><span class="badge badge-referer">{FULL_REFERERS.TYPE}</span></td>
                         <td style="text-align:center; font-weight:bold;">{FULL_REFERERS.COUNT}</td>
-                        <td style="text-align:center;"><!-- IF FULL_REFERERS.IS_BOT --><span class="badge badge-bot">Bot</span><!-- ELSE --><span class="badge badge-human">Humain</span><!-- ENDIF --></td>
+                        <td style="text-align:center;"><!-- IF FULL_REFERERS.IS_BOT --><span class="badge badge-bot">{L_STATS_LABEL_BOT}</span><!-- ELSE --><span class="badge badge-human">{L_STATS_LABEL_HUMAN}</span><!-- ENDIF --></td>
                     </tr>
                 <!-- BEGINELSE -->
-                    <tr><td colspan="5" style="text-align:center; color:#999; padding:20px;">Aucun referer externe</td></tr>
+                    <tr><td colspan="5" style="text-align:center; color:#999; padding:20px;">{L_STATS_NO_EXTERNAL_REFERER}</td></tr>
                 <!-- END FULL_REFERERS -->
                 </tbody>
             </table>
@@ -251,8 +251,8 @@
     <div id="tab_sessions" class="tab-content">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
             <div style="display:flex; gap:15px; align-items:center;">
-                <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-humans" checked onchange="filterSessions()"> <span class="badge badge-human">Humains</span></label>
-                <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-bots" checked onchange="filterSessions()"> <span class="badge badge-bot">Robots</span></label>
+                <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-humans" checked onchange="filterSessions()"> <span class="badge badge-human">{L_STATS_FILTER_HUMANS}</span></label>
+                <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-bots" checked onchange="filterSessions()"> <span class="badge badge-bot">{L_STATS_FILTER_ROBOTS}</span></label>
             </div>
             <form method="post" action="{U_ACTION}" style="margin:0;">
                 <input type="submit" name="submit_clear" value="{L_ACP_BASTIEN59_STATS_CLEAR}" class="button2" onclick="return confirm('{L_ACP_BASTIEN59_STATS_CONFIRM}');" />
@@ -263,11 +263,11 @@
         <table class="sessions-table" id="sessions-table">
             <thead>
                 <tr>
-                    <th style="width:20%">Visiteur</th>
-                    <th style="width:15%">Appareil</th>
-                    <th style="width:30%">Page d'entree</th>
-                    <th style="width:15%">Source</th>
-                    <th style="width:10%">Pages</th>
+                    <th style="width:20%">{L_STATS_COL_VISITOR}</th>
+                    <th style="width:15%">{L_STATS_COL_DEVICE}</th>
+                    <th style="width:30%">{L_STATS_COL_LANDING_PAGE}</th>
+                    <th style="width:15%">{L_STATS_COL_SOURCE}</th>
+                    <th style="width:10%">{L_STATS_COL_PAGES}</th>
                 </tr>
             </thead>
             <tbody>
@@ -275,11 +275,11 @@
                 <tr class="session-row session-{SESSIONS.BOT_CLASS}" data-type="{SESSIONS.BOT_CLASS}">
                     <td class="session-info">
                         <!-- IF SESSIONS.IS_BOT -->
-                            <span class="badge badge-bot">BOT</span>
-                            <!-- IF SESSIONS.IS_PHPBB_BOT --><span class="badge badge-bot-phpbb">DB phpBB</span><!-- ELSEIF SESSIONS.BOT_SOURCE == "behavior" --><span class="badge badge-bot-detected" title="Comportement suspect">Comportement</span><!-- ELSE --><span class="badge badge-bot-detected" title="User-Agent suspect">UA suspect</span><!-- ENDIF -->
+                            <span class="badge badge-bot">{L_STATS_BADGE_BOT}</span>
+                            <!-- IF SESSIONS.IS_PHPBB_BOT --><span class="badge badge-bot-phpbb">{L_STATS_BADGE_PHPBB}</span><!-- ELSEIF SESSIONS.BOT_SOURCE == "behavior" --><span class="badge badge-bot-detected" title="{L_STATS_BADGE_BEHAVIOR_TITLE}">{L_STATS_BADGE_BEHAVIOR}</span><!-- ELSE --><span class="badge badge-bot-detected" title="{L_STATS_BADGE_UA_TITLE}">{L_STATS_BADGE_UA}</span><!-- ENDIF -->
                         <!-- ELSE -->
-                            <span class="badge badge-human">Humain</span>
-                            <!-- IF SESSIONS.USERNAME == "Invite" --><span class="badge" style="background:#95a5a6; color:#fff;">Invite</span><!-- ENDIF -->
+                            <span class="badge badge-human">{L_STATS_LABEL_HUMAN}</span>
+                            <!-- IF SESSIONS.IS_GUEST --><span class="badge" style="background:#95a5a6; color:#fff;">{L_STATS_BADGE_GUEST}</span><!-- ENDIF -->
                         <!-- ENDIF -->
                         <!-- IF SESSIONS.USERNAME != "Invite" --><span class="badge badge-member">{SESSIONS.USERNAME}</span><!-- ENDIF -->
                         <br>
@@ -308,7 +308,7 @@
                         <small>{SESSIONS.REFERER}</small>
                     </td>
                     <td style="text-align:center">
-                        <span class="page-count">{SESSIONS.PAGE_COUNT} pages</span>
+                        <span class="page-count">{SESSIONS.PAGES_COUNT_LABEL}</span>
                     </td>
                 </tr>
                 <!-- BEGIN PAGES -->
@@ -326,8 +326,8 @@
             <!-- BEGINELSE -->
                 <tr>
                     <td colspan="5" style="text-align:center; padding: 40px; color: #999;">
-                        <strong>Aucune session enregistree</strong><br>
-                        Les donnees apparaitront apres les premieres visites.
+                        <strong>{L_STATS_NO_SESSION}</strong><br>
+                        {L_STATS_NO_SESSION_EXPLAIN}
                     </td>
                 </tr>
             <!-- END SESSIONS -->
@@ -337,13 +337,13 @@
 
     <!-- ONGLET 3 : TOP PAGES -->
     <div id="tab_pages" class="tab-content">
-        <h3>Pages les plus visitees</h3>
+        <h3>{L_STATS_TOP_PAGES}</h3>
         <table class="sessions-table">
             <thead>
                 <tr>
-                    <th>Page</th>
-                    <th style="width:15%">Visites</th>
-                    <th style="width:15%">Temps moyen</th>
+                    <th>{L_STATS_COL_PAGE}</th>
+                    <th style="width:15%">{L_STATS_COL_VISITS}</th>
+                    <th style="width:15%">{L_STATS_COL_AVG_TIME}</th>
                 </tr>
             </thead>
             <tbody>
@@ -356,7 +356,7 @@
             <!-- BEGINELSE -->
                 <tr>
                     <td colspan="3" style="text-align:center; padding: 40px; color: #999;">
-                        Aucune donnee disponible.
+                        {L_STATS_NO_PAGE_DATA}
                     </td>
                 </tr>
             <!-- END TOP_PAGES -->
@@ -367,23 +367,23 @@
     <!-- ONGLET 4 : CARTE -->
     <div id="tab_map" class="tab-content">
         <!-- CARTE HUMAINS -->
-        <h3 style="color:#3498db;">Carte des visiteurs humains</h3>
+        <h3 style="color:#3498db;">{L_STATS_MAP_HUMANS}</h3>
         <div class="chart-box" style="margin-bottom:20px;">
             <div id="world-map-humans" style="width:100%; height:400px; background:#f8fafc;"></div>
             <div style="display:flex; justify-content:center; align-items:center; gap:20px; margin-top:10px; padding:10px; background:#f5f5f5; border-radius:5px;">
-                <span style="font-size:12px; color:#666;">Legende :</span>
+                <span style="font-size:12px; color:#666;">{L_STATS_LEGEND}</span>
                 <span style="display:inline-block; width:20px; height:12px; background:#bbdefb; border:1px solid #90caf9;"></span>
-                <span style="font-size:11px;">Peu</span>
+                <span style="font-size:11px;">{L_STATS_LEGEND_LOW}</span>
                 <span style="display:inline-block; width:20px; height:12px; background:#42a5f5; border:1px solid #1e88e5;"></span>
-                <span style="font-size:11px;">Moyen</span>
+                <span style="font-size:11px;">{L_STATS_LEGEND_MEDIUM}</span>
                 <span style="display:inline-block; width:20px; height:12px; background:#1565c0; border:1px solid #0d47a1;"></span>
-                <span style="font-size:11px;">Beaucoup</span>
+                <span style="font-size:11px;">{L_STATS_LEGEND_HIGH}</span>
             </div>
         </div>
 
         <div class="charts-grid">
             <div class="chart-box">
-                <h4 style="color:#3498db;">Top pays (Humains)</h4>
+                <h4 style="color:#3498db;">{L_STATS_TOP_COUNTRIES_HUMANS}</h4>
                 <!-- BEGIN STATS_COUNTRY_HUMANS -->
                 <div class="stat-row">
                     <div class="stat-label" style="width:45%;">
@@ -396,35 +396,35 @@
                     <div class="stat-count">{STATS_COUNTRY_HUMANS.VISITORS}</div>
                 </div>
                 <!-- END STATS_COUNTRY_HUMANS -->
-                <!-- IF not STATS_COUNTRY_HUMANS --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+                <!-- IF not STATS_COUNTRY_HUMANS --><p style="color:#999; text-align:center;">{L_STATS_NO_DATA}</p><!-- ENDIF -->
             </div>
             <div class="chart-box">
-                <h4>Repartition humains</h4>
+                <h4>{L_STATS_DISTRIBUTION_HUMANS}</h4>
                 <p style="color:#666; font-size:13px; line-height:1.8;">
-                    <strong>Total pays :</strong> <span id="total-countries-humans">0</span><br>
-                    <strong>Visiteurs geolocalises :</strong> <span id="total-geolocated-humans">0</span>
+                    <strong>{L_STATS_TOTAL_COUNTRIES}</strong> <span id="total-countries-humans">0</span><br>
+                    <strong>{L_STATS_GEOLOCATED_VISITORS}</strong> <span id="total-geolocated-humans">0</span>
                 </p>
             </div>
         </div>
 
         <!-- CARTE BOTS -->
-        <h3 style="color:#e74c3c; margin-top:30px;">Carte des bots</h3>
+        <h3 style="color:#e74c3c; margin-top:30px;">{L_STATS_MAP_BOTS}</h3>
         <div class="chart-box" style="margin-bottom:20px;">
             <div id="world-map-bots" style="width:100%; height:400px; background:#fff5f5;"></div>
             <div style="display:flex; justify-content:center; align-items:center; gap:20px; margin-top:10px; padding:10px; background:#f5f5f5; border-radius:5px;">
-                <span style="font-size:12px; color:#666;">Legende :</span>
+                <span style="font-size:12px; color:#666;">{L_STATS_LEGEND}</span>
                 <span style="display:inline-block; width:20px; height:12px; background:#ffcdd2; border:1px solid #ef9a9a;"></span>
-                <span style="font-size:11px;">Peu</span>
+                <span style="font-size:11px;">{L_STATS_LEGEND_LOW}</span>
                 <span style="display:inline-block; width:20px; height:12px; background:#ef5350; border:1px solid #e53935;"></span>
-                <span style="font-size:11px;">Moyen</span>
+                <span style="font-size:11px;">{L_STATS_LEGEND_MEDIUM}</span>
                 <span style="display:inline-block; width:20px; height:12px; background:#b71c1c; border:1px solid #880e0e;"></span>
-                <span style="font-size:11px;">Beaucoup</span>
+                <span style="font-size:11px;">{L_STATS_LEGEND_HIGH}</span>
             </div>
         </div>
 
         <div class="charts-grid">
             <div class="chart-box">
-                <h4 style="color:#e74c3c;">Top pays (Bots)</h4>
+                <h4 style="color:#e74c3c;">{L_STATS_TOP_COUNTRIES_BOTS}</h4>
                 <!-- BEGIN STATS_COUNTRY_BOTS -->
                 <div class="stat-row">
                     <div class="stat-label" style="width:45%;">
@@ -437,13 +437,13 @@
                     <div class="stat-count">{STATS_COUNTRY_BOTS.VISITORS}</div>
                 </div>
                 <!-- END STATS_COUNTRY_BOTS -->
-                <!-- IF not STATS_COUNTRY_BOTS --><p style="color:#999; text-align:center;">Aucune donnee</p><!-- ENDIF -->
+                <!-- IF not STATS_COUNTRY_BOTS --><p style="color:#999; text-align:center;">{L_STATS_NO_DATA}</p><!-- ENDIF -->
             </div>
             <div class="chart-box">
-                <h4>Repartition bots</h4>
+                <h4>{L_STATS_DISTRIBUTION_BOTS}</h4>
                 <p style="color:#666; font-size:13px; line-height:1.8;">
-                    <strong>Total pays :</strong> <span id="total-countries-bots">0</span><br>
-                    <strong>Bots geolocalises :</strong> <span id="total-geolocated-bots">0</span>
+                    <strong>{L_STATS_TOTAL_COUNTRIES}</strong> <span id="total-countries-bots">0</span><br>
+                    <strong>{L_STATS_GEOLOCATED_BOTS}</strong> <span id="total-geolocated-bots">0</span>
                 </p>
             </div>
         </div>
@@ -504,8 +504,8 @@ function openTab(evt, tabName) {
 
 // === CARTE (chargement paresseux) ===
 function loadAndInitMap() {
-    document.getElementById('world-map-humans').innerHTML = '<p style="text-align:center; padding:50px; color:#999;">Chargement...</p>';
-    document.getElementById('world-map-bots').innerHTML = '<p style="text-align:center; padding:50px; color:#999;">Chargement...</p>';
+    document.getElementById('world-map-humans').innerHTML = '<p style="text-align:center; padding:50px; color:#999;">{L_STATS_MAP_LOADING}</p>';
+    document.getElementById('world-map-bots').innerHTML = '<p style="text-align:center; padding:50px; color:#999;">{L_STATS_MAP_LOADING}</p>';
 
     var css = document.createElement('link');
     css.rel = 'stylesheet';
@@ -524,12 +524,12 @@ function loadScript(url, callback) {
     script.src = url;
     script.onload = callback;
     script.onerror = function() {
-        document.getElementById('world-map-humans').innerHTML = '<p style="text-align:center; padding:50px; color:#e74c3c;">Erreur de chargement de la carte.</p>';
+        document.getElementById('world-map-humans').innerHTML = '<p style="text-align:center; padding:50px; color:#e74c3c;">{L_STATS_MAP_ERROR}</p>';
     };
     document.body.appendChild(script);
 }
 
-function initSingleMap(containerId, data, colors, bgColor, statsCountId, statsGeoId, label) {
+function initSingleMap(containerId, data, colors, bgColor, statsCountId, statsGeoId, label, labelPlural) {
     var upper = {};
     var total = 0, countries = 0;
     for (var code in data) {
@@ -564,7 +564,7 @@ function initSingleMap(containerId, data, colors, bgColor, statsCountId, statsGe
         onRegionTipShow: function(e, el, code) {
             var v = upper[code] || 0;
             if (v > 0) {
-                el.html('<strong>' + el.html() + '</strong><br>' + v + ' ' + label + (v > 1 ? 's' : ''));
+                el.html('<strong>' + el.html() + '</strong><br>' + v + ' ' + (v > 1 ? labelPlural : label));
             }
         }
     });
@@ -572,11 +572,11 @@ function initSingleMap(containerId, data, colors, bgColor, statsCountId, statsGe
 
 function initDualMaps() {
     if (typeof jQuery === 'undefined' || typeof jQuery.fn.vectorMap === 'undefined') {
-        document.getElementById('world-map-humans').innerHTML = '<p style="color:#e74c3c; text-align:center; padding:50px;">jVectorMap non disponible.</p>';
+        document.getElementById('world-map-humans').innerHTML = '<p style="color:#e74c3c; text-align:center; padding:50px;">{L_STATS_MAP_UNAVAILABLE}</p>';
         return;
     }
-    initSingleMap('world-map-humans', mapDataHumans, ['#bbdefb', '#42a5f5', '#1565c0'], '#f8fafc', 'total-countries-humans', 'total-geolocated-humans', 'visiteur');
-    initSingleMap('world-map-bots', mapDataBots, ['#ffcdd2', '#ef5350', '#b71c1c'], '#fff5f5', 'total-countries-bots', 'total-geolocated-bots', 'bot');
+    initSingleMap('world-map-humans', mapDataHumans, ['#bbdefb', '#42a5f5', '#1565c0'], '#f8fafc', 'total-countries-humans', 'total-geolocated-humans', '{L_STATS_MAP_VISITOR}', '{L_STATS_MAP_VISITORS}');
+    initSingleMap('world-map-bots', mapDataBots, ['#ffcdd2', '#ef5350', '#b71c1c'], '#fff5f5', 'total-countries-bots', 'total-geolocated-bots', '{L_STATS_MAP_BOT_LABEL}', '{L_STATS_MAP_BOTS_LABEL}');
     window.mapInitialized = true;
 }
 </script>
