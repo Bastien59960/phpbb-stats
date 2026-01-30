@@ -212,6 +212,7 @@ class acp_controller
                 'USERNAME'      => ($row['user_id'] > 1) ? $this->get_username($row['user_id']) : 'Invité',
                 'IS_BOT'        => (int)$row['is_bot'],
                 'BOT_CLASS'     => ($row['is_bot']) ? 'bot' : 'human',
+                'BOT_SOURCE'    => htmlspecialchars($bot_source, ENT_COMPAT, 'UTF-8'),
                 'START_TIME'    => $this->user->format_date($row['visit_time']),
                 'LANDING_PAGE'  => htmlspecialchars($row['page_title'], ENT_COMPAT, 'UTF-8'),
                 'LANDING_URL'   => htmlspecialchars($row['page_url'], ENT_COMPAT, 'UTF-8'),
@@ -378,7 +379,9 @@ class acp_controller
             'pingdom'           => 'Pingdom',
             'gptbot'            => 'GPTBot (OpenAI)',
             'claudebot'         => 'ClaudeBot (Anthropic)',
-            'amazonbot'         => 'Amazonbot',
+            'amazonbot'         => 'Amazonbot (Amazon)',
+            'amzn-searchbot'    => 'Amazonbot (Amazon)',
+            'chatgpt'           => 'ChatGPT-User (OpenAI)',
             'ccbot'             => 'Common Crawl Bot',
             'sogou'             => 'Sogou Spider',
             'exabot'            => 'Exabot',
@@ -411,7 +414,7 @@ class acp_controller
             return htmlspecialchars(ucfirst($matches[1]), ENT_COMPAT, 'UTF-8');
         }
 
-        return 'Bot inconnu';
+        return 'Bot suspect (UA/comportement)';
     }
 
     /**

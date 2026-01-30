@@ -256,7 +256,7 @@
                     <td class="session-info">
                         <!-- IF SESSIONS.IS_BOT -->
                             <span class="badge badge-bot">BOT</span>
-                            <!-- IF SESSIONS.IS_PHPBB_BOT --><span class="badge badge-bot-phpbb">DB phpBB</span><!-- ELSE --><span class="badge badge-bot-detected">Inconnu</span><!-- ENDIF -->
+                            <!-- IF SESSIONS.IS_PHPBB_BOT --><span class="badge badge-bot-phpbb">DB phpBB</span><!-- ELSEIF SESSIONS.BOT_SOURCE == "behavior" --><span class="badge badge-bot-detected" title="Comportement suspect">Comportement</span><!-- ELSE --><span class="badge badge-bot-detected" title="User-Agent suspect">UA suspect</span><!-- ENDIF -->
                         <!-- ELSE -->
                             <span class="badge badge-human">Humain</span>
                             <!-- IF SESSIONS.USERNAME == "Invite" --><span class="badge" style="background:#95a5a6; color:#fff;">Invite</span><!-- ENDIF -->
