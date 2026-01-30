@@ -166,6 +166,16 @@ class listener implements EventSubscriberInterface
         $referer = $this->request->header('Referer', '');
         $page_url = $this->request->server('REQUEST_URI');
 
+        // Récupérer le vrai referer original passé via _r (redirect cross-domain)
+        $original_ref = $this->request->variable('_r', '', true);
+        if (!empty($original_ref)) {
+            $referer = $original_ref;
+            // Nettoyer _r de l'URL stockée
+            $page_url = preg_replace('/[?&]_r=[^&]*/', '', $page_url);
+            $page_url = preg_replace('/\?&/', '?', $page_url);
+            $page_url = rtrim($page_url, '?');
+        }
+
         // Récupérer le vrai titre de la page depuis l'événement
         // (core.page_header_after fournit page_title dans $event)
         $page_title = isset($event['page_title']) ? $event['page_title'] : '';
@@ -267,6 +277,11 @@ class listener implements EventSubscriberInterface
                 d.setTime(d.getTime() + (30*24*60*60*1000));
                 var res = window.screen.width + "x" + window.screen.height;
                 document.cookie = "bastien59_stats_res=" + res + ";path=/;expires="+d.toUTCString()+";SameSite=Lax";
+            }
+            // Nettoyer le parametre _r de l URL (referer original du redirect)
+            if(window.history&&window.history.replaceState&&location.search.indexOf("_r=")>-1){
+                var u=new URL(location.href);u.searchParams.delete("_r");
+                window.history.replaceState(null,"",u.toString());
             }
         })();
         </script>';
