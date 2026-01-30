@@ -445,7 +445,6 @@ class acp_controller
                 FROM ' . $this->table_prefix . 'bastien59_stats
                 WHERE visit_time > ' . $start_time . '
                 AND referer <> ""
-                AND is_first_visit = 1
                 GROUP BY referer, referer_type, is_bot
                 ORDER BY total DESC';
 
