@@ -454,10 +454,13 @@ class listener implements EventSubscriberInterface
 
         $referer_lower = strtolower($referer);
 
-        // Vérifier si c'est une navigation interne
+        // Vérifier si c'est une navigation interne (domaine actuel + anciens domaines)
         $server_name = $this->request->server('SERVER_NAME', '');
-        if (!empty($server_name) && strpos($referer_lower, strtolower($server_name)) !== false) {
-            return 'Interne';
+        $internal_domains = [$server_name, 'bernard.debucquoi.com'];
+        foreach ($internal_domains as $domain) {
+            if (!empty($domain) && strpos($referer_lower, strtolower($domain)) !== false) {
+                return 'Interne';
+            }
         }
 
         // Classifier selon les patterns connus

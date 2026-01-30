@@ -441,6 +441,15 @@ class acp_controller
     {
         $server_name = $this->request->server('SERVER_NAME', '');
 
+        // Domaines internes à exclure (domaine actuel + anciens domaines / alias)
+        $internal_domains = [$server_name];
+        $board_url = $this->config['server_name'] ?? '';
+        if (!empty($board_url) && $board_url !== $server_name) {
+            $internal_domains[] = $board_url;
+        }
+        // Ancien domaine du forum (redirection vhost)
+        $internal_domains[] = 'bernard.debucquoi.com';
+
         $sql = 'SELECT referer, referer_type, COUNT(*) as total, is_bot
                 FROM ' . $this->table_prefix . 'bastien59_stats
                 WHERE visit_time > ' . $start_time . '
@@ -452,8 +461,15 @@ class acp_controller
 
         while ($row = $this->db->sql_fetchrow($result)) {
             $ref = $row['referer'];
-            // Exclure les referers internes
-            if (!empty($server_name) && stripos($ref, $server_name) !== false) {
+            // Exclure les referers internes (tous les domaines connus)
+            $is_internal = false;
+            foreach ($internal_domains as $domain) {
+                if (!empty($domain) && stripos($ref, $domain) !== false) {
+                    $is_internal = true;
+                    break;
+                }
+            }
+            if ($is_internal) {
                 continue;
             }
 
