@@ -444,49 +444,60 @@ class acp_controller
     {
         $server_name = $this->request->server('SERVER_NAME', '');
 
-        // Domaines internes à exclure (domaine actuel + anciens domaines / alias)
-        $internal_domains = [$server_name];
+        // Domaines internes à exclure dans le SQL
+        $internal_domains = [];
+        if (!empty($server_name)) {
+            $internal_domains[] = $server_name;
+        }
         $board_url = $this->config['server_name'] ?? '';
         if (!empty($board_url) && $board_url !== $server_name) {
             $internal_domains[] = $board_url;
         }
-        // Ancien domaine du forum (redirection vhost)
         $internal_domains[] = 'bernard.debucquoi.com';
 
-        $sql = 'SELECT referer, referer_type, COUNT(*) as total, is_bot
+        // Construire l'exclusion SQL
+        $exclude_sql = '';
+        foreach ($internal_domains as $domain) {
+            $exclude_sql .= ' AND referer NOT LIKE \'%' . $this->db->sql_escape($domain) . '%\'';
+        }
+
+        // Referers externes avec page de destination
+        $sql = 'SELECT referer, referer_type, page_url, page_title, is_bot, COUNT(*) as total
                 FROM ' . $this->table_prefix . 'bastien59_stats
                 WHERE visit_time > ' . $start_time . '
                 AND referer <> ""
-                GROUP BY referer, referer_type, is_bot
+                AND referer_type <> \'Interne\'
+                AND referer_type <> \'Direct\'
+                ' . $exclude_sql . '
+                GROUP BY referer, referer_type, page_url, page_title, is_bot
                 ORDER BY total DESC';
 
-        $result = $this->db->sql_query_limit($sql, 50);
+        $result = $this->db->sql_query_limit($sql, 100);
 
         while ($row = $this->db->sql_fetchrow($result)) {
             $ref = $row['referer'];
-            // Exclure les referers internes (tous les domaines connus)
-            $is_internal = false;
-            foreach ($internal_domains as $domain) {
-                if (!empty($domain) && stripos($ref, $domain) !== false) {
-                    $is_internal = true;
-                    break;
-                }
-            }
-            if ($is_internal) {
-                continue;
-            }
-
             $display = $ref;
             if (strlen($display) > 80) {
                 $display = substr($display, 0, 77) . '...';
             }
 
+            $dest = $row['page_url'];
+            $dest_display = $row['page_title'];
+            if (empty($dest_display)) {
+                $dest_display = $dest;
+            }
+            if (strlen($dest_display) > 60) {
+                $dest_display = substr($dest_display, 0, 57) . '...';
+            }
+
             $this->template->assign_block_vars('FULL_REFERERS', [
-                'URL'       => htmlspecialchars($ref, ENT_COMPAT, 'UTF-8'),
-                'DISPLAY'   => htmlspecialchars($display, ENT_COMPAT, 'UTF-8'),
-                'TYPE'      => htmlspecialchars($row['referer_type'], ENT_COMPAT, 'UTF-8'),
-                'COUNT'     => (int)$row['total'],
-                'IS_BOT'    => (int)$row['is_bot'],
+                'URL'           => htmlspecialchars($ref, ENT_COMPAT, 'UTF-8'),
+                'DISPLAY'       => htmlspecialchars($display, ENT_COMPAT, 'UTF-8'),
+                'TYPE'          => htmlspecialchars($row['referer_type'], ENT_COMPAT, 'UTF-8'),
+                'COUNT'         => (int)$row['total'],
+                'IS_BOT'        => (int)$row['is_bot'],
+                'DEST_URL'      => htmlspecialchars($dest, ENT_COMPAT, 'UTF-8'),
+                'DEST_TITLE'    => htmlspecialchars($dest_display, ENT_COMPAT, 'UTF-8'),
             ]);
         }
         $this->db->sql_freeresult($result);

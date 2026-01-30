@@ -211,22 +211,24 @@
             <table class="sessions-table" style="font-size:13px;">
                 <thead>
                     <tr>
-                        <th>URL du referer</th>
-                        <th style="width:12%">Type</th>
+                        <th style="width:35%">Source (referer)</th>
+                        <th style="width:30%">Page de destination</th>
+                        <th style="width:10%">Type</th>
                         <th style="width:8%">Visites</th>
-                        <th style="width:8%">Source</th>
+                        <th style="width:7%">Source</th>
                     </tr>
                 </thead>
                 <tbody>
                 <!-- BEGIN FULL_REFERERS -->
                     <tr>
                         <td><a href="{FULL_REFERERS.URL}" target="_blank" rel="noopener" style="color:#105289; word-break:break-all;">{FULL_REFERERS.DISPLAY}</a></td>
+                        <td><a href="{FULL_REFERERS.DEST_URL}" target="_blank" style="color:#666; word-break:break-all;">{FULL_REFERERS.DEST_TITLE}</a></td>
                         <td><span class="badge badge-referer">{FULL_REFERERS.TYPE}</span></td>
                         <td style="text-align:center; font-weight:bold;">{FULL_REFERERS.COUNT}</td>
                         <td style="text-align:center;"><!-- IF FULL_REFERERS.IS_BOT --><span class="badge badge-bot">Bot</span><!-- ELSE --><span class="badge badge-human">Humain</span><!-- ENDIF --></td>
                     </tr>
                 <!-- BEGINELSE -->
-                    <tr><td colspan="4" style="text-align:center; color:#999; padding:20px;">Aucun referer externe</td></tr>
+                    <tr><td colspan="5" style="text-align:center; color:#999; padding:20px;">Aucun referer externe</td></tr>
                 <!-- END FULL_REFERERS -->
                 </tbody>
             </table>
