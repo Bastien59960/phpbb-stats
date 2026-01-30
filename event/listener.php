@@ -190,6 +190,14 @@ class listener implements EventSubscriberInterface
             $bot_source = $is_phpbb_bot ? 'phpbb' : 'extension';
         }
 
+        // Détection comportementale (bots avec UA valide mais comportement impossible)
+        if (!$is_bot) {
+            if ($this->detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id)) {
+                $is_bot = 1;
+                $bot_source = 'behavior';
+            }
+        }
+
         // Classification du referer
         $referer_type = $this->classify_referer($referer);
 
@@ -362,7 +370,77 @@ class listener implements EventSubscriberInterface
             }
         }
 
+        // Chrome < 30 (2013) = trop ancien pour être réel
+        if (preg_match('/Chrome\/(\d+)\./', $user_agent, $matches)) {
+            if ((int)$matches[1] < 30 && strpos($ua_lower, 'headlesschrome') === false) {
+                return 1;
+            }
+        }
+
+        // Safari build number fake (réel = 604.x ou 605.x, pas 184.x)
+        if (preg_match('/Safari\/(\d+)\./', $user_agent, $matches)) {
+            $safari_build = (int)$matches[1];
+            // Les vrais Safari builds sont >= 400 (Safari 3+)
+            if ($safari_build < 400 && $safari_build > 0) {
+                return 1;
+            }
+        }
+
+        // Template literal non résolu dans le UA (ex: Firefox/{version})
+        if (strpos($user_agent, '{') !== false && strpos($user_agent, '}') !== false) {
+            return 1;
+        }
+
+        // iPhone OS 13_2_3 figé = botnet de scraping (Tencent Cloud et similaires)
+        // Ce UA exact est utilisé massivement par des bots cloud
+        if (strpos($user_agent, 'iPhone OS 13_2_3') !== false) {
+            return 1;
+        }
+
         return 0;
+    }
+
+    /**
+     * Détection comportementale des bots (UA valide mais comportement impossible)
+     */
+    private function detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id)
+    {
+        $user_id = (int)$this->user->data['user_id'];
+        if ($user_id > 1) {
+            return false; // Membres connectés = jamais flag
+        }
+
+        $page_lower = strtolower($page_url);
+
+        // Signal 1 : Invité atterrit sur posting.php en première visite
+        if ($is_first_visit && strpos($page_lower, 'posting.php') !== false) {
+            return true;
+        }
+
+        // Signal 2 : Referer auto-référent sur posting.php (GET)
+        if (strpos($page_lower, 'posting.php') !== false && !empty($referer)) {
+            if (strpos(strtolower($referer), 'posting.php') !== false) {
+                preg_match('/[?&]p=(\d+)/', $page_url, $page_m);
+                preg_match('/[?&]p=(\d+)/', $referer, $ref_m);
+                if (!empty($page_m[1]) && !empty($ref_m[1]) && $page_m[1] === $ref_m[1]) {
+                    return true;
+                }
+            }
+        }
+
+        // Signal 3 : Invité sans screen resolution après 5+ pages dans la session
+        if (!$is_first_visit && empty($screen_res)) {
+            $sql = 'SELECT COUNT(*) as cnt FROM ' . $this->table_prefix . 'bastien59_stats
+                    WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'';
+            $result = $this->db->sql_query($sql);
+            $page_count = (int)$this->db->sql_fetchfield('cnt');
+            $this->db->sql_freeresult($result);
+            if ($page_count >= 5) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

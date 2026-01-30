@@ -71,6 +71,13 @@ class acp_controller
         $this->assign_stats_block('screen_res', 'STATS_RES', $start_time, $bot_filter, 10);
         $this->assign_stats_block('referer_type', 'STATS_REFERER', $start_time, $bot_filter, 15);
 
+        // Sources de trafic séparées humains/bots
+        $this->assign_stats_block('referer_type', 'STATS_REFERER_HUMANS', $start_time, ' AND is_bot = 0', 30);
+        $this->assign_stats_block('referer_type', 'STATS_REFERER_BOTS', $start_time, ' AND is_bot = 1', 30);
+
+        // Referers complets cliquables (humains seulement, externes uniquement)
+        $this->assign_full_referers($start_time);
+
         // Top pages visitées
         $this->assign_top_pages($start_time, $bot_filter, 20);
 
@@ -428,13 +435,68 @@ class acp_controller
     }
 
     /**
-     * Statistiques par pays pour la carte
+     * Referers complets cliquables (externes uniquement)
+     */
+    private function assign_full_referers($start_time)
+    {
+        $server_name = $this->request->server('SERVER_NAME', '');
+
+        $sql = 'SELECT referer, referer_type, COUNT(*) as total, is_bot
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE visit_time > ' . $start_time . '
+                AND referer <> ""
+                AND is_first_visit = 1
+                GROUP BY referer, referer_type, is_bot
+                ORDER BY total DESC';
+
+        $result = $this->db->sql_query_limit($sql, 50);
+
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $ref = $row['referer'];
+            // Exclure les referers internes
+            if (!empty($server_name) && stripos($ref, $server_name) !== false) {
+                continue;
+            }
+
+            $display = $ref;
+            if (strlen($display) > 80) {
+                $display = substr($display, 0, 77) . '...';
+            }
+
+            $this->template->assign_block_vars('FULL_REFERERS', [
+                'URL'       => htmlspecialchars($ref, ENT_COMPAT, 'UTF-8'),
+                'DISPLAY'   => htmlspecialchars($display, ENT_COMPAT, 'UTF-8'),
+                'TYPE'      => htmlspecialchars($row['referer_type'], ENT_COMPAT, 'UTF-8'),
+                'COUNT'     => (int)$row['total'],
+                'IS_BOT'    => (int)$row['is_bot'],
+            ]);
+        }
+        $this->db->sql_freeresult($result);
+    }
+
+    /**
+     * Statistiques par pays pour la carte (séparées humains/bots)
      */
     private function assign_country_stats($start_time, $bot_filter)
     {
+        // Carte humains
+        $this->assign_country_stats_for('humans', $start_time, ' AND is_bot = 0', 'STATS_COUNTRY_HUMANS', 'MAP_DATA_HUMANS_JSON');
+
+        // Carte bots
+        $this->assign_country_stats_for('bots', $start_time, ' AND is_bot = 1', 'STATS_COUNTRY_BOTS', 'MAP_DATA_BOTS_JSON');
+
+        // Données combinées (pour compatibilité)
+        $this->assign_country_stats_for('all', $start_time, $bot_filter, 'STATS_COUNTRY', 'MAP_DATA_JSON');
+    }
+
+    /**
+     * Statistiques par pays pour un filtre donné
+     */
+    private function assign_country_stats_for($type, $start_time, $filter, $block_name, $json_var)
+    {
         $sql = 'SELECT country_code, country_name, COUNT(DISTINCT session_id) as visitors
                 FROM ' . $this->table_prefix . 'bastien59_stats
-                WHERE visit_time > ' . $start_time . $bot_filter . '
+                WHERE visit_time > ' . $start_time . $filter . '
                 AND country_code <> ""
                 AND is_first_visit = 1
                 GROUP BY country_code, country_name
@@ -452,13 +514,12 @@ class acp_controller
         }
         $this->db->sql_freeresult($result);
 
-        // Préparer les données pour le template
         $map_data = [];
         foreach ($countries as $country) {
             $percent = ($max_visitors > 0) ? round(($country['visitors'] / $max_visitors) * 100) : 0;
             $flag = $this->country_code_to_flag($country['country_code']);
 
-            $this->template->assign_block_vars('STATS_COUNTRY', [
+            $this->template->assign_block_vars($block_name, [
                 'CODE'      => htmlspecialchars($country['country_code'], ENT_COMPAT, 'UTF-8'),
                 'NAME'      => htmlspecialchars($country['country_name'], ENT_COMPAT, 'UTF-8'),
                 'FLAG'      => $flag,
@@ -466,11 +527,9 @@ class acp_controller
                 'PERCENT'   => $percent,
             ]);
 
-            // Pour la carte JS (format JSON)
             $map_data[strtolower($country['country_code'])] = (int)$country['visitors'];
         }
 
-        // Données JSON pour la carte
-        $this->template->assign_var('MAP_DATA_JSON', json_encode($map_data));
+        $this->template->assign_var($json_var, json_encode($map_data));
     }
 }
