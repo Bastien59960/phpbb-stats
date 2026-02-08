@@ -172,8 +172,11 @@ class listener implements EventSubscriberInterface
         }
 
         // 3. Collecter les données
-        $referer = $this->request->header('Referer', '');
-        $page_url = $this->request->server('REQUEST_URI');
+        // raw_variable() retourne la valeur sans htmlspecialchars()
+        // (request->server() applique htmlspecialchars, transformant & en &amp;
+        //  ce qui causait des faux positifs sur html_entities_in_url)
+        $page_url = $this->request->raw_variable('REQUEST_URI', '', \phpbb\request\request_interface::SERVER);
+        $referer = $this->request->raw_variable('HTTP_REFERER', '', \phpbb\request\request_interface::SERVER);
 
         // Récupérer le vrai referer original passé via _r (redirect cross-domain)
         $original_ref = $this->request->variable('_r', '', true);
@@ -521,8 +524,10 @@ class listener implements EventSubscriberInterface
             }
         }
 
-        // Signal 4 : Entités HTML dans l'URL (amp%3B = scraper qui parse le HTML source)
-        if (preg_match('/amp%3[Bb]|amp;/', $page_url)) {
+        // Signal 4 : Entités HTML dans l'URL (scraper qui parse le HTML source)
+        // $page_url et $referer sont déjà raw (via raw_variable), pas d'htmlspecialchars.
+        // Un vrai navigateur ne met JAMAIS &amp; ou amp%3B dans l'URL HTTP réelle.
+        if (preg_match('/&amp;|amp%3[Bb]/', $page_url) || preg_match('/&amp;|amp%3[Bb]/', $referer)) {
             $signals[] = 'html_entities_in_url';
         }
 
