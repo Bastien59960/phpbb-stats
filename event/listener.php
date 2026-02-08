@@ -203,6 +203,20 @@ class listener implements EventSubscriberInterface
         // Détection avancée des bots
         // Vérifier d'abord si phpBB l'a détecté comme bot (présent dans la table bots)
         $is_phpbb_bot = !empty($this->user->data['is_bot']);
+
+        // Bots légitimes non reconnus par phpBB natif (table phpbb_bots trop ancienne)
+        // Traités comme phpBB bots = stats uniquement, PAS de log sécurité, PAS de ban
+        if (!$is_phpbb_bot) {
+            $legit_ua_overrides = ['googleother', 'google-extended'];
+            $ua_check = strtolower($user_agent);
+            foreach ($legit_ua_overrides as $lp) {
+                if (strpos($ua_check, $lp) !== false) {
+                    $is_phpbb_bot = true;
+                    break;
+                }
+            }
+        }
+
         $ua_signals = $is_phpbb_bot ? [] : $this->detect_bot($user_agent);
         // no_browser_signature seul ne suffit pas — protège navigateurs exotiques (Lynx, w3m, UA custom vie privée)
         $strong_ua_signals = array_filter($ua_signals, function($s) { return $s !== 'no_browser_signature'; });
@@ -433,7 +447,18 @@ class listener implements EventSubscriberInterface
             $chrome_major = (int)$matches[1];
             $chrome_build = (int)$matches[2];
             $chrome_patch = (int)$matches[3];
-            if (!($chrome_build === 0 && $chrome_patch === 0)) {
+            if ($chrome_build === 0 && $chrome_patch === 0) {
+                // Chrome/XXX.0.0.0 sur desktop = souvent un UA fabriqué par un botnet
+                // MAIS : Chromium sur Linux (snap/flatpak) utilise aussi .0.0.0 en version récente !
+                // On ne flagge que si la version est < 140 (obsolète), PAS les versions récentes.
+                // Les botnets utilisent 135-140 (juste au-dessus de notre seuil old_chrome < 130).
+                // Exclure aussi Mobile/Android qui utilise légitimement .0.0.0
+                if ($chrome_major >= 130 && $chrome_major < 140
+                    && strpos($ua_lower, 'mobile') === false
+                    && strpos($ua_lower, 'android') === false) {
+                    $signals[] = 'zero_chrome_build';
+                }
+            } else {
                 if ($chrome_major >= 120 && ($chrome_build < 6000 || $chrome_build > 7999)) {
                     $signals[] = 'fake_chrome_build';
                 }
@@ -564,6 +589,7 @@ class listener implements EventSubscriberInterface
             'posting_get_loop'      => 65,
             'iphone_13_2_3'         => 60,
             'fake_chrome_build'     => 55,
+            'zero_chrome_build'     => 50,
             'old_firefox'           => 55,
             'bad_gecko_date'        => 50,
             'fake_safari_build'     => 50,
