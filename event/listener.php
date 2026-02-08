@@ -626,11 +626,21 @@ class listener implements EventSubscriberInterface
         $score = $this->compute_danger_score($all_signals, $hostname);
         $level = ($score >= 50) ? 'confirmed' : 'suspicious';
 
+        // Déduplication : max 1 log par session+signaux par heure
+        // Empêche qu'un utilisateur qui navigue N pages avec le même faux signal
+        // accumule N hits et déclenche un ban (phpbb-badbot-suspicious maxretry=3)
+        $signals_str = implode(',', $all_signals);
+        $dedup_key = md5($session_id . '|' . $signals_str . '|' . $level);
+        $dedup_file = sys_get_temp_dir() . '/sec_audit_' . $dedup_key;
+        if (@file_exists($dedup_file) && (time() - @filemtime($dedup_file)) < 3600) {
+            return; // Déjà loggé pour cette session + ces signaux dans la dernière heure
+        }
+        @touch($dedup_file);
+
         // Déterminer le type de détection
         $detection = $bot_source; // 'extension' ou 'behavior'
 
         // Construire la ligne de log (paires clé=valeur)
-        $signals_str = implode(',', $all_signals);
         $ts = date('Y-m-d H:i:s');
 
         // Échapper les guillemets dans les valeurs quotées
