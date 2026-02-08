@@ -436,9 +436,12 @@ class listener implements EventSubscriberInterface
             }
         }
 
-        // Chrome < 30 (2013) = trop ancien pour être réel
+        // Chrome < 130 = trop ancien pour être réel (Chrome 130 = oct 2024, 16+ mois)
+        // Les vrais utilisateurs en 2026 sont sur Chrome 140+. Les botnets (Tencent Cloud etc.)
+        // utilisent des versions 103-129 en rotation pour simuler la diversité.
         if (preg_match('/Chrome\/(\d+)\./', $user_agent, $matches)) {
-            if ((int)$matches[1] < 30 && strpos($ua_lower, 'headlesschrome') === false) {
+            $chromeVer = (int)$matches[1];
+            if ($chromeVer < 130 && $chromeVer > 0 && strpos($ua_lower, 'headlesschrome') === false) {
                 return 1;
             }
         }
