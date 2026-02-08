@@ -200,20 +200,28 @@ class listener implements EventSubscriberInterface
         // Détection avancée des bots
         // Vérifier d'abord si phpBB l'a détecté comme bot (présent dans la table bots)
         $is_phpbb_bot = !empty($this->user->data['is_bot']);
-        $is_extension_bot = $this->detect_bot($user_agent);
-        $is_bot = ($is_phpbb_bot || $is_extension_bot) ? 1 : 0;
+        $ua_signals = $is_phpbb_bot ? [] : $this->detect_bot($user_agent);
+        $is_bot = ($is_phpbb_bot || !empty($ua_signals)) ? 1 : 0;
 
-        // Source de détection du bot
+        // Source de détection et signaux collectés
         $bot_source = '';
+        $all_signals = [];
         if ($is_bot) {
-            $bot_source = $is_phpbb_bot ? 'phpbb' : 'extension';
+            if ($is_phpbb_bot) {
+                $bot_source = 'phpbb';
+            } else {
+                $bot_source = 'extension';
+                $all_signals = $ua_signals;
+            }
         }
 
         // Détection comportementale (bots avec UA valide mais comportement impossible)
         if (!$is_bot) {
-            if ($this->detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id)) {
+            $behavior_signals = $this->detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id);
+            if (!empty($behavior_signals)) {
                 $is_bot = 1;
                 $bot_source = 'behavior';
+                $all_signals = $behavior_signals;
             }
         }
 
@@ -226,7 +234,17 @@ class listener implements EventSubscriberInterface
             $geo_data = $this->geolocate_ip($this->user->ip);
         }
 
-        // 4. Enregistrement
+        // 4. Écriture security_audit.log (bridge vers fail2ban)
+        // Ne log que les bots détectés par l'extension ou le comportement (pas phpBB natifs)
+        if ($is_bot && $bot_source !== 'phpbb') {
+            $this->write_security_audit(
+                $this->user->ip, $session_id, $bot_source, $all_signals,
+                $user_agent, $page_url, $referer,
+                $geo_data['country_code'], $geo_data['hostname'] ?? ''
+            );
+        }
+
+        // 5. Enregistrement
         $sql_ary = [
             'session_id'     => $session_id,
             'user_id'        => (int)$this->user->data['user_id'],
@@ -368,18 +386,16 @@ class listener implements EventSubscriberInterface
     }
 
     /**
-     * Détection avancée des bots
+     * Détection avancée des bots par analyse du User-Agent
+     * @return array Liste des signaux détectés (vide = pas un bot)
      */
     private function detect_bot($user_agent)
     {
-        // phpBB a déjà détecté un bot
-        if (!empty($this->user->data['is_bot'])) {
-            return 1;
-        }
+        $signals = [];
 
         // User-Agent vide = très suspect
         if (empty($user_agent)) {
-            return 1;
+            return ['empty_ua'];
         }
 
         $ua_lower = strtolower($user_agent);
@@ -387,12 +403,12 @@ class listener implements EventSubscriberInterface
         // Vérifier contre notre liste de patterns
         foreach (self::$bot_patterns as $pattern) {
             if (strpos($ua_lower, $pattern) !== false) {
-                return 1;
+                $signals[] = 'ua_pattern';
+                break;
             }
         }
 
-        // Heuristiques supplémentaires
-        // - Pas de navigateur reconnu dans le UA
+        // Pas de navigateur reconnu dans le UA
         $browsers = ['mozilla', 'chrome', 'safari', 'firefox', 'edge', 'opera', 'msie', 'trident'];
         $has_browser = false;
         foreach ($browsers as $browser) {
@@ -401,115 +417,197 @@ class listener implements EventSubscriberInterface
                 break;
             }
         }
-
         if (!$has_browser) {
-            return 1;
+            $signals[] = 'no_browser_signature';
         }
 
-        // Detect fake Chrome build numbers (botnet pattern)
+        // Fake Chrome build numbers (botnet pattern)
         // Real Chrome 120+ builds are in the 6000-7999 range
-        // Fake bots use random build numbers (e.g. Chrome/122.0.4877.833)
-        // Skip reduced/frozen UA (Chrome/XXX.0.0.0) which is legitimate
         if (preg_match('/Chrome\/(\d+)\.0\.(\d+)\.(\d+)/', $user_agent, $matches)) {
             $chrome_major = (int)$matches[1];
             $chrome_build = (int)$matches[2];
             $chrome_patch = (int)$matches[3];
-
             if (!($chrome_build === 0 && $chrome_patch === 0)) {
                 if ($chrome_major >= 120 && ($chrome_build < 6000 || $chrome_build > 7999)) {
-                    return 1;
+                    $signals[] = 'fake_chrome_build';
                 }
             }
         }
 
-        // Detect ancient/fabricated browser versions
-        // Firefox < 30 (2014), impossible Gecko dates
+        // Firefox < 30 (2014)
         if (preg_match('/Firefox\/(\d+)\./', $user_agent, $matches)) {
             if ((int)$matches[1] < 30) {
-                return 1;
+                $signals[] = 'old_firefox';
             }
         }
+
+        // Impossible Gecko dates
         if (preg_match('/Gecko\/(\d{4})-/', $user_agent, $matches)) {
             $gecko_year = (int)$matches[1];
             if ($gecko_year > 2030 || $gecko_year < 2000) {
-                return 1;
+                $signals[] = 'bad_gecko_date';
             }
         }
 
-        // Chrome < 130 = trop ancien pour être réel (Chrome 130 = oct 2024, 16+ mois)
-        // Les vrais utilisateurs en 2026 sont sur Chrome 140+. Les botnets (Tencent Cloud etc.)
-        // utilisent des versions 103-129 en rotation pour simuler la diversité.
+        // Chrome < 130 = trop ancien pour être réel (Chrome 130 = oct 2024)
+        // Les botnets (Tencent Cloud etc.) utilisent des versions 103-129
         if (preg_match('/Chrome\/(\d+)\./', $user_agent, $matches)) {
             $chromeVer = (int)$matches[1];
             if ($chromeVer < 130 && $chromeVer > 0 && strpos($ua_lower, 'headlesschrome') === false) {
-                return 1;
+                $signals[] = 'old_chrome_' . $chromeVer;
             }
         }
 
-        // Safari build number fake (réel = 604.x ou 605.x, pas 184.x)
+        // Safari build number fake (réel >= 400)
         if (preg_match('/Safari\/(\d+)\./', $user_agent, $matches)) {
             $safari_build = (int)$matches[1];
-            // Les vrais Safari builds sont >= 400 (Safari 3+)
             if ($safari_build < 400 && $safari_build > 0) {
-                return 1;
+                $signals[] = 'fake_safari_build';
             }
         }
 
         // Template literal non résolu dans le UA (ex: Firefox/{version})
         if (strpos($user_agent, '{') !== false && strpos($user_agent, '}') !== false) {
-            return 1;
+            $signals[] = 'template_literal';
         }
 
-        // iPhone OS 13_2_3 figé = botnet de scraping (Tencent Cloud et similaires)
-        // Ce UA exact est utilisé massivement par des bots cloud
+        // iPhone OS 13_2_3 figé = botnet Tencent Cloud
         if (strpos($user_agent, 'iPhone OS 13_2_3') !== false) {
-            return 1;
+            $signals[] = 'iphone_13_2_3';
         }
 
-        return 0;
+        return $signals;
     }
 
     /**
      * Détection comportementale des bots (UA valide mais comportement impossible)
+     * @return array Liste des signaux comportementaux détectés (vide = pas un bot)
      */
     private function detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id)
     {
+        $signals = [];
         $user_id = (int)$this->user->data['user_id'];
         if ($user_id > 1) {
-            return false; // Membres connectés = jamais flag
+            return $signals; // Membres connectés = jamais flag
         }
 
         $page_lower = strtolower($page_url);
 
         // Signal 1 : Invité atterrit sur posting.php en première visite
         if ($is_first_visit && strpos($page_lower, 'posting.php') !== false) {
-            return true;
+            $signals[] = 'posting_first_visit';
         }
 
-        // Signal 2 : Referer auto-référent sur posting.php (GET)
+        // Signal 2 : Referer auto-référent sur posting.php (boucle GET)
         if (strpos($page_lower, 'posting.php') !== false && !empty($referer)) {
             if (strpos(strtolower($referer), 'posting.php') !== false) {
                 preg_match('/[?&]p=(\d+)/', $page_url, $page_m);
                 preg_match('/[?&]p=(\d+)/', $referer, $ref_m);
                 if (!empty($page_m[1]) && !empty($ref_m[1]) && $page_m[1] === $ref_m[1]) {
-                    return true;
+                    $signals[] = 'posting_get_loop';
                 }
             }
         }
 
-        // Signal 3 : Invité sans screen resolution après 5+ pages dans la session
+        // Signal 3 : Invité sans screen resolution après 3+ pages (pas d'exécution JS)
         if (!$is_first_visit && empty($screen_res)) {
             $sql = 'SELECT COUNT(*) as cnt FROM ' . $this->table_prefix . 'bastien59_stats
                     WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'';
             $result = $this->db->sql_query($sql);
             $page_count = (int)$this->db->sql_fetchfield('cnt');
             $this->db->sql_freeresult($result);
-            if ($page_count >= 5) {
-                return true;
+            if ($page_count >= 3) {
+                $signals[] = 'no_screen_res';
             }
         }
 
-        return false;
+        // Signal 4 : Entités HTML dans l'URL (amp%3B = scraper qui parse le HTML source)
+        if (preg_match('/amp%3[Bb]|amp;/', $page_url)) {
+            $signals[] = 'html_entities_in_url';
+        }
+
+        return $signals;
+    }
+
+    /**
+     * Calcul du score de danger (0-100) basé sur les signaux détectés
+     */
+    private function compute_danger_score($all_signals, $hostname)
+    {
+        $signal_scores = [
+            'empty_ua'              => 80,
+            'ua_pattern'            => 70,
+            'no_browser_signature'  => 70,
+            'template_literal'      => 70,
+            'posting_first_visit'   => 65,
+            'posting_get_loop'      => 65,
+            'iphone_13_2_3'         => 60,
+            'fake_chrome_build'     => 55,
+            'old_firefox'           => 55,
+            'bad_gecko_date'        => 50,
+            'fake_safari_build'     => 50,
+            'html_entities_in_url'  => 45,
+            'no_screen_res'         => 35,
+        ];
+
+        $score = 0;
+        foreach ($all_signals as $signal) {
+            if (isset($signal_scores[$signal])) {
+                $score += $signal_scores[$signal];
+            } elseif (strpos($signal, 'old_chrome_') === 0) {
+                $score += 50;
+            }
+        }
+
+        // Bonus datacenter hostname
+        if (!empty($hostname) && $hostname !== '' && $hostname !== '-') {
+            $dc_patterns = ['amazonaws', 'googleusercontent', 'azure', 'ovh.net', 'hetzner',
+                            'digitalocean', 'linode', 'vultr', 'contabo', 'cloudfront',
+                            'tencent', 'alicloud', 'aliyun', 'scaleway'];
+            $hn_lower = strtolower($hostname);
+            foreach ($dc_patterns as $dc) {
+                if (strpos($hn_lower, $dc) !== false) {
+                    $score += 15;
+                    break;
+                }
+            }
+        }
+
+        return min(100, $score);
+    }
+
+    /**
+     * Écriture dans /var/log/security_audit.log pour le bridge fail2ban
+     * Format: clé=valeur parseable par regex fail2ban ET PHP collect.php
+     */
+    private function write_security_audit($ip, $session_id, $bot_source, $all_signals, $user_agent, $page_url, $referer, $country_code, $hostname)
+    {
+        $log_file = '/var/log/security_audit.log';
+
+        $score = $this->compute_danger_score($all_signals, $hostname);
+        $level = ($score >= 50) ? 'confirmed' : 'suspicious';
+
+        // Déterminer le type de détection
+        $detection = $bot_source; // 'extension' ou 'behavior'
+
+        // Construire la ligne de log (paires clé=valeur)
+        $signals_str = implode(',', $all_signals);
+        $ts = date('Y-m-d H:i:s');
+
+        // Échapper les guillemets dans les valeurs quotées
+        $ua_safe = str_replace('"', '\\"', substr($user_agent, 0, 500));
+        $page_safe = str_replace('"', '\\"', substr($page_url, 0, 500));
+        $ref_safe = str_replace('"', '\\"', substr($referer ?: '-', 0, 500));
+
+        $line = sprintf(
+            '%s BOT-DETECT level=%s ip=%s session=%s detection=%s score=%d ua="%s" page="%s" referer="%s" signals="%s" country=%s hostname=%s',
+            $ts, $level, $ip, $session_id, $detection, $score,
+            $ua_safe, $page_safe, $ref_safe, $signals_str,
+            $country_code ?: '-', $hostname ?: '-'
+        );
+
+        // Écriture avec verrouillage (échec silencieux)
+        @file_put_contents($log_file, $line . "\n", FILE_APPEND | LOCK_EX);
     }
 
     /**
