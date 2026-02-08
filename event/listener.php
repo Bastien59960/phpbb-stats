@@ -207,7 +207,7 @@ class listener implements EventSubscriberInterface
         // Bots légitimes non reconnus par phpBB natif (table phpbb_bots trop ancienne)
         // Traités comme phpBB bots = stats uniquement, PAS de log sécurité, PAS de ban
         if (!$is_phpbb_bot) {
-            $legit_ua_overrides = ['googleother', 'google-extended'];
+            $legit_ua_overrides = ['googleother', 'google-extended', 'cfnetwork'];
             $ua_check = strtolower($user_agent);
             foreach ($legit_ua_overrides as $lp) {
                 if (strpos($ua_check, $lp) !== false) {
@@ -521,7 +521,7 @@ class listener implements EventSubscriberInterface
         $legit_bots = ['googlebot', 'bingbot', 'applebot', 'yandexbot', 'duckduckbot',
                         'baiduspider', 'qwant', 'petalbot', 'facebookexternalhit', 'linkedinbot',
                         'twitterbot', 'claudebot', 'gptbot', 'amazonbot', 'bytespider',
-                        'seznambot', 'archive.org_bot', 'ccbot'];
+                        'seznambot', 'archive.org_bot', 'ccbot', 'cfnetwork'];
         foreach ($legit_bots as $lb) {
             if (strpos($ua_lower, $lb) !== false) {
                 return $signals; // Bot légitime = pas de détection comportementale
