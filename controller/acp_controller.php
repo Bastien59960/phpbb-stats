@@ -71,9 +71,10 @@ class acp_controller
         // ================================================================
         // 3. GRAPHIQUES / STATISTIQUES AGRÉGÉES
         // ================================================================
-        $this->assign_stats_block('user_os', 'STATS_OS', $start_time, $bot_filter, 10);
-        $this->assign_stats_block('user_device', 'STATS_DEVICE', $start_time, $bot_filter, 5);
-        $this->assign_stats_block('screen_res', 'STATS_RES', $start_time, $bot_filter, 10);
+        // OS, appareils et résolutions : toujours humains uniquement (les bots polluent ces métriques)
+        $this->assign_stats_block('user_os', 'STATS_OS', $start_time, ' AND is_bot = 0', 10);
+        $this->assign_stats_block('user_device', 'STATS_DEVICE', $start_time, ' AND is_bot = 0', 5);
+        $this->assign_stats_block('screen_res', 'STATS_RES', $start_time, ' AND is_bot = 0', 10);
         $this->assign_stats_block('referer_type', 'STATS_REFERER', $start_time, $bot_filter, 15);
 
         // Sources de trafic séparées humains/bots

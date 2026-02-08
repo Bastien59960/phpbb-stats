@@ -44,6 +44,14 @@ class listener implements EventSubscriberInterface
         'applebot', 'petalbot', 'bytespider', 'gptbot', 'claudebot',
         'chatgpt', 'amazonbot', 'dataprovider', 'megaindex', 'blexbot',
         'mj12bot', 'ahrefsbot', 'seznambot', 'yacybot',
+        // Google services
+        'googledocs', 'google-read-aloud', 'storebot-google', 'google-inspectiontool',
+        'feedfetcher-google', 'apis-google', 'mediapartners-google',
+        // Patterns de bots avec typos/malformations
+        'mozlila/', 'bulid/',
+        // Outils divers
+        'sitesucker', 'expo-research', 'trendictionbot', 'amzn-searchbot',
+        'wpmu dev', 'broken link checker',
     ];
 
     // Classification des referers
@@ -102,6 +110,7 @@ class listener implements EventSubscriberInterface
         return [
             'core.page_header_after' => 'log_visit',
             'core.page_footer'       => 'inject_resolution_script',
+            'core.obtain_users_online_string_modify' => 'split_online_users',
         ];
     }
 
@@ -264,6 +273,48 @@ class listener implements EventSubscriberInterface
                               WHERE is_bot = 0 AND visit_time < ' . $cutoff_humans;
                 $this->db->sql_query($sql_clean);
             }
+        }
+    }
+
+    /**
+     * Sépare la liste "Qui est en ligne" en humains et robots sur deux lignes
+     */
+    public function split_online_users($event)
+    {
+        $rowset = $event['rowset'];
+        $user_online_link = $event['user_online_link'];
+
+        if (empty($rowset) || empty($user_online_link)) {
+            return;
+        }
+
+        // Construire un index par user_id (rowset est indexé numériquement)
+        $users_by_id = [];
+        foreach ($rowset as $row) {
+            $users_by_id[$row['user_id']] = $row;
+        }
+
+        $humans = [];
+        $bots = [];
+
+        foreach ($user_online_link as $user_id => $link) {
+            if (isset($users_by_id[$user_id]) && $users_by_id[$user_id]['user_type'] == USER_IGNORE) {
+                $bots[] = $link;
+            } else {
+                $humans[] = $link;
+            }
+        }
+
+        $parts = [];
+        if (!empty($humans)) {
+            $parts[] = 'Membres : ' . implode(', ', $humans);
+        }
+        if (!empty($bots)) {
+            $parts[] = 'Robots : ' . implode(', ', $bots);
+        }
+
+        if (!empty($parts)) {
+            $event['online_userlist'] = implode('<br />', $parts);
         }
     }
 
