@@ -448,16 +448,9 @@ class listener implements EventSubscriberInterface
             $chrome_build = (int)$matches[2];
             $chrome_patch = (int)$matches[3];
             if ($chrome_build === 0 && $chrome_patch === 0) {
-                // Chrome/XXX.0.0.0 sur desktop = souvent un UA fabriqué par un botnet
-                // MAIS : Chromium sur Linux (snap/flatpak) utilise aussi .0.0.0 en version récente !
-                // On ne flagge que si la version est < 140 (obsolète), PAS les versions récentes.
-                // Les botnets utilisent 135-140 (juste au-dessus de notre seuil old_chrome < 130).
-                // Exclure aussi Mobile/Android qui utilise légitimement .0.0.0
-                if ($chrome_major >= 130 && $chrome_major < 140
-                    && strpos($ua_lower, 'mobile') === false
-                    && strpos($ua_lower, 'android') === false) {
-                    $signals[] = 'zero_chrome_build';
-                }
+                // Chrome/XXX.0.0.0 = PAS exploitable comme signal bot.
+                // Brave Browser masque volontairement le build Chrome (.0.0.0) pour l'anti-fingerprinting.
+                // On ne peut pas distinguer un bot de Brave par le build seul.
             } else {
                 if ($chrome_major >= 120 && ($chrome_build < 6000 || $chrome_build > 7999)) {
                     $signals[] = 'fake_chrome_build';
@@ -589,7 +582,6 @@ class listener implements EventSubscriberInterface
             'posting_get_loop'      => 65,
             'iphone_13_2_3'         => 60,
             'fake_chrome_build'     => 55,
-            'zero_chrome_build'     => 50,
             'old_firefox'           => 55,
             'bad_gecko_date'        => 50,
             'fake_safari_build'     => 50,
