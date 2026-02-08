@@ -204,7 +204,9 @@ class listener implements EventSubscriberInterface
         // Vérifier d'abord si phpBB l'a détecté comme bot (présent dans la table bots)
         $is_phpbb_bot = !empty($this->user->data['is_bot']);
         $ua_signals = $is_phpbb_bot ? [] : $this->detect_bot($user_agent);
-        $is_bot = ($is_phpbb_bot || !empty($ua_signals)) ? 1 : 0;
+        // no_browser_signature seul ne suffit pas — protège navigateurs exotiques (Lynx, w3m, UA custom vie privée)
+        $strong_ua_signals = array_filter($ua_signals, function($s) { return $s !== 'no_browser_signature'; });
+        $is_bot = ($is_phpbb_bot || !empty($strong_ua_signals)) ? 1 : 0;
 
         // Source de détection et signaux collectés
         $bot_source = '';
@@ -214,7 +216,7 @@ class listener implements EventSubscriberInterface
                 $bot_source = 'phpbb';
             } else {
                 $bot_source = 'extension';
-                $all_signals = $ua_signals;
+                $all_signals = $ua_signals; // inclut no_browser_signature pour le scoring
             }
         }
 
@@ -224,7 +226,8 @@ class listener implements EventSubscriberInterface
             if (!empty($behavior_signals)) {
                 $is_bot = 1;
                 $bot_source = 'behavior';
-                $all_signals = $behavior_signals;
+                // Ajouter no_browser_signature comme renfort si présent dans l'UA
+                $all_signals = !empty($ua_signals) ? array_merge($behavior_signals, array_intersect($ua_signals, ['no_browser_signature'])) : $behavior_signals;
             }
         }
 
@@ -542,7 +545,7 @@ class listener implements EventSubscriberInterface
         $signal_scores = [
             'empty_ua'              => 80,
             'ua_pattern'            => 70,
-            'no_browser_signature'  => 70,
+            'no_browser_signature'  => 25,
             'template_literal'      => 70,
             'posting_first_visit'   => 65,
             'posting_get_loop'      => 65,
