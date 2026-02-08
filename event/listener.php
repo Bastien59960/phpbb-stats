@@ -222,7 +222,7 @@ class listener implements EventSubscriberInterface
 
         // Détection comportementale (bots avec UA valide mais comportement impossible)
         if (!$is_bot) {
-            $behavior_signals = $this->detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id);
+            $behavior_signals = $this->detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id, $user_agent);
             if (!empty($behavior_signals)) {
                 $is_bot = 1;
                 $bot_source = 'behavior';
@@ -489,12 +489,25 @@ class listener implements EventSubscriberInterface
      * Détection comportementale des bots (UA valide mais comportement impossible)
      * @return array Liste des signaux comportementaux détectés (vide = pas un bot)
      */
-    private function detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id)
+    private function detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id, $user_agent = '')
     {
         $signals = [];
         $user_id = (int)$this->user->data['user_id'];
         if ($user_id > 1) {
             return $signals; // Membres connectés = jamais flag
+        }
+
+        // Bots légitimes connus — ils n'exécutent pas JS (pas de screen_res) et c'est NORMAL.
+        // Ne pas les flagger en comportemental même si phpBB ne les reconnaît pas nativement.
+        $ua_lower = strtolower($user_agent);
+        $legit_bots = ['googlebot', 'bingbot', 'applebot', 'yandexbot', 'duckduckbot',
+                        'baiduspider', 'qwant', 'petalbot', 'facebookexternalhit', 'linkedinbot',
+                        'twitterbot', 'claudebot', 'gptbot', 'amazonbot', 'bytespider',
+                        'seznambot', 'archive.org_bot', 'ccbot'];
+        foreach ($legit_bots as $lb) {
+            if (strpos($ua_lower, $lb) !== false) {
+                return $signals; // Bot légitime = pas de détection comportementale
+            }
         }
 
         $page_lower = strtolower($page_url);
