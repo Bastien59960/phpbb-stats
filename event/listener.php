@@ -207,7 +207,7 @@ class listener implements EventSubscriberInterface
         // Bots légitimes non reconnus par phpBB natif (table phpbb_bots trop ancienne)
         // Traités comme phpBB bots = stats uniquement, PAS de log sécurité, PAS de ban
         if (!$is_phpbb_bot) {
-            $legit_ua_overrides = ['googleother', 'google-extended', 'cfnetwork'];
+            $legit_ua_overrides = ['googleother', 'google-extended', 'cfnetwork', 'qwant'];
             $ua_check = strtolower($user_agent);
             foreach ($legit_ua_overrides as $lp) {
                 if (strpos($ua_check, $lp) !== false) {
