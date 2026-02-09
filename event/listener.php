@@ -54,6 +54,16 @@ class listener implements EventSubscriberInterface
         'wpmu dev', 'broken link checker',
     ];
 
+    // Bots légitimes : stats uniquement, PAS de log sécurité, PAS de ban.
+    // Centralisé ici pour éviter la duplication entre legit_ua_overrides et legit_bots.
+    // Inclut les bots NON reconnus par phpBB natif (table phpbb_bots trop ancienne).
+    protected static $legit_bot_uas = [
+        // Moteurs de recherche non reconnus par phpBB
+        'googleother', 'google-extended', 'qwant',
+        // Apple system requests (iOS prefetch, favicon, app-icon)
+        'cfnetwork',
+    ];
+
     // Classification des referers
     protected static $referer_types = [
         // Moteurs de recherche
@@ -207,9 +217,8 @@ class listener implements EventSubscriberInterface
         // Bots légitimes non reconnus par phpBB natif (table phpbb_bots trop ancienne)
         // Traités comme phpBB bots = stats uniquement, PAS de log sécurité, PAS de ban
         if (!$is_phpbb_bot) {
-            $legit_ua_overrides = ['googleother', 'google-extended', 'cfnetwork', 'qwant'];
             $ua_check = strtolower($user_agent);
-            foreach ($legit_ua_overrides as $lp) {
+            foreach (self::$legit_bot_uas as $lp) {
                 if (strpos($ua_check, $lp) !== false) {
                     $is_phpbb_bot = true;
                     break;
@@ -517,12 +526,15 @@ class listener implements EventSubscriberInterface
 
         // Bots légitimes connus — ils n'exécutent pas JS (pas de screen_res) et c'est NORMAL.
         // Ne pas les flagger en comportemental même si phpBB ne les reconnaît pas nativement.
+        // Inclut $legit_bot_uas + bots phpBB natifs courants (filet de sécurité)
         $ua_lower = strtolower($user_agent);
-        $legit_bots = ['googlebot', 'bingbot', 'applebot', 'yandexbot', 'duckduckbot',
-                        'baiduspider', 'qwant', 'petalbot', 'facebookexternalhit', 'linkedinbot',
-                        'twitterbot', 'claudebot', 'gptbot', 'amazonbot', 'bytespider',
-                        'seznambot', 'archive.org_bot', 'ccbot', 'cfnetwork'];
-        foreach ($legit_bots as $lb) {
+        $behavior_safe_bots = array_merge(self::$legit_bot_uas, [
+            'googlebot', 'bingbot', 'applebot', 'yandexbot', 'duckduckbot',
+            'baiduspider', 'petalbot', 'facebookexternalhit', 'linkedinbot',
+            'twitterbot', 'claudebot', 'gptbot', 'amazonbot', 'bytespider',
+            'seznambot', 'archive.org_bot', 'ccbot',
+        ]);
+        foreach ($behavior_safe_bots as $lb) {
             if (strpos($ua_lower, $lb) !== false) {
                 return $signals; // Bot légitime = pas de détection comportementale
             }
