@@ -219,12 +219,57 @@ class acp_controller
             // Hostname depuis le cache (pas de DNS lookup temps réel)
             $hostname = $row['hostname'] ?? '';
 
+            // Forward DNS : résoudre le hostname vers IP(s) pour vérification
+            $forward_dns_status = '';
+            $forward_dns_ips = '';
+            if (!empty($hostname) && $hostname !== '-') {
+                $ip = $row['user_ip'];
+                $forward_ips = @gethostbynamel($hostname);
+                $ipv6_match = false;
+
+                // Vérifier aussi les enregistrements AAAA pour IPv6
+                if (strpos($ip, ':') !== false) {
+                    $aaaa_records = @dns_get_record($hostname, DNS_AAAA);
+                    $aaaa_ips = [];
+                    if (!empty($aaaa_records)) {
+                        foreach ($aaaa_records as $rec) {
+                            if (isset($rec['ipv6'])) {
+                                $aaaa_ips[] = $rec['ipv6'];
+                                if ($rec['ipv6'] === $ip) {
+                                    $ipv6_match = true;
+                                }
+                            }
+                        }
+                    }
+                    if (!empty($aaaa_ips)) {
+                        $forward_dns_ips = implode(', ', $aaaa_ips);
+                        $forward_dns_status = $ipv6_match
+                            ? '<span style="color:#27ae60;font-weight:bold;">✓ Correspond</span>'
+                            : '<span style="color:#c0392b;font-weight:bold;">✗ Ne correspond pas</span>';
+                    } else {
+                        $forward_dns_status = '<span style="color:#999;">Indisponible (pas d\'enregistrement AAAA)</span>';
+                    }
+                } else {
+                    // IPv4
+                    if ($forward_ips !== false && !empty($forward_ips)) {
+                        $forward_dns_ips = implode(', ', $forward_ips);
+                        $forward_dns_status = in_array($ip, $forward_ips)
+                            ? '<span style="color:#27ae60;font-weight:bold;">✓ Correspond</span>'
+                            : '<span style="color:#c0392b;font-weight:bold;">✗ Ne correspond pas</span>';
+                    } else {
+                        $forward_dns_status = '<span style="color:#999;">Indisponible (résolution échouée)</span>';
+                    }
+                }
+            } elseif (empty($hostname) || $hostname === '-') {
+                $forward_dns_status = '<span style="color:#999;">N/A (pas de Reverse DNS)</span>';
+            }
+
             $this->template->assign_block_vars('SESSIONS', [
                 'SESSION_ID'        => substr($session_id, 0, 8) . '...',
                 'IP'                => $row['user_ip'],
                 'HOSTNAME'          => htmlspecialchars($hostname, ENT_COMPAT, 'UTF-8'),
-                'FORWARD_DNS_STATUS'=> '',
-                'FORWARD_DNS_IPS'   => '',
+                'FORWARD_DNS_STATUS'=> $forward_dns_status,
+                'FORWARD_DNS_IPS'   => htmlspecialchars($forward_dns_ips, ENT_COMPAT, 'UTF-8'),
                 'COUNTRY'           => $country_display,
                 'COUNTRY_CODE'  => htmlspecialchars($row['country_code'] ?? '', ENT_COMPAT, 'UTF-8'),
                 'OS'            => htmlspecialchars($row['user_os'], ENT_COMPAT, 'UTF-8'),
