@@ -645,13 +645,34 @@ class listener implements EventSubscriberInterface
         if ($domains === null) {
             return true; // Bot non listé dans rdns_domains = on ne vérifie pas
         }
+        // Étape 1 : rDNS doit correspondre à un domaine attendu
         $hn_lower = strtolower($hostname);
+        $rdns_match = false;
         foreach ($domains as $domain) {
             if (substr($hn_lower, -strlen($domain)) === $domain) {
-                return true;
+                $rdns_match = true;
+                break;
             }
         }
-        return false;
+        if (!$rdns_match) {
+            return false;
+        }
+        // Étape 2 : Forward DNS validation (le hostname doit résoudre vers l'IP originale)
+        $ip = $this->user->ip;
+        $forward_ips = @gethostbynamel($hostname);
+        if ($forward_ips === false) {
+            // Forward DNS a échoué — vérifier aussi les AAAA pour IPv6
+            $aaaa = @dns_get_record($hostname, DNS_AAAA);
+            if (!empty($aaaa)) {
+                foreach ($aaaa as $rec) {
+                    if (isset($rec['ipv6']) && $rec['ipv6'] === $ip) {
+                        return true;
+                    }
+                }
+            }
+            return false; // Forward DNS échoué = suspect
+        }
+        return in_array($ip, $forward_ips);
     }
 
     /**
