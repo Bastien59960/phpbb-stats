@@ -224,9 +224,10 @@ class listener implements EventSubscriberInterface
         // 2. Si UA prétend être un bot légitime (whitelist) mais PAS reconnu par phpBB natif
         //    → vérifier reverse DNS pour détecter les imposteurs en temps réel
         $fake_bot_signals = [];
+        $rdns_fail_reason = '';
         if ($is_legit_bot && empty($this->user->data['is_bot'])) {
             $hostname_check = $this->get_cached_hostname($this->user->ip);
-            if (!$this->verify_bot_rdns($claimed_bot, $hostname_check)) {
+            if (!$this->verify_bot_rdns($claimed_bot, $hostname_check, $rdns_fail_reason)) {
                 // IMPOSTEUR ! UA prétend être un bot légitime mais rDNS ne correspond pas
                 $fake_bot_signals = ['fake_legit_bot'];
                 $is_legit_bot = false; // Pas un vrai bot légitime → continuer détection
@@ -284,7 +285,7 @@ class listener implements EventSubscriberInterface
                 $all_signals, $user_agent, $page_url,
                 $screen_res, $page_count,
                 $hostname_check ?? ($geo_data['hostname'] ?? ''),
-                $claimed_bot
+                $claimed_bot, $rdns_fail_reason
             );
         }
 
@@ -603,7 +604,7 @@ class listener implements EventSubscriberInterface
      * Écriture dans /var/log/security_audit.log pour le bridge fail2ban
      * Format PHPBB-SIGNAL : signaux bruts, pas de score (scoring externe dans collect.php)
      */
-    private function write_security_audit($ip, $session_id, $user_id, $all_signals, $user_agent, $page_url, $screen_res, $page_count, $hostname, $claimed_bot)
+    private function write_security_audit($ip, $session_id, $user_id, $all_signals, $user_agent, $page_url, $screen_res, $page_count, $hostname, $claimed_bot, $rdns_fail_reason = '')
     {
         $log_file = '/var/log/security_audit.log';
 
@@ -632,10 +633,10 @@ class listener implements EventSubscriberInterface
             $screen_res ?: '-', (int)$page_count
         );
 
-        // Ajouter hostname et claimed_bot pour fake_legit_bot
+        // Ajouter hostname, claimed_bot et raison d'échec pour fake_legit_bot
         if (in_array('fake_legit_bot', $all_signals)) {
-            $line .= sprintf(' hostname=%s claimed_bot=%s',
-                $hostname ?: '-', $claimed_bot ?: '-');
+            $line .= sprintf(' hostname=%s claimed_bot=%s rdns_reason=%s',
+                $hostname ?: '-', $claimed_bot ?: '-', $rdns_fail_reason ?: '-');
         }
 
         // Écriture avec verrouillage (échec silencieux)
@@ -646,10 +647,11 @@ class listener implements EventSubscriberInterface
      * Vérifie le reverse DNS d'un bot prétendu légitime
      * @return bool true si le hostname correspond au bot, false si imposteur
      */
-    private function verify_bot_rdns($claimed_bot, $hostname)
+    private function verify_bot_rdns($claimed_bot, $hostname, &$fail_reason = '')
     {
         if (empty($hostname) || $hostname === '-') {
-            return false; // Pas de hostname = suspect
+            $fail_reason = 'no_rdns';
+            return false;
         }
         $domains = self::$bot_rdns_domains[strtolower($claimed_bot)] ?? null;
         if ($domains === null) {
@@ -665,6 +667,7 @@ class listener implements EventSubscriberInterface
             }
         }
         if (!$rdns_match) {
+            $fail_reason = 'rdns_mismatch';
             return false;
         }
         // Étape 2 : Forward DNS validation (le hostname doit résoudre vers l'IP originale)
@@ -680,9 +683,14 @@ class listener implements EventSubscriberInterface
                     }
                 }
             }
-            return false; // Forward DNS échoué = suspect
+            $fail_reason = 'fdns_failed';
+            return false;
         }
-        return in_array($ip, $forward_ips);
+        if (!in_array($ip, $forward_ips)) {
+            $fail_reason = 'fdns_mismatch';
+            return false;
+        }
+        return true;
     }
 
     /**
