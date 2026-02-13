@@ -53,10 +53,10 @@ class acp_controller
         $show_bots = $this->request->variable('show_bots', 1);
         $bot_filter = ($show_bots) ? '' : ' AND is_bot = 0';
 
-        // Limite d'affichage (500 par défaut)
-        $display_limit = $this->request->variable('limit', 500);
+        // Limite d'affichage (50 par défaut pour des performances optimales)
+        $display_limit = $this->request->variable('limit', 50);
         if ($display_limit < 10) $display_limit = 10;
-        if ($display_limit > 5000) $display_limit = 5000;
+        if ($display_limit > 500) $display_limit = 500;
 
         // ================================================================
         // 1. STATISTIQUES GLOBALES
@@ -164,10 +164,11 @@ class acp_controller
 
     /**
      * Liste des sessions avec pages visitées
+     * Optimisé : 2 requêtes au lieu de N+1 (plus de boucle de requêtes par session)
      */
     private function assign_sessions($start_time, $bot_filter, $limit = 500)
     {
-        // Récupérer les sessions uniques avec leur première entrée
+        // Requête 1 : Récupérer les sessions uniques avec page_count (correlated subquery)
         $sql = 'SELECT s.*,
                        (SELECT COUNT(*) FROM ' . $this->table_prefix . 'bastien59_stats s2
                         WHERE s2.session_id = s.session_id) as page_count
@@ -178,23 +179,33 @@ class acp_controller
 
         $result = $this->db->sql_query_limit($sql, $limit);
 
+        $sessions = [];
+        $session_ids = [];
         while ($row = $this->db->sql_fetchrow($result)) {
+            $sessions[] = $row;
+            $session_ids[] = '\'' . $this->db->sql_escape($row['session_id']) . '\'';
+        }
+        $this->db->sql_freeresult($result);
+
+        if (empty($sessions)) {
+            return;
+        }
+
+        // Requête 2 : Récupérer TOUTES les pages de TOUTES les sessions en une requête
+        $pages_by_session = [];
+        $sql_pages = 'SELECT session_id, page_url, page_title, visit_time, duration, referer
+                      FROM ' . $this->table_prefix . 'bastien59_stats
+                      WHERE session_id IN (' . implode(',', $session_ids) . ')
+                      ORDER BY visit_time ASC';
+        $result_pages = $this->db->sql_query($sql_pages);
+        while ($page = $this->db->sql_fetchrow($result_pages)) {
+            $pages_by_session[$page['session_id']][] = $page;
+        }
+        $this->db->sql_freeresult($result_pages);
+
+        // Assigner les sessions au template
+        foreach ($sessions as $row) {
             $session_id = $row['session_id'];
-
-            // Récupérer les pages de cette session
-            $sql_pages = 'SELECT page_url, page_title, visit_time, duration, referer
-                          FROM ' . $this->table_prefix . 'bastien59_stats
-                          WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
-                          ORDER BY visit_time ASC';
-            $result_pages = $this->db->sql_query($sql_pages);
-
-            $pages = [];
-            while ($page = $this->db->sql_fetchrow($result_pages)) {
-                $pages[] = $page;
-            }
-            $this->db->sql_freeresult($result_pages);
-
-            // Assigner la session
             $bot_source = $row['bot_source'] ?? '';
             $is_phpbb_bot = ($bot_source === 'phpbb') ? 1 : 0;
 
@@ -205,11 +216,16 @@ class acp_controller
                 $country_display = $flag . ' ' . htmlspecialchars($row['country_name'] ?? $row['country_code'], ENT_COMPAT, 'UTF-8');
             }
 
+            // Hostname depuis le cache (pas de DNS lookup temps réel)
+            $hostname = $row['hostname'] ?? '';
+
             $this->template->assign_block_vars('SESSIONS', [
-                'SESSION_ID'    => substr($session_id, 0, 8) . '...',
-                'IP'            => $row['user_ip'],
-                'HOSTNAME'      => htmlspecialchars($row['hostname'] ?? '', ENT_COMPAT, 'UTF-8'),
-                'COUNTRY'       => $country_display,
+                'SESSION_ID'        => substr($session_id, 0, 8) . '...',
+                'IP'                => $row['user_ip'],
+                'HOSTNAME'          => htmlspecialchars($hostname, ENT_COMPAT, 'UTF-8'),
+                'FORWARD_DNS_STATUS'=> '',
+                'FORWARD_DNS_IPS'   => '',
+                'COUNTRY'           => $country_display,
                 'COUNTRY_CODE'  => htmlspecialchars($row['country_code'] ?? '', ENT_COMPAT, 'UTF-8'),
                 'OS'            => htmlspecialchars($row['user_os'], ENT_COMPAT, 'UTF-8'),
                 'DEVICE'        => htmlspecialchars($row['user_device'], ENT_COMPAT, 'UTF-8'),
@@ -232,6 +248,7 @@ class acp_controller
             ]);
 
             // Assigner les pages de la session (à partir de la 2ème)
+            $pages = $pages_by_session[$session_id] ?? [];
             $first = true;
             foreach ($pages as $page) {
                 if ($first) {
@@ -246,7 +263,6 @@ class acp_controller
                 ]);
             }
         }
-        $this->db->sql_freeresult($result);
     }
 
     /**

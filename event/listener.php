@@ -19,39 +19,22 @@ class listener implements EventSubscriberInterface
     protected $template;
     protected $table_prefix;
 
-    // Liste des bots connus (User-Agent patterns)
-    protected static $bot_patterns = [
-        // Moteurs de recherche
-        'googlebot', 'bingbot', 'yandexbot', 'baiduspider', 'duckduckbot',
-        'slurp', 'sogou', 'exabot', 'facebot', 'ia_archiver',
-        // Crawlers
-        'crawler', 'spider', 'bot/', 'bot;', 'bot ',
-        'crawl', 'slurp', 'mediapartners', 'adsbot',
-        // Outils SEO
-        'semrush', 'ahrefs', 'moz.com', 'majestic', 'dotbot',
-        'rogerbot', 'screaming', 'seokicks', 'sistrix',
-        // Réseaux sociaux
-        'facebookexternalhit', 'twitterbot', 'linkedinbot', 'pinterest',
-        'whatsapp', 'telegrambot', 'slackbot', 'discordbot',
-        // Monitoring
-        'uptimerobot', 'pingdom', 'statuscake', 'newrelicpinger',
-        'jetmon', 'site24x7', 'monitis',
-        // Autres
-        'wget', 'curl/', 'python-requests', 'python-urllib',
-        'java/', 'httpclient', 'okhttp', 'axios', 'node-fetch',
-        'headlesschrome', 'phantomjs', 'selenium', 'puppeteer',
-        'scrapy', 'nutch', 'archive.org_bot', 'ccbot',
-        'applebot', 'petalbot', 'bytespider', 'gptbot', 'claudebot',
-        'chatgpt', 'amazonbot', 'dataprovider', 'megaindex', 'blexbot',
-        'mj12bot', 'ahrefsbot', 'seznambot', 'yacybot',
-        // Google services
-        'googledocs', 'google-read-aloud', 'storebot-google', 'google-inspectiontool',
-        'feedfetcher-google', 'apis-google', 'mediapartners-google',
-        // Patterns de bots avec typos/malformations
-        'mozlila/', 'bulid/',
-        // Outils divers
-        'sitesucker', 'expo-research', 'trendictionbot', 'amzn-searchbot',
-        'wpmu dev', 'broken link checker',
+    // Domaines reverse DNS légitimes pour vérification des bots prétendus
+    // Source : https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot
+    protected static $bot_rdns_domains = [
+        'googlebot'        => ['.googlebot.com', '.google.com'],
+        'google-extended'  => ['.googlebot.com', '.google.com'],
+        'googleother'      => ['.googlebot.com', '.google.com'],
+        'bingbot'          => ['.search.msn.com'],
+        'applebot'         => ['.applebot.apple.com'],
+        'yandexbot'        => ['.yandex.com', '.yandex.ru', '.yandex.net'],
+        'baiduspider'      => ['.baidu.com', '.baidu.jp'],
+        'duckduckbot'      => ['.duckduckgo.com'],
+        'facebookexternalhit' => ['.facebook.com', '.fbsv.net', '.fbcdn.net'],
+        'linkedinbot'      => ['.linkedin.com'],
+        'twitterbot'       => ['.twttr.com', '.twitter.com'],
+        'petalbot'         => ['.petalsearch.com', '.aspiegel.com'],
+        'qwant'            => ['.qwant.com'],
     ];
 
     // Bots légitimes : stats uniquement, PAS de log sécurité, PAS de ban.
@@ -210,47 +193,56 @@ class listener implements EventSubscriberInterface
         // Résolution via cookie
         $screen_res = $this->request->variable('bastien59_stats_res', '', true, \phpbb\request\request_interface::COOKIE);
 
-        // Détection avancée des bots
-        // Vérifier d'abord si phpBB l'a détecté comme bot (présent dans la table bots)
-        $is_phpbb_bot = !empty($this->user->data['is_bot']);
+        // === DÉTECTION DES BOTS (2 couches) ===
+        // Couche 1 : Protection bots légitimes (phpBB natif + whitelist + vérif rDNS)
+        // Couche 2 : Détection comportementale (signaux impossibles à voir via Apache)
 
-        // Bots légitimes non reconnus par phpBB natif (table phpbb_bots trop ancienne)
-        // Traités comme phpBB bots = stats uniquement, PAS de log sécurité, PAS de ban
-        if (!$is_phpbb_bot) {
+        // 1. Vérifier si bot légitime connu (phpBB natif + notre whitelist)
+        $is_legit_bot = !empty($this->user->data['is_bot']);
+        $claimed_bot = '';
+        if (!$is_legit_bot) {
             $ua_check = strtolower($user_agent);
             foreach (self::$legit_bot_uas as $lp) {
                 if (strpos($ua_check, $lp) !== false) {
-                    $is_phpbb_bot = true;
+                    $is_legit_bot = true;
+                    $claimed_bot = $lp;
                     break;
                 }
             }
         }
 
-        $ua_signals = $is_phpbb_bot ? [] : $this->detect_bot($user_agent);
-        // no_browser_signature seul ne suffit pas — protège navigateurs exotiques (Lynx, w3m, UA custom vie privée)
-        $strong_ua_signals = array_filter($ua_signals, function($s) { return $s !== 'no_browser_signature'; });
-        $is_bot = ($is_phpbb_bot || !empty($strong_ua_signals)) ? 1 : 0;
-
-        // Source de détection et signaux collectés
-        $bot_source = '';
-        $all_signals = [];
-        if ($is_bot) {
-            if ($is_phpbb_bot) {
-                $bot_source = 'phpbb';
-            } else {
-                $bot_source = 'extension';
-                $all_signals = $ua_signals; // inclut no_browser_signature pour le scoring
+        // 2. Si UA prétend être un bot légitime (whitelist) mais PAS reconnu par phpBB natif
+        //    → vérifier reverse DNS pour détecter les imposteurs en temps réel
+        $fake_bot_signals = [];
+        if ($is_legit_bot && empty($this->user->data['is_bot'])) {
+            $hostname_check = $this->get_cached_hostname($this->user->ip);
+            if (!$this->verify_bot_rdns($claimed_bot, $hostname_check)) {
+                // IMPOSTEUR ! UA prétend être un bot légitime mais rDNS ne correspond pas
+                $fake_bot_signals = ['fake_legit_bot'];
+                $is_legit_bot = false; // Pas un vrai bot légitime → continuer détection
             }
         }
 
-        // Détection comportementale (bots avec UA valide mais comportement impossible)
-        if (!$is_bot) {
+        // 3. Détection UA + comportementale (seulement pour visiteurs non-bots-légitimes)
+        $is_bot = $is_legit_bot ? 1 : 0;
+        $bot_source = $is_legit_bot ? 'phpbb' : '';
+        $all_signals = [];
+
+        if (!$is_legit_bot) {
+            // Couche 2a : Détection par User-Agent (versions anciennes, patterns bots, anomalies)
+            $ua_signals = $this->detect_bot($user_agent);
+            // no_browser_signature seul ne suffit pas — protège navigateurs exotiques (Lynx, w3m)
+            $strong_ua_signals = array_filter($ua_signals, function($s) { return $s !== 'no_browser_signature'; });
+
+            // Couche 2b : Détection comportementale (signaux impossibles à voir via Apache)
             $behavior_signals = $this->detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id, $user_agent);
-            if (!empty($behavior_signals)) {
+
+            // Combiner : faux bot légitime + UA + comportementaux
+            $all_signals = array_merge($fake_bot_signals, $ua_signals, $behavior_signals);
+
+            if (!empty($all_signals)) {
                 $is_bot = 1;
-                $bot_source = 'behavior';
-                // Ajouter no_browser_signature comme renfort si présent dans l'UA
-                $all_signals = !empty($ua_signals) ? array_merge($behavior_signals, array_intersect($ua_signals, ['no_browser_signature'])) : $behavior_signals;
+                $bot_source = !empty($strong_ua_signals) ? 'extension' : 'behavior';
             }
         }
 
@@ -264,12 +256,25 @@ class listener implements EventSubscriberInterface
         }
 
         // 4. Écriture security_audit.log (bridge vers fail2ban)
-        // Ne log que les bots détectés par l'extension ou le comportement (pas phpBB natifs)
-        if ($is_bot && $bot_source !== 'phpbb') {
+        // Ne log que les bots avec signaux détectés (pas phpBB natifs légitimes)
+        if (!empty($all_signals)) {
+            // Compter les pages dans la session pour le log
+            $page_count = 0;
+            if (!$is_first_visit) {
+                $sql_cnt = 'SELECT COUNT(*) as cnt FROM ' . $this->table_prefix . 'bastien59_stats
+                            WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'';
+                $result_cnt = $this->db->sql_query($sql_cnt);
+                $page_count = (int)$this->db->sql_fetchfield('cnt');
+                $this->db->sql_freeresult($result_cnt);
+            }
+
             $this->write_security_audit(
-                $this->user->ip, $session_id, $bot_source, $all_signals,
-                $user_agent, $page_url, $referer,
-                $geo_data['country_code'], $geo_data['hostname'] ?? ''
+                $this->user->ip, $session_id,
+                (int)$this->user->data['user_id'],
+                $all_signals, $user_agent, $page_url,
+                $screen_res, $page_count,
+                $hostname_check ?? ($geo_data['hostname'] ?? ''),
+                $claimed_bot
             );
         }
 
@@ -415,8 +420,8 @@ class listener implements EventSubscriberInterface
     }
 
     /**
-     * Détection avancée des bots par analyse du User-Agent
-     * @return array Liste des signaux détectés (vide = pas un bot)
+     * Détection des bots par User-Agent (versions anciennes, patterns, anomalies)
+     * @return array Liste des signaux UA détectés (vide = UA semble légitime)
      */
     private function detect_bot($user_agent)
     {
@@ -429,8 +434,15 @@ class listener implements EventSubscriberInterface
 
         $ua_lower = strtolower($user_agent);
 
-        // Vérifier contre notre liste de patterns
-        foreach (self::$bot_patterns as $pattern) {
+        // Patterns de bots connus dans le UA
+        $bot_keywords = [
+            'bot/', 'bot;', 'crawler', 'spider', 'scraper', 'headlesschrome',
+            'phantomjs', 'selenium', 'puppeteer', 'scrapy', 'nutch',
+            'python-requests', 'python-urllib', 'java/', 'httpclient',
+            'okhttp', 'axios', 'node-fetch', 'wget', 'curl/',
+            'go-http-client', 'mozlila/', 'bulid/',
+        ];
+        foreach ($bot_keywords as $pattern) {
             if (strpos($ua_lower, $pattern) !== false) {
                 $signals[] = 'ua_pattern';
                 break;
@@ -456,11 +468,9 @@ class listener implements EventSubscriberInterface
             $chrome_major = (int)$matches[1];
             $chrome_build = (int)$matches[2];
             $chrome_patch = (int)$matches[3];
-            if ($chrome_build === 0 && $chrome_patch === 0) {
-                // Chrome/XXX.0.0.0 = PAS exploitable comme signal bot.
-                // Brave Browser masque volontairement le build Chrome (.0.0.0) pour l'anti-fingerprinting.
-                // On ne peut pas distinguer un bot de Brave par le build seul.
-            } else {
+            // Chrome/XXX.0.0.0 = PAS exploitable comme signal bot.
+            // Brave Browser masque volontairement le build Chrome (.0.0.0) pour l'anti-fingerprinting.
+            if ($chrome_build !== 0 || $chrome_patch !== 0) {
                 if ($chrome_major >= 120 && ($chrome_build < 6000 || $chrome_build > 7999)) {
                     $signals[] = 'fake_chrome_build';
                 }
@@ -483,7 +493,6 @@ class listener implements EventSubscriberInterface
         }
 
         // Chrome < 130 = trop ancien pour être réel (Chrome 130 = oct 2024)
-        // Les botnets (Tencent Cloud etc.) utilisent des versions 103-129
         if (preg_match('/Chrome\/(\d+)\./', $user_agent, $matches)) {
             $chromeVer = (int)$matches[1];
             if ($chromeVer < 130 && $chromeVer > 0 && strpos($ua_lower, 'headlesschrome') === false) {
@@ -581,76 +590,23 @@ class listener implements EventSubscriberInterface
     }
 
     /**
-     * Calcul du score de danger (0-100) basé sur les signaux détectés
-     */
-    private function compute_danger_score($all_signals, $hostname)
-    {
-        $signal_scores = [
-            'empty_ua'              => 80,
-            'ua_pattern'            => 70,
-            'no_browser_signature'  => 25,
-            'template_literal'      => 70,
-            'posting_first_visit'   => 65,
-            'posting_get_loop'      => 65,
-            'iphone_13_2_3'         => 60,
-            'fake_chrome_build'     => 55,
-            'old_firefox'           => 55,
-            'bad_gecko_date'        => 50,
-            'fake_safari_build'     => 50,
-            'html_entities_in_url'  => 45,
-            'no_screen_res'         => 35,
-        ];
-
-        $score = 0;
-        foreach ($all_signals as $signal) {
-            if (isset($signal_scores[$signal])) {
-                $score += $signal_scores[$signal];
-            } elseif (strpos($signal, 'old_chrome_') === 0) {
-                $score += 50;
-            }
-        }
-
-        // Bonus datacenter hostname
-        if (!empty($hostname) && $hostname !== '' && $hostname !== '-') {
-            $dc_patterns = ['amazonaws', 'googleusercontent', 'azure', 'ovh.net', 'hetzner',
-                            'digitalocean', 'linode', 'vultr', 'contabo', 'cloudfront',
-                            'tencent', 'alicloud', 'aliyun', 'scaleway'];
-            $hn_lower = strtolower($hostname);
-            foreach ($dc_patterns as $dc) {
-                if (strpos($hn_lower, $dc) !== false) {
-                    $score += 15;
-                    break;
-                }
-            }
-        }
-
-        return min(100, $score);
-    }
-
-    /**
      * Écriture dans /var/log/security_audit.log pour le bridge fail2ban
-     * Format: clé=valeur parseable par regex fail2ban ET PHP collect.php
+     * Format PHPBB-SIGNAL : signaux bruts, pas de score (scoring externe dans collect.php)
      */
-    private function write_security_audit($ip, $session_id, $bot_source, $all_signals, $user_agent, $page_url, $referer, $country_code, $hostname)
+    private function write_security_audit($ip, $session_id, $user_id, $all_signals, $user_agent, $page_url, $screen_res, $page_count, $hostname, $claimed_bot)
     {
         $log_file = '/var/log/security_audit.log';
-
-        $score = $this->compute_danger_score($all_signals, $hostname);
-        $level = ($score >= 50) ? 'confirmed' : 'suspicious';
 
         // Déduplication : max 1 log par session+signaux par heure
         // Empêche qu'un utilisateur qui navigue N pages avec le même faux signal
         // accumule N hits et déclenche un ban (phpbb-badbot-suspicious maxretry=3)
         $signals_str = implode(',', $all_signals);
-        $dedup_key = md5($session_id . '|' . $signals_str . '|' . $level);
+        $dedup_key = md5($session_id . '|' . $signals_str);
         $dedup_file = sys_get_temp_dir() . '/sec_audit_' . $dedup_key;
         if (@file_exists($dedup_file) && (time() - @filemtime($dedup_file)) < 3600) {
             return; // Déjà loggé pour cette session + ces signaux dans la dernière heure
         }
         @touch($dedup_file);
-
-        // Déterminer le type de détection
-        $detection = $bot_source; // 'extension' ou 'behavior'
 
         // Construire la ligne de log (paires clé=valeur)
         $ts = date('Y-m-d H:i:s');
@@ -658,17 +614,59 @@ class listener implements EventSubscriberInterface
         // Échapper les guillemets dans les valeurs quotées
         $ua_safe = str_replace('"', '\\"', substr($user_agent, 0, 500));
         $page_safe = str_replace('"', '\\"', substr($page_url, 0, 500));
-        $ref_safe = str_replace('"', '\\"', substr($referer ?: '-', 0, 500));
 
         $line = sprintf(
-            '%s BOT-DETECT level=%s ip=%s session=%s detection=%s score=%d ua="%s" page="%s" referer="%s" signals="%s" country=%s hostname=%s',
-            $ts, $level, $ip, $session_id, $detection, $score,
-            $ua_safe, $page_safe, $ref_safe, $signals_str,
-            $country_code ?: '-', $hostname ?: '-'
+            '%s PHPBB-SIGNAL ip=%s session=%s user_id=%d signals="%s" page="%s" ua="%s" screen_res=%s page_count=%d',
+            $ts, $ip, $session_id, (int)$user_id,
+            $signals_str, $page_safe, $ua_safe,
+            $screen_res ?: '-', (int)$page_count
         );
+
+        // Ajouter hostname et claimed_bot pour fake_legit_bot
+        if (in_array('fake_legit_bot', $all_signals)) {
+            $line .= sprintf(' hostname=%s claimed_bot=%s',
+                $hostname ?: '-', $claimed_bot ?: '-');
+        }
 
         // Écriture avec verrouillage (échec silencieux)
         @file_put_contents($log_file, $line . "\n", FILE_APPEND | LOCK_EX);
+    }
+
+    /**
+     * Vérifie le reverse DNS d'un bot prétendu légitime
+     * @return bool true si le hostname correspond au bot, false si imposteur
+     */
+    private function verify_bot_rdns($claimed_bot, $hostname)
+    {
+        if (empty($hostname) || $hostname === '-') {
+            return false; // Pas de hostname = suspect
+        }
+        $domains = self::$bot_rdns_domains[strtolower($claimed_bot)] ?? null;
+        if ($domains === null) {
+            return true; // Bot non listé dans rdns_domains = on ne vérifie pas
+        }
+        $hn_lower = strtolower($hostname);
+        foreach ($domains as $domain) {
+            if (substr($hn_lower, -strlen($domain)) === $domain) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Récupère le hostname depuis le geo_cache ou via gethostbyaddr()
+     */
+    private function get_cached_hostname($ip)
+    {
+        // Essayer le cache géo en premier (rapide, pas de réseau)
+        $geo = $this->get_geo_cache($ip);
+        if ($geo && !empty($geo['hostname'])) {
+            return $geo['hostname'];
+        }
+        // Résolution DNS rapide (timeout par défaut du système)
+        $hostname = @gethostbyaddr($ip);
+        return ($hostname && $hostname !== $ip) ? $hostname : '-';
     }
 
     /**

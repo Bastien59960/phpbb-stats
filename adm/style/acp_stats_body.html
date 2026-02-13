@@ -272,7 +272,7 @@
             </thead>
             <tbody>
             <!-- BEGIN SESSIONS -->
-                <tr class="session-row session-{SESSIONS.BOT_CLASS}" data-type="{SESSIONS.BOT_CLASS}">
+                <tr class="session-row session-{SESSIONS.BOT_CLASS}" data-type="{SESSIONS.BOT_CLASS}" onclick="toggleDetails(this)" style="cursor: pointer;" title="Cliquez pour voir les détails de diagnostic">
                     <td class="session-info">
                         <!-- IF SESSIONS.IS_BOT -->
                             <span class="badge badge-bot">{L_STATS_BADGE_BOT}</span>
@@ -308,6 +308,34 @@
                     </td>
                     <td style="text-align:center">
                         <span class="page-count">{SESSIONS.PAGES_COUNT_LABEL}</span>
+                    </td>
+                </tr>
+                <tr class="session-details-row session-{SESSIONS.BOT_CLASS}" data-type="{SESSIONS.BOT_CLASS}" style="display: none;">
+                    <td colspan="5" style="padding: 10px 20px 10px 40px; background: #fdfdfd; font-size: 12px; line-height: 1.7; border-bottom: 1px solid #eee;">
+                        <div style="max-width: 90%;">
+                            <strong style="color: #105289;">Informations de Diagnostic</strong><br>
+                            <strong>Reverse DNS :</strong> <!-- IF SESSIONS.HOSTNAME -->{SESSIONS.HOSTNAME}<!-- ELSE --><span style="color:#999;">Aucun nom d'hôte trouvé.</span><!-- ENDIF --><br>
+                            <strong>Forward DNS :</strong> {SESSIONS.FORWARD_DNS_STATUS}<!-- IF SESSIONS.FORWARD_DNS_IPS --> (IPs: {SESSIONS.FORWARD_DNS_IPS})<!-- ENDIF -->
+
+                            <!-- IF SESSIONS.IS_BOT -->
+                                <br><br>
+                                <strong style="color: #c0392b;">Analyse de Détection de Bot</strong>
+                                <ul style="margin: 5px 0 0 20px; padding: 0; list-style-type: square;">
+                                    <!-- IF SESSIONS.BOT_SOURCE == 'phpbb' -->
+                                        <li><strong>Source :</strong> Liste de bots phpBB</li>
+                                        <li><strong>Verdict :</strong> Bot légitime (ex: Googlebot, Bingbot). N'est jamais bloqué.</li>
+                                    <!-- ELSEIF SESSIONS.BOT_SOURCE == 'extension' -->
+                                        <li><strong>Source :</strong> Liste de l'extension (basée sur le User-Agent)</li>
+                                        <li><strong>Verdict :</strong> Bot dont la signature est connue. Peut être légitime ou malveillant. Signalé pour surveillance.</li>
+                                    <!-- ELSEIF SESSIONS.BOT_SOURCE == 'behavior' -->
+                                        <li><strong>Source :</strong> Comportement suspect</li>
+                                        <li><strong>Verdict :</strong> Comportement non-humain détecté (ex: absence de JavaScript, accès direct à des pages de formulaire). Signalé pour surveillance.</li>
+                                    <!-- ELSE -->
+                                        <li><strong>Source :</strong> Inconnue</li>
+                                    <!-- ENDIF -->
+                                </ul>
+                            <!-- ENDIF -->
+                        </div>
                     </td>
                 </tr>
                 <!-- BEGIN PAGES -->
@@ -453,6 +481,21 @@
 <!-- INCLUDE overall_footer.html -->
 
 <script>
+function toggleDetails(row) {
+    var nextRow = row.nextElementSibling;
+    if (nextRow && nextRow.classList.contains('session-details-row')) {
+        // Hide all other open details rows
+        var allDetails = document.querySelectorAll('.session-details-row');
+        for (var i = 0; i < allDetails.length; i++) {
+            if (allDetails[i] !== nextRow) {
+                allDetails[i].style.display = 'none';
+            }
+        }
+        // Toggle the clicked one
+        nextRow.style.display = (nextRow.style.display === 'none' || nextRow.style.display === '') ? 'table-row' : 'none';
+    }
+}
+
 // Donnees par pays (generees par PHP)
 var mapDataHumans = {MAP_DATA_HUMANS_JSON};
 var mapDataBots = {MAP_DATA_BOTS_JSON};
