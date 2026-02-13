@@ -283,6 +283,8 @@ class acp_controller
                 'IS_BOT'        => (int)$row['is_bot'],
                 'BOT_CLASS'     => ($row['is_bot']) ? 'bot' : 'human',
                 'BOT_SOURCE'    => htmlspecialchars($bot_source, ENT_COMPAT, 'UTF-8'),
+                'SIGNALS'       => htmlspecialchars($row['signals'] ?? '', ENT_COMPAT, 'UTF-8'),
+                'SIGNALS_DESC'  => $this->format_signals_description($row['signals'] ?? ''),
                 'START_TIME'    => $this->user->format_date($row['visit_time']),
                 'LANDING_PAGE'  => htmlspecialchars($row['page_title'], ENT_COMPAT, 'UTF-8'),
                 'LANDING_URL'   => htmlspecialchars($row['page_url'], ENT_COMPAT, 'UTF-8'),
@@ -417,6 +419,48 @@ class acp_controller
     /**
      * Extrait le nom du bot depuis le User-Agent
      */
+    /**
+     * Génère une description HTML des signaux de détection
+     */
+    private function format_signals_description($signals_str)
+    {
+        if (empty($signals_str)) {
+            return '';
+        }
+
+        $descriptions = [
+            'empty_ua'             => 'User-Agent vide (80 pts)',
+            'ua_pattern'           => 'Pattern de bot dans le UA : bot/, crawler, headlesschrome... (70 pts)',
+            'no_browser_signature' => 'Aucun navigateur reconnu dans le UA — renforcement uniquement (25 pts)',
+            'fake_chrome_build'    => 'Numéro de build Chrome impossible pour une version récente (55 pts)',
+            'old_firefox'          => 'Firefox < 30, version de 2014 (55 pts)',
+            'bad_gecko_date'       => 'Date Gecko invalide dans le UA (50 pts)',
+            'fake_safari_build'    => 'Numéro de build Safari < 400, impossible en réel (50 pts)',
+            'template_literal'     => 'Template non résolu dans le UA, ex: Firefox/{version} (70 pts)',
+            'iphone_13_2_3'       => 'iPhone OS 13_2_3 figé — botnet Tencent Cloud (60 pts)',
+            'fake_legit_bot'       => 'UA prétend être un bot légitime mais le reverse DNS ne correspond pas (90 pts)',
+            'posting_first_visit'  => 'Accès direct à posting.php dès la 1ère visite (65 pts)',
+            'posting_get_loop'     => 'Requêtes GET en boucle sur posting.php sans jamais poster (65 pts)',
+            'no_screen_res'        => 'Pas de résolution d\'écran après 3+ pages — pas de JavaScript (35 pts)',
+            'html_entities_in_url' => 'Entités HTML dans l\'URL — bot qui parse le HTML source (45 pts)',
+        ];
+
+        $parts = [];
+        foreach (explode(',', $signals_str) as $sig) {
+            $sig = trim($sig);
+            if (empty($sig)) continue;
+            if (isset($descriptions[$sig])) {
+                $parts[] = '<li><code>' . htmlspecialchars($sig) . '</code> — ' . $descriptions[$sig] . '</li>';
+            } elseif (preg_match('/^old_chrome_(\d+)$/', $sig, $m)) {
+                $parts[] = '<li><code>' . htmlspecialchars($sig) . '</code> — Chrome ' . $m[1] . ', version obsolète (50 pts)</li>';
+            } else {
+                $parts[] = '<li><code>' . htmlspecialchars($sig) . '</code></li>';
+            }
+        }
+
+        return !empty($parts) ? '<ul style="margin:2px 0 0 15px;padding:0;list-style:square;">' . implode('', $parts) . '</ul>' : '';
+    }
+
     private function extract_bot_name($user_agent)
     {
         $ua_lower = strtolower($user_agent);

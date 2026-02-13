@@ -310,6 +310,7 @@ class listener implements EventSubscriberInterface
             'referer_type'   => $referer_type,
             'duration'       => 0,
             'is_first_visit' => $is_first_visit,
+            'signals'        => substr(implode(',', $all_signals), 0, 255),
         ];
 
         $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats ' . $this->db->sql_build_array('INSERT', $sql_ary);

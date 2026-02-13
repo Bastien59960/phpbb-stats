@@ -322,16 +322,20 @@
                                 <strong style="color: #c0392b;">Analyse de Détection de Bot</strong>
                                 <ul style="margin: 5px 0 0 20px; padding: 0; list-style-type: square;">
                                     <!-- IF SESSIONS.BOT_SOURCE == 'phpbb' -->
-                                        <li><strong>Source :</strong> Liste de bots phpBB</li>
-                                        <li><strong>Verdict :</strong> Bot légitime (ex: Googlebot, Bingbot). N'est jamais bloqué.</li>
+                                        <li><strong>Source :</strong> Liste de bots phpBB / whitelist extension</li>
+                                        <li><strong>Verdict :</strong> <span style="color:#27ae60;">Bot légitime reconnu. Non signalé, non bloqué.</span></li>
                                     <!-- ELSEIF SESSIONS.BOT_SOURCE == 'extension' -->
-                                        <li><strong>Source :</strong> Liste de l'extension (basée sur le User-Agent)</li>
-                                        <li><strong>Verdict :</strong> Bot dont la signature est connue. Peut être légitime ou malveillant. Signalé pour surveillance.</li>
+                                        <li><strong>Source :</strong> Détection UA (analyse du User-Agent)</li>
+                                        <li><strong>Verdict :</strong> <span style="color:#c0392b;">Bot détecté par signature UA → signalé à fail2ban (ban immédiat)</span></li>
                                     <!-- ELSEIF SESSIONS.BOT_SOURCE == 'behavior' -->
-                                        <li><strong>Source :</strong> Comportement suspect</li>
-                                        <li><strong>Verdict :</strong> Comportement non-humain détecté (ex: absence de JavaScript, accès direct à des pages de formulaire). Signalé pour surveillance.</li>
+                                        <li><strong>Source :</strong> Détection comportementale</li>
+                                        <li><strong>Verdict :</strong> <span style="color:#e67e22;">Comportement non-humain détecté → signalé à fail2ban</span></li>
                                     <!-- ELSE -->
                                         <li><strong>Source :</strong> Inconnue</li>
+                                    <!-- ENDIF -->
+                                    <!-- IF SESSIONS.SIGNALS -->
+                                        <li><strong>Signaux détectés :</strong> <code>{SESSIONS.SIGNALS}</code></li>
+                                        <li><strong>Détail :</strong> {SESSIONS.SIGNALS_DESC}</li>
                                     <!-- ENDIF -->
                                 </ul>
                             <!-- ENDIF -->
