@@ -489,9 +489,10 @@ class listener implements EventSubscriberInterface
             }
         }
 
-        // Firefox < 30 (2014)
+        // Firefox < seuil configurable (défaut: 30 = 2014)
+        $firefox_threshold = (int)($this->config['bastien59_stats_firefox_threshold'] ?? 30);
         if (preg_match('/Firefox\/(\d+)\./', $user_agent, $matches)) {
-            if ((int)$matches[1] < 30) {
+            if ((int)$matches[1] < $firefox_threshold) {
                 $signals[] = 'old_firefox';
             }
         }
@@ -504,10 +505,11 @@ class listener implements EventSubscriberInterface
             }
         }
 
-        // Chrome < 130 = trop ancien pour être réel (Chrome 130 = oct 2024)
+        // Chrome < seuil configurable = trop ancien (défaut: 130 = oct 2024)
+        $chrome_threshold = (int)($this->config['bastien59_stats_chrome_threshold'] ?? 130);
         if (preg_match('/Chrome\/(\d+)\./', $user_agent, $matches)) {
             $chromeVer = (int)$matches[1];
-            if ($chromeVer < 130 && $chromeVer > 0 && strpos($ua_lower, 'headlesschrome') === false) {
+            if ($chromeVer < $chrome_threshold && $chromeVer > 0 && strpos($ua_lower, 'headlesschrome') === false) {
                 $signals[] = 'old_chrome_' . $chromeVer;
             }
         }
@@ -579,14 +581,15 @@ class listener implements EventSubscriberInterface
             }
         }
 
-        // Signal 3 : Invité sans screen resolution après 3+ pages (pas d'exécution JS)
+        // Signal 3 : Invité sans screen resolution après N+ pages (configurable, défaut: 3)
+        $noscreenres_pages = (int)($this->config['bastien59_stats_noscreenres_pages'] ?? 3);
         if (!$is_first_visit && empty($screen_res)) {
             $sql = 'SELECT COUNT(*) as cnt FROM ' . $this->table_prefix . 'bastien59_stats
                     WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'';
             $result = $this->db->sql_query($sql);
             $page_count = (int)$this->db->sql_fetchfield('cnt');
             $this->db->sql_freeresult($result);
-            if ($page_count >= 3) {
+            if ($page_count >= $noscreenres_pages) {
                 $signals[] = 'no_screen_res';
             }
         }
@@ -607,7 +610,7 @@ class listener implements EventSubscriberInterface
      */
     private function write_security_audit($ip, $session_id, $user_id, $all_signals, $user_agent, $page_url, $screen_res, $page_count, $hostname, $claimed_bot, $rdns_fail_reason = '')
     {
-        $log_file = '/var/log/security_audit.log';
+        $log_file = $this->config['bastien59_stats_audit_log_path'] ?? '/var/log/security_audit.log';
 
         // Déduplication : max 1 log par session+signaux par heure
         // Empêche qu'un utilisateur qui navigue N pages avec le même faux signal

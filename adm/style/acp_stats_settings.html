@@ -34,6 +34,41 @@
 		</dl>
 	</fieldset>
 
+	<fieldset>
+		<legend>Journal de securite</legend>
+		<dl>
+			<dt><label for="stats_audit_log_path">Chemin du fichier de log :</label><br /><span>Fichier ou les detections de bots sont ecrites (lu par fail2ban). Le fichier doit etre accessible en ecriture par www-data.</span></dt>
+			<dd>
+				<input type="text" id="stats_audit_log_path" name="stats_audit_log_path" value="{STATS_AUDIT_LOG_PATH}" style="width:400px;" />
+				<!-- IF STATS_AUDIT_LOG_STATUS == 'ok' -->
+					<span style="color:#27ae60; margin-left:8px;">&#10003; Accessible en ecriture</span>
+				<!-- ELSEIF STATS_AUDIT_LOG_STATUS == 'not_writable' -->
+					<span style="color:#c0392b; margin-left:8px;">&#10007; Fichier non accessible en ecriture (verifier les permissions)</span>
+				<!-- ELSEIF STATS_AUDIT_LOG_STATUS == 'dir_not_writable' -->
+					<span style="color:#c0392b; margin-left:8px;">&#10007; Repertoire parent non accessible en ecriture</span>
+				<!-- ELSEIF STATS_AUDIT_LOG_STATUS == 'not_exists' -->
+					<span style="color:#e67e22; margin-left:8px;">&#9888; Fichier inexistant (sera cree automatiquement si le repertoire est accessible)</span>
+				<!-- ENDIF -->
+			</dd>
+		</dl>
+	</fieldset>
+
+	<fieldset>
+		<legend>Seuils de detection de bots</legend>
+		<dl>
+			<dt><label for="stats_chrome_threshold">Seuil Chrome :</label><br /><span>Les versions de Chrome inferieures a cette valeur declenchent le signal <code>old_chrome</code>. Chrome actuel : ~133. Augmenter progressivement chaque annee.</span></dt>
+			<dd><input type="number" id="stats_chrome_threshold" name="stats_chrome_threshold" value="{STATS_CHROME_THRESHOLD}" min="50" max="200" style="width:80px;" /></dd>
+		</dl>
+		<dl>
+			<dt><label for="stats_firefox_threshold">Seuil Firefox :</label><br /><span>Les versions de Firefox inferieures a cette valeur declenchent le signal <code>old_firefox</code>. Firefox actuel : ~134.</span></dt>
+			<dd><input type="number" id="stats_firefox_threshold" name="stats_firefox_threshold" value="{STATS_FIREFOX_THRESHOLD}" min="10" max="200" style="width:80px;" /></dd>
+		</dl>
+		<dl>
+			<dt><label for="stats_noscreenres_pages">Pages sans JS avant signal :</label><br /><span>Nombre de pages vues sans resolution d'ecran (= pas de JavaScript) avant de declencher le signal <code>no_screen_res</code>.</span></dt>
+			<dd><input type="number" id="stats_noscreenres_pages" name="stats_noscreenres_pages" value="{STATS_NOSCREENRES_PAGES}" min="2" max="20" style="width:80px;" /> pages</dd>
+		</dl>
+	</fieldset>
+
 	<fieldset class="submit-buttons">
 		<input class="button1" type="submit" id="submit" name="submit" value="{L_SUBMIT}" />&nbsp;
 		<input class="button2" type="reset" id="reset" name="reset" value="{L_RESET}" />
