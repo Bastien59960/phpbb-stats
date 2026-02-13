@@ -35,16 +35,26 @@ class listener implements EventSubscriberInterface
         'twitterbot'       => ['.twttr.com', '.twitter.com'],
         'petalbot'         => ['.petalsearch.com', '.aspiegel.com'],
         'qwant'            => ['.qwant.com'],
+        // OpenAI — https://platform.openai.com/docs/bots
+        'chatgpt-user'     => ['.openai.com'],
+        'oai-searchbot'    => ['.openai.com'],
+        'gptbot'           => ['.openai.com'],
     ];
 
     // Bots légitimes : stats uniquement, PAS de log sécurité, PAS de ban.
     // Centralisé ici pour éviter la duplication entre legit_ua_overrides et legit_bots.
     // Inclut les bots NON reconnus par phpBB natif (table phpbb_bots trop ancienne).
+    // Pour les bots avec entrée dans $bot_rdns_domains : vérification rDNS obligatoire.
+    // Sans rDNS valide → signal fake_legit_bot → ban par fail2ban.
     protected static $legit_bot_uas = [
         // Moteurs de recherche non reconnus par phpBB
         'googleother', 'google-extended', 'qwant',
         // Apple system requests (iOS prefetch, favicon, app-icon)
         'cfnetwork',
+        // OpenAI bots (rDNS vérifié via $bot_rdns_domains → .openai.com)
+        'chatgpt-user', 'oai-searchbot', 'gptbot',
+        // Anthropic
+        'claudebot',
     ];
 
     // Classification des referers
