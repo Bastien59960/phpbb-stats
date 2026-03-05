@@ -929,19 +929,30 @@ HTML;
                         $add_score_signal('learn_no_interact_outlier', 25);
                     }
 
-                    $fast_threshold = max(120, (int)floor($avg_ms * 0.22));
-                    if ($first_scroll_ms > 0 && $avg_ms > 0 && $first_scroll_ms <= $fast_threshold && $fast_rate <= 0.20) {
+                    // Durci: le "speed outlier" doit representer un scroll reel
+                    // (pas un micro-scroll de quelques pixels).
+                    $fast_threshold = max(120, (int)floor($avg_ms * 0.18));
+                    $fast_cap_ms = 350;
+                    if (
+                        $first_scroll_ms > 0
+                        && $avg_ms > 0
+                        && $scroll_events >= 2
+                        && $scroll_max_y >= 300
+                        && $first_scroll_ms <= min($fast_threshold, $fast_cap_ms)
+                        && $fast_rate <= 0.15
+                    ) {
                         $learning_hits++;
                         $add_score_signal('learn_speed_outlier', 25);
                     }
 
-                    if ($scroll_events > 0 && $avg_events >= 4 && $scroll_events <= 1) {
+                    // Outlier "sparse" uniquement si la distance scrollee est significative.
+                    if ($scroll_events > 0 && $avg_events >= 4 && $scroll_events <= 1 && $scroll_max_y >= 600) {
                         $learning_hits++;
                         $add_score_signal('learn_sparse_scroll_outlier', 20);
                     }
 
                     $jump_threshold = max(1400, (int)floor($avg_max_y * 2.2));
-                    if ($scroll_max_y > 0 && $avg_max_y > 0 && $scroll_max_y >= $jump_threshold && $scroll_events > 0 && $scroll_events <= 2 && $jump_rate <= 0.25) {
+                    if ($scroll_max_y > 0 && $avg_max_y > 0 && $scroll_max_y >= $jump_threshold && $scroll_events > 0 && $scroll_events <= 2 && $jump_rate <= 0.20) {
                         $learning_hits++;
                         $add_score_signal('learn_jump_outlier', 20);
                     }
@@ -1375,6 +1386,17 @@ HTML;
             return;
         }
         if ($ajax_webdriver === 1) {
+            return;
+        }
+
+        // Garde-fous anti-bruit pour garder une base d'apprentissage exploitable.
+        $first_scroll_ms = min($first_scroll_ms, 120000);
+        $scroll_events = min($scroll_events, 120);
+        $scroll_max_y = min($scroll_max_y, 500000);
+        if ($scroll_max_y < 20) {
+            return;
+        }
+        if ($scroll_events <= 1 && $scroll_max_y < 80) {
             return;
         }
 

@@ -119,6 +119,38 @@
     </div>
 
     <div class="behavior-box">
+        <h3>{L_STATS_BEHAVIOR_TELEMETRY_FOCUS}</h3>
+        <table class="behavior-table">
+            <thead>
+                <tr>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_GROUP}">{L_STATS_BEHAVIOR_COL_GROUP}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SESSIONS}">{L_STATS_BEHAVIOR_COL_SESSIONS}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RES_ANY_RATE}">{L_STATS_BEHAVIOR_COL_RES_ANY_RATE}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RES_COOKIE_RATE}">{L_STATS_BEHAVIOR_COL_RES_COOKIE_RATE}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RES_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_RES_AJAX_RATE}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_AJAX_RATE}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SCROLL_RATE}">{L_STATS_BEHAVIOR_COL_SCROLL_RATE}</span></th>
+                </tr>
+            </thead>
+            <tbody>
+            <!-- BEGIN BEHAVIOR_TELEMETRY_SEGMENTS -->
+                <tr>
+                    <td><span class="behavior-chip">{BEHAVIOR_TELEMETRY_SEGMENTS.GROUP_LABEL}</span></td>
+                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.SESSIONS}</td>
+                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.RES_ANY_RATE}%</td>
+                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.RES_COOKIE_RATE}%</td>
+                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.RES_AJAX_RATE}%</td>
+                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.AJAX_RATE}%</td>
+                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.SCROLL_RATE}%</td>
+                </tr>
+            <!-- BEGINELSE -->
+                <tr><td colspan="7" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+            <!-- END BEHAVIOR_TELEMETRY_SEGMENTS -->
+            </tbody>
+        </table>
+    </div>
+
+    <div class="behavior-box">
         <h3>{L_STATS_BEHAVIOR_PROFILES}</h3>
         <table class="behavior-table">
             <thead>

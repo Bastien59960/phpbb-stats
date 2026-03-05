@@ -9,6 +9,7 @@ Extension de statistiques avancées pour phpBB 3.3+. Collecte et affiche les don
 - **Apprentissage comportemental** : Profilage des métriques scroll/interactions des membres connectés pour affiner la détection des invités
 - **Signal strict viewprofile** : Détection des accès directs à `memberlist.php?mode=viewprofile` sans navigation préalable et sans résolution écran (cookie/AJAX)
 - **Signal clone multi-IP invité** : Détection d’un fingerprint invité cloné (UA + télémétrie AJAX scroll) observé sur plusieurs IPs en fenêtre courte, avec exclusion stricte des IP FR/CO
+- **Signal cross-IP distribué (CLI)** : Détection comportementale anti-spoof sur téléchargements PJ distribués via IP différentes (source Apache + jointures phpBB), avec exclusion stricte des IP FR
 - **Géolocalisation** : Carte du monde interactive (jVectorMap) avec cache IP
 - **Journal de navigation** : Log détaillé de chaque page visitée avec durée, referer, OS, navigateur
 - **Sessions** : Regroupement des pages vues par session utilisateur
@@ -57,6 +58,49 @@ Après activation, un onglet **Statistiques** apparaît dans le PCA (après Exte
 | Rétention humains | Jours de conservation des données visiteurs | 30 |
 | Rétention bots | Jours de conservation des données bots | 5 |
 
+## Signal Cross-IP (audit + fail2ban)
+
+Le script CLI `bin/cross_ip_audit.php` génère des lignes dédiées dans `security_audit.log` avec le préfixe `PHPBB-XIP` (séparé de `PHPBB-SIGNAL`), pour faciliter le debug des jails.
+
+Exemple de ligne :
+
+```text
+2026-03-05 17:43:37 PHPBB-XIP ip=188.61.125.156 cc=CH method=xip_dl_soft_v1 severity=soft score=65 downloads=13 ...
+```
+
+Règles clés anti faux-positifs :
+
+- scoring multi-critères (download-only, ratio cross-IP distribué, burst, etc.)
+- vérification inverse/forward DNS des crawlers légitimes connus avant signal
+- exclusion stricte des IP `FR`
+- déduplication temporelle par IP + méthode
+
+Mode test (n'écrit rien dans le log) :
+
+```bash
+php ext/bastien59960/stats/bin/cross_ip_audit.php --target=86400 --context=172800 --verbose
+```
+
+Mode émission vers `security_audit.log` :
+
+```bash
+php ext/bastien59960/stats/bin/cross_ip_audit.php --emit --target=10800 --context=86400
+```
+
+Le process CLI doit avoir le droit d'écriture sur le fichier de log (ex: exécution en `www-data` ou via cron root).
+
+Exemple cron (toutes les 30 min) :
+
+```cron
+*/30 * * * * php /var/www/forum/ext/bastien59960/stats/bin/cross_ip_audit.php --emit --target=10800 --context=86400 >> /var/log/phpbb_crossip_audit.log 2>&1
+```
+
+Snippets fail2ban fournis :
+
+- `fail2ban/phpbb-crossip-soft.conf`
+- `fail2ban/phpbb-crossip-hard.conf`
+- `fail2ban/jail.crossip.local.example`
+
 ## Structure
 
 ```
@@ -66,6 +110,8 @@ stats/
 ├── config/                 # Définitions de services (services.yml)
 ├── controller/             # Contrôleur ACP principal
 ├── event/                  # Event listener (collecte des données)
+├── bin/                    # Outils CLI (cross-IP audit)
+├── fail2ban/               # Filtres/jails fail2ban (snippets)
 ├── language/{en,fr}/       # Fichiers de langue
 ├── migrations/             # Migration de base de données
 ├── composer.json           # Métadonnées de l'extension

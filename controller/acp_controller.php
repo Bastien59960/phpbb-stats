@@ -130,6 +130,7 @@ class acp_controller
 
         $this->assign_behavior_profiles($min_samples, $profile_limit);
         $this->assign_behavior_group_comparison($start_time);
+        $this->assign_behavior_telemetry_focus_comparison($start_time);
         $this->assign_behavior_outlier_signals($start_time);
         $this->assign_recent_behavior_cases($start_time, 80);
     }
@@ -641,25 +642,47 @@ class acp_controller
             return;
         }
 
+        $advanced_fields = $this->has_ajax_advanced_columns()
+            ? ',
+                               AVG(CASE WHEN sess.ajax_first_scroll_ms > 0 THEN sess.ajax_first_scroll_ms END) AS avg_first_scroll_ms,
+                               AVG(CASE WHEN sess.ajax_scroll_events > 0 THEN sess.ajax_scroll_events END) AS avg_scroll_events,
+                               AVG(CASE WHEN sess.ajax_scroll_max_y > 0 THEN sess.ajax_scroll_max_y END) AS avg_scroll_max_y,
+                               SUM(CASE WHEN sess.scroll_seen = 1 AND sess.ajax_interact_mask = 0 THEN 1 ELSE 0 END) AS zero_interact_scrolls'
+            : ',
+                               0 AS avg_first_scroll_ms,
+                               0 AS avg_scroll_events,
+                               0 AS avg_scroll_max_y,
+                               0 AS zero_interact_scrolls';
+
         $metrics_sql = 'SELECT
-                           CASE
-                               WHEN is_bot = 1 THEN \'bots\'
-                               WHEN user_id > 1 THEN \'members\'
-                               ELSE \'guests\'
-                           END AS grp,
+                           sess.grp,
                            COUNT(*) AS sessions,
-                           SUM(CASE WHEN ajax_seen_time > 0 THEN 1 ELSE 0 END) AS ajax_sessions,
-                           SUM(CASE WHEN scroll_down_ajax = 1 THEN 1 ELSE 0 END) AS scroll_sessions'
-            . ($this->has_ajax_advanced_columns()
-                ? ', AVG(CASE WHEN ajax_first_scroll_ms > 0 THEN ajax_first_scroll_ms END) AS avg_first_scroll_ms,
-                   AVG(CASE WHEN ajax_scroll_events > 0 THEN ajax_scroll_events END) AS avg_scroll_events,
-                   AVG(CASE WHEN ajax_scroll_max_y > 0 THEN ajax_scroll_max_y END) AS avg_scroll_max_y,
-                   SUM(CASE WHEN scroll_down_ajax = 1 AND ajax_interact_mask = 0 THEN 1 ELSE 0 END) AS zero_interact_scrolls'
-                : ', 0 AS avg_first_scroll_ms, 0 AS avg_scroll_events, 0 AS avg_scroll_max_y, 0 AS zero_interact_scrolls')
-            . ' FROM ' . $this->table_prefix . 'bastien59_stats
-                WHERE visit_time > ' . (int)$start_time . '
-                AND is_first_visit = 1
-                GROUP BY grp';
+                           SUM(sess.ajax_seen) AS ajax_sessions,
+                           SUM(sess.scroll_seen) AS scroll_sessions'
+            . $advanced_fields
+            . ' FROM (
+                    SELECT
+                        session_id,
+                        CASE
+                            WHEN MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 1 THEN \'bots\'
+                            WHEN MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 1
+                                 AND MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0 THEN \'members\'
+                            WHEN MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 1
+                                 AND MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0 THEN \'guests\'
+                            ELSE \'mixed\'
+                        END AS grp,
+                        MAX(CASE WHEN ajax_seen_time > 0 THEN 1 ELSE 0 END) AS ajax_seen,
+                        MAX(CASE WHEN scroll_down_ajax = 1 THEN 1 ELSE 0 END) AS scroll_seen,
+                        MAX(CASE WHEN ajax_first_scroll_ms > 0 THEN ajax_first_scroll_ms ELSE 0 END) AS ajax_first_scroll_ms,
+                        MAX(CASE WHEN ajax_scroll_events > 0 THEN ajax_scroll_events ELSE 0 END) AS ajax_scroll_events,
+                        MAX(CASE WHEN ajax_scroll_max_y > 0 THEN ajax_scroll_max_y ELSE 0 END) AS ajax_scroll_max_y,
+                        MAX(CASE WHEN ajax_interact_mask > 0 THEN ajax_interact_mask ELSE 0 END) AS ajax_interact_mask
+                    FROM ' . $this->table_prefix . 'bastien59_stats
+                    WHERE visit_time > ' . (int)$start_time . '
+                    GROUP BY session_id
+                ) AS sess
+                WHERE sess.grp <> \'mixed\'
+                GROUP BY sess.grp';
 
         $result = $this->db->sql_query($metrics_sql);
         while ($row = $this->db->sql_fetchrow($result)) {
@@ -688,6 +711,96 @@ class acp_controller
                 'AVG_SCROLL_MAX_Y' => (int)$row['avg_scroll_max_y'],
                 'ZERO_INTERACT_RATE' => number_format($zero_interact_pct, 1, ',', ' '),
                 'IS_BOTS' => ($row['grp'] === 'bots') ? 1 : 0,
+            ]);
+        }
+        $this->db->sql_freeresult($result);
+    }
+
+    /**
+     * Compare la qualité de télémétrie entre membres connectés et invités
+     * ciblés (CN + hors FR/CO/CN), pour isoler les comportements ambigus.
+     */
+    private function assign_behavior_telemetry_focus_comparison($start_time)
+    {
+        if (!$this->has_ajax_telemetry_columns()) {
+            return;
+        }
+
+        $metrics_sql = 'SELECT grp,
+                               COUNT(*) AS sessions,
+                               SUM(screen_res_cookie_seen) AS screen_res_cookie_sessions,
+                               SUM(screen_res_ajax_seen) AS screen_res_ajax_sessions,
+                               SUM(screen_res_any_seen) AS screen_res_any_sessions,
+                               SUM(ajax_seen) AS ajax_sessions,
+                               SUM(scroll_seen) AS scroll_sessions
+                FROM (
+                    SELECT
+                        CASE
+                            WHEN sess.has_member_human = 1 AND sess.has_bot_row = 0 AND sess.has_guest_human = 0 THEN \'members\'
+                            WHEN sess.has_guest_human = 1 AND sess.has_member_human = 0 AND sess.has_bot_row = 0 AND sess.country_norm = \'CN\' THEN \'guests_cn\'
+                            WHEN sess.has_guest_human = 1 AND sess.has_member_human = 0 AND sess.has_bot_row = 0 AND (sess.country_norm = \'\' OR sess.country_norm NOT IN (\'FR\',\'CO\',\'CN\')) THEN \'guests_ambiguous\'
+                            ELSE \'other\'
+                        END AS grp,
+                        sess.screen_res_cookie_seen,
+                        sess.screen_res_ajax_seen,
+                        sess.screen_res_any_seen,
+                        sess.ajax_seen,
+                        sess.scroll_seen
+                    FROM (
+                        SELECT
+                            session_id,
+                            MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) AS has_member_human,
+                            MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) AS has_guest_human,
+                            MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) AS has_bot_row,
+                            CASE
+                                WHEN MAX(CASE WHEN is_first_visit = 1 AND country_code <> \'\' THEN UPPER(country_code) ELSE \'\' END) <> \'\'
+                                    THEN MAX(CASE WHEN is_first_visit = 1 AND country_code <> \'\' THEN UPPER(country_code) ELSE \'\' END)
+                                ELSE MAX(CASE WHEN country_code <> \'\' THEN UPPER(country_code) ELSE \'\' END)
+                            END AS country_norm,
+                            MAX(CASE WHEN screen_res <> \'\' THEN 1 ELSE 0 END) AS screen_res_cookie_seen,
+                            MAX(CASE WHEN screen_res_ajax <> \'\' THEN 1 ELSE 0 END) AS screen_res_ajax_seen,
+                            MAX(CASE WHEN (screen_res <> \'\' OR screen_res_ajax <> \'\') THEN 1 ELSE 0 END) AS screen_res_any_seen,
+                            MAX(CASE WHEN ajax_seen_time > 0 THEN 1 ELSE 0 END) AS ajax_seen,
+                            MAX(CASE WHEN scroll_down_ajax = 1 THEN 1 ELSE 0 END) AS scroll_seen
+                        FROM ' . $this->table_prefix . 'bastien59_stats
+                        WHERE visit_time > ' . (int)$start_time . '
+                        GROUP BY session_id
+                    ) AS sess
+                ) AS x
+                WHERE grp <> \'other\'
+                GROUP BY grp';
+
+        $result = $this->db->sql_query($metrics_sql);
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $grp = (string)($row['grp'] ?? '');
+            if ($grp === '' || $grp === 'other') {
+                continue;
+            }
+
+            $sessions = max(1, (int)$row['sessions']);
+            $res_any_pct = round(((int)$row['screen_res_any_sessions'] * 100) / $sessions, 1);
+            $res_cookie_pct = round(((int)$row['screen_res_cookie_sessions'] * 100) / $sessions, 1);
+            $res_ajax_pct = round(((int)$row['screen_res_ajax_sessions'] * 100) / $sessions, 1);
+            $ajax_pct = round(((int)$row['ajax_sessions'] * 100) / $sessions, 1);
+            $scroll_pct = round(((int)$row['scroll_sessions'] * 100) / $sessions, 1);
+
+            $group_label = $grp;
+            if ($grp === 'members') {
+                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_MEMBERS');
+            } elseif ($grp === 'guests_cn') {
+                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS_CN');
+            } elseif ($grp === 'guests_ambiguous') {
+                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS_AMBIGUOUS');
+            }
+
+            $this->template->assign_block_vars('BEHAVIOR_TELEMETRY_SEGMENTS', [
+                'GROUP_LABEL' => htmlspecialchars($group_label, ENT_COMPAT, 'UTF-8'),
+                'SESSIONS' => number_format((int)$row['sessions'], 0, ',', ' '),
+                'RES_ANY_RATE' => number_format($res_any_pct, 1, ',', ' '),
+                'RES_COOKIE_RATE' => number_format($res_cookie_pct, 1, ',', ' '),
+                'RES_AJAX_RATE' => number_format($res_ajax_pct, 1, ',', ' '),
+                'AJAX_RATE' => number_format($ajax_pct, 1, ',', ' '),
+                'SCROLL_RATE' => number_format($scroll_pct, 1, ',', ' '),
             ]);
         }
         $this->db->sql_freeresult($result);

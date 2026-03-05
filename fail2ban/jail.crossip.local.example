@@ -1,0 +1,30 @@
+# Add this snippet to /etc/fail2ban/jail.local
+# Dedicated cross-IP jails. Separate from existing phpbb-* jails for easier debug.
+
+[phpbb-crossip-soft]
+enabled = true
+port = http,https
+filter = phpbb-crossip-soft
+backend = auto
+logpath = /var/log/security_audit.log
+maxretry = 2
+findtime = 21600
+bantime = 21600
+bantime.increment = true
+bantime.factor = 2
+bantime.maxtime = 1209600
+action = nftables-multiport[name=phpbb-crossip-soft, port="http,https", protocol=tcp]
+
+[phpbb-crossip-hard]
+enabled = true
+port = http,https
+filter = phpbb-crossip-hard
+backend = auto
+logpath = /var/log/security_audit.log
+maxretry = 1
+findtime = 86400
+bantime = 86400
+bantime.increment = true
+bantime.factor = 2
+bantime.maxtime = 2419200
+action = nftables-multiport[name=phpbb-crossip-hard, port="http,https", protocol=tcp]
