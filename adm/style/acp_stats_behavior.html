@@ -1,0 +1,213 @@
+<!-- INCLUDE overall_header.html -->
+
+<h1>{L_ACP_STATS_BEHAVIOR}</h1>
+<p>{L_ACP_STATS_BEHAVIOR_EXPLAIN}</p>
+
+<style>
+.behavior-wrap { margin: 15px 0; }
+.behavior-filters { background:#f5f5f5; border:1px solid #ddd; border-radius:6px; padding:12px; margin-bottom:16px; display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
+.behavior-filters label { font-weight:bold; margin-right:4px; }
+.behavior-card-grid { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+.behavior-card { flex:1; min-width:170px; background:#eef4fb; border:1px solid #d7e4f3; border-radius:8px; padding:10px 12px; }
+.behavior-card .k { color:#105289; font-size:12px; font-weight:bold; text-transform:uppercase; }
+.behavior-card .v { color:#1f2d3d; font-size:24px; font-weight:bold; }
+.behavior-box { border:1px solid #ddd; border-radius:8px; margin-bottom:16px; background:#fff; }
+.behavior-box h3 { margin:0; padding:10px 12px; border-bottom:1px solid #eee; background:#fafafa; }
+.behavior-table { width:100%; border-collapse:collapse; }
+.behavior-table th { background:#105289; color:#fff; padding:8px; text-align:left; font-size:12px; }
+.behavior-table td { padding:8px; border-bottom:1px solid #eee; vertical-align:top; font-size:12px; }
+.behavior-table tr:hover td { background:#f9fbff; }
+.behavior-muted { color:#777; font-size:12px; }
+.behavior-empty { padding:16px; color:#999; text-align:center; }
+.behavior-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; background:#e8edf4; color:#334; }
+.behavior-bot { background:#fce8e6; color:#b3261e; }
+.behavior-help { cursor:help; text-decoration:underline dotted; text-underline-offset:2px; }
+.behavior-help::after {
+    content:" ?";
+    display:inline-block;
+    margin-left:3px;
+    font-size:11px;
+    font-weight:bold;
+    color:#dcecff;
+    border:1px solid rgba(255,255,255,0.55);
+    border-radius:999px;
+    width:13px;
+    height:13px;
+    line-height:11px;
+    text-align:center;
+    vertical-align:middle;
+}
+</style>
+
+<div class="behavior-wrap">
+    <form method="get" action="{U_ACTION}" class="behavior-filters">
+        <div>
+            <label>{L_STATS_PERIOD}</label>
+            <select name="hours">
+                <option value="1"<!-- IF FILTER_HOURS == 1 --> selected<!-- ENDIF -->>{L_STATS_1_HOUR}</option>
+                <option value="6"<!-- IF FILTER_HOURS == 6 --> selected<!-- ENDIF -->>{L_STATS_6_HOURS}</option>
+                <option value="12"<!-- IF FILTER_HOURS == 12 --> selected<!-- ENDIF -->>{L_STATS_12_HOURS}</option>
+                <option value="24"<!-- IF FILTER_HOURS == 24 --> selected<!-- ENDIF -->>{L_STATS_24_HOURS}</option>
+                <option value="48"<!-- IF FILTER_HOURS == 48 --> selected<!-- ENDIF -->>{L_STATS_48_HOURS}</option>
+                <option value="168"<!-- IF FILTER_HOURS == 168 --> selected<!-- ENDIF -->>{L_STATS_7_DAYS}</option>
+                <option value="720"<!-- IF FILTER_HOURS == 720 --> selected<!-- ENDIF -->>{L_STATS_30_DAYS}</option>
+            </select>
+        </div>
+        <div>
+            <label>{L_STATS_BEHAVIOR_MIN_SAMPLES}</label>
+            <input type="number" name="min_samples" value="{MIN_SAMPLES}" min="5" max="5000" />
+        </div>
+        <div>
+            <label>{L_STATS_BEHAVIOR_PROFILE_LIMIT}</label>
+            <input type="number" name="profile_limit" value="{PROFILE_LIMIT}" min="20" max="1000" />
+        </div>
+        <div>
+            <input type="submit" class="button1" value="{L_SUBMIT}" />
+        </div>
+    </form>
+
+    <div class="behavior-card-grid">
+        <div class="behavior-card">
+            <div class="k">{L_STATS_BEHAVIOR_LEARNING_STATUS}</div>
+            <div class="v"><!-- IF LEARNING_ENABLED -->ON<!-- ELSE -->OFF<!-- ENDIF --></div>
+        </div>
+        <div class="behavior-card">
+            <div class="k">{L_STATS_BEHAVIOR_TABLES_STATUS}</div>
+            <div class="v"><!-- IF HAS_LEARNING_TABLES -->OK<!-- ELSE -->N/A<!-- ENDIF --></div>
+        </div>
+    </div>
+
+    <!-- IF not HAS_LEARNING_TABLES -->
+    <div class="behavior-box">
+        <div class="behavior-empty">{L_STATS_BEHAVIOR_NO_LEARNING_TABLES}</div>
+    </div>
+    <!-- ENDIF -->
+
+    <!-- IF HAS_LEARNING_TABLES -->
+    <div class="behavior-box">
+        <h3>{L_STATS_BEHAVIOR_GROUP_COMPARISON}</h3>
+        <table class="behavior-table">
+            <thead>
+                <tr>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_GROUP}">{L_STATS_BEHAVIOR_COL_GROUP}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SESSIONS}">{L_STATS_BEHAVIOR_COL_SESSIONS}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_AJAX_RATE}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SCROLL_RATE}">{L_STATS_BEHAVIOR_COL_SCROLL_RATE}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_FIRST_SCROLL}">{L_STATS_BEHAVIOR_COL_AVG_FIRST_SCROLL}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_EVENTS}">{L_STATS_BEHAVIOR_COL_AVG_EVENTS}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_MAXY}">{L_STATS_BEHAVIOR_COL_AVG_MAXY}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_ZERO_INTERACT}">{L_STATS_BEHAVIOR_COL_ZERO_INTERACT}</span></th>
+                </tr>
+            </thead>
+            <tbody>
+            <!-- BEGIN BEHAVIOR_GROUPS -->
+                <tr>
+                    <td><span class="behavior-chip<!-- IF BEHAVIOR_GROUPS.IS_BOTS --> behavior-bot<!-- ENDIF -->">{BEHAVIOR_GROUPS.GROUP_LABEL}</span></td>
+                    <td>{BEHAVIOR_GROUPS.SESSIONS}</td>
+                    <td>{BEHAVIOR_GROUPS.AJAX_RATE}%</td>
+                    <td>{BEHAVIOR_GROUPS.SCROLL_RATE}%</td>
+                    <td>{BEHAVIOR_GROUPS.AVG_FIRST_SCROLL_MS} ms</td>
+                    <td>{BEHAVIOR_GROUPS.AVG_SCROLL_EVENTS}</td>
+                    <td>{BEHAVIOR_GROUPS.AVG_SCROLL_MAX_Y}px</td>
+                    <td>{BEHAVIOR_GROUPS.ZERO_INTERACT_RATE}%</td>
+                </tr>
+            <!-- BEGINELSE -->
+                <tr><td colspan="8" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+            <!-- END BEHAVIOR_GROUPS -->
+            </tbody>
+        </table>
+    </div>
+
+    <div class="behavior-box">
+        <h3>{L_STATS_BEHAVIOR_PROFILES}</h3>
+        <table class="behavior-table">
+            <thead>
+                <tr>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_PROFILE}">{L_STATS_BEHAVIOR_COL_PROFILE}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SAMPLES}">{L_STATS_BEHAVIOR_COL_SAMPLES}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_FIRST_SCROLL}">{L_STATS_BEHAVIOR_COL_AVG_FIRST_SCROLL}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_EVENTS}">{L_STATS_BEHAVIOR_COL_AVG_EVENTS}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_MAXY}">{L_STATS_BEHAVIOR_COL_AVG_MAXY}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_INTERACT_SCORE}">{L_STATS_BEHAVIOR_COL_INTERACT_SCORE}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_NO_INTERACT}">{L_STATS_BEHAVIOR_COL_NO_INTERACT}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_FAST}">{L_STATS_BEHAVIOR_COL_FAST}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_JUMP}">{L_STATS_BEHAVIOR_COL_JUMP}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_UPDATED}">{L_STATS_BEHAVIOR_COL_UPDATED}</span></th>
+                </tr>
+            </thead>
+            <tbody>
+            <!-- BEGIN BEHAVIOR_PROFILES -->
+                <tr>
+                    <td><strong>{BEHAVIOR_PROFILES.PROFILE_LABEL}</strong><br><span class="behavior-muted">{BEHAVIOR_PROFILES.PROFILE_KEY}</span></td>
+                    <td>{BEHAVIOR_PROFILES.SAMPLE_COUNT}</td>
+                    <td>{BEHAVIOR_PROFILES.AVG_FIRST_SCROLL_MS} ms</td>
+                    <td>{BEHAVIOR_PROFILES.AVG_SCROLL_EVENTS}</td>
+                    <td>{BEHAVIOR_PROFILES.AVG_SCROLL_MAX_Y}px</td>
+                    <td>{BEHAVIOR_PROFILES.AVG_INTERACT_SCORE}</td>
+                    <td>{BEHAVIOR_PROFILES.NO_INTERACT_PCT}%</td>
+                    <td>{BEHAVIOR_PROFILES.FAST_SCROLL_PCT}%</td>
+                    <td>{BEHAVIOR_PROFILES.JUMP_SCROLL_PCT}%</td>
+                    <td>{BEHAVIOR_PROFILES.UPDATED_TIME}</td>
+                </tr>
+            <!-- BEGINELSE -->
+                <tr><td colspan="10" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+            <!-- END BEHAVIOR_PROFILES -->
+            </tbody>
+        </table>
+    </div>
+
+    <div class="behavior-box">
+        <h3>{L_STATS_BEHAVIOR_OUTLIERS}</h3>
+        <table class="behavior-table">
+            <thead>
+                <tr>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SIGNAL}">{L_STATS_BEHAVIOR_COL_SIGNAL}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_VISITS}">{L_STATS_COL_VISITS}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RATE}">{L_STATS_BEHAVIOR_COL_RATE}</span></th>
+                </tr>
+            </thead>
+            <tbody>
+            <!-- BEGIN BEHAVIOR_OUTLIERS -->
+                <tr>
+                    <td><code>{BEHAVIOR_OUTLIERS.SIGNAL}</code><br><span class="behavior-muted">{BEHAVIOR_OUTLIERS.LABEL}</span></td>
+                    <td>{BEHAVIOR_OUTLIERS.COUNT}</td>
+                    <td>{BEHAVIOR_OUTLIERS.RATE}%</td>
+                </tr>
+            <!-- BEGINELSE -->
+                <tr><td colspan="3" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+            <!-- END BEHAVIOR_OUTLIERS -->
+            </tbody>
+        </table>
+    </div>
+
+    <div class="behavior-box">
+        <h3>{L_STATS_BEHAVIOR_RECENT_CASES}</h3>
+        <table class="behavior-table">
+            <thead>
+                <tr>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_DATE}">{L_DATE}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_VISITOR}">{L_STATS_COL_VISITOR}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_LANDING_PAGE}">{L_STATS_COL_LANDING_PAGE}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SIGNAL}">{L_STATS_BEHAVIOR_COL_SIGNAL}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_USER_AGENT}">User-Agent</span></th>
+                </tr>
+            </thead>
+            <tbody>
+            <!-- BEGIN BEHAVIOR_CASES -->
+                <tr>
+                    <td>{BEHAVIOR_CASES.TIME}</td>
+                    <td><code>{BEHAVIOR_CASES.IP}</code><br>{BEHAVIOR_CASES.COUNTRY}</td>
+                    <td><strong>{BEHAVIOR_CASES.PAGE_TITLE}</strong><br><span class="behavior-muted">{BEHAVIOR_CASES.PAGE_URL}</span></td>
+                    <td><code>{BEHAVIOR_CASES.SIGNALS}</code>{BEHAVIOR_CASES.SIGNALS_DESC}</td>
+                    <td><span class="behavior-muted">{BEHAVIOR_CASES.USER_AGENT}</span></td>
+                </tr>
+            <!-- BEGINELSE -->
+                <tr><td colspan="5" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+            <!-- END BEHAVIOR_CASES -->
+            </tbody>
+        </table>
+    </div>
+    <!-- ENDIF -->
+</div>
+
+<!-- INCLUDE overall_footer.html -->

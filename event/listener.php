@@ -20,6 +20,10 @@ class listener implements EventSubscriberInterface
     protected $helper;
     protected $table_prefix;
     protected $current_log_id = 0;
+    protected $has_ajax_telemetry_columns = null;
+    protected $has_ajax_advanced_columns = null;
+    protected $has_behavior_learning_tables = null;
+    protected $behavior_profile_cache = [];
 
     const AJAX_LINK_NAME = 'b59_stats_px';
 
@@ -240,6 +244,14 @@ class listener implements EventSubscriberInterface
             }
         }
 
+        // Géolocalisation de l'IP (seulement pour la première visite de session)
+        // Pré-calculée ici pour pouvoir appliquer des exclusions géographiques
+        // dans certaines détections comportementales.
+        $geo_data = ['country_code' => '', 'country_name' => '', 'hostname' => ''];
+        if ($is_first_visit) {
+            $geo_data = $this->geolocate_ip($this->user->ip);
+        }
+
         // 3. Détection UA + comportementale (seulement pour visiteurs non-bots-légitimes)
         $is_bot = $is_legit_bot ? 1 : 0;
         $bot_source = $is_legit_bot ? 'phpbb' : '';
@@ -252,7 +264,15 @@ class listener implements EventSubscriberInterface
             $strong_ua_signals = array_filter($ua_signals, function($s) { return $s !== 'no_browser_signature'; });
 
             // Couche 2b : Détection comportementale (signaux impossibles à voir via Apache)
-            $behavior_signals = $this->detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id, $user_agent);
+            $behavior_signals = $this->detect_bot_behavior(
+                $page_url,
+                $referer,
+                $is_first_visit,
+                $screen_res,
+                $session_id,
+                $user_agent,
+                (string)($geo_data['country_code'] ?? '')
+            );
 
             // Combiner : faux bot légitime + UA + comportementaux
             $all_signals = array_merge($fake_bot_signals, $ua_signals, $behavior_signals);
@@ -265,12 +285,6 @@ class listener implements EventSubscriberInterface
 
         // Classification du referer
         $referer_type = $this->classify_referer($referer);
-
-        // Géolocalisation de l'IP (seulement pour la première visite de session)
-        $geo_data = ['country_code' => '', 'country_name' => '', 'hostname' => ''];
-        if ($is_first_visit) {
-            $geo_data = $this->geolocate_ip($this->user->ip);
-        }
 
         // 4. Écriture security_audit.log (bridge vers fail2ban)
         // Ne log que les bots avec signaux détectés (pas phpBB natifs légitimes)
@@ -322,6 +336,12 @@ class listener implements EventSubscriberInterface
         $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats ' . $this->db->sql_build_array('INSERT', $sql_ary);
         $this->db->sql_query($sql);
         $this->current_log_id = (int)$this->db->sql_nextid();
+
+        // Apprentissage comportemental:
+        // construit un profil de navigation normal à partir des membres connectés.
+        if ((int)$this->user->data['user_id'] > 1 && (int)$is_bot === 0) {
+            $this->learn_registered_behavior($session_id, $user_agent, $screen_res);
+        }
 
         // 5. Nettoyage automatique (1 chance sur 100)
         // Rétention différenciée : 5 jours pour les bots, 30 jours pour les humains
@@ -458,9 +478,11 @@ class listener implements EventSubscriberInterface
 
     // Nettoyer le paramètre _r de l'URL (referer original du redirect)
     if(w.history&&w.history.replaceState&&w.location&&w.location.search.indexOf('_r=')>-1){
-        var u=new URL(w.location.href);
-        u.searchParams.delete('_r');
-        w.history.replaceState(null,'',u.toString());
+        try{
+            var u=new URL(w.location.href);
+            u.searchParams.delete('_r');
+            w.history.replaceState(null,'',u.toString());
+        }catch(e){}
     }
 
     // Endpoint AJAX (noms de clés volontairement opaques côté client)
@@ -470,6 +492,28 @@ class listener implements EventSubscriberInterface
     var ttl=Math.max(300,parseInt(c.x||900,10))*1000;
     var sent=false;
     var inflight=false;
+    var t0=Date.now();
+    var bm=0;
+    var se=0;
+    var my=0;
+    var mwd=(w.navigator&&w.navigator.webdriver)?1:0;
+    function oy(){
+        return w.pageYOffset||d.documentElement.scrollTop||d.body.scrollTop||0;
+    }
+    function mk(bit){
+        if((bm&bit)===0){bm|=bit;}
+    }
+    function e1(){mk(1);}
+    function e2(){mk(2);}
+    function e3(){mk(4);}
+    function e4(){mk(8);}
+    function e5(){mk(16);}
+    function e6(){mk(32);}
+    function e7(){
+        var y=oy();
+        se++;
+        if(y>my){my=y;}
+    }
     function wasSent(){
         try{
             if(w.sessionStorage){
@@ -494,6 +538,21 @@ class listener implements EventSubscriberInterface
         f.append('a','1');
         var r=g();
         if(r){f.append('r',r);}
+        var dt=Date.now()-t0;
+        if(dt<0){dt=0;}
+        if(dt>120000){dt=120000;}
+        var sn=se;
+        if(sn<0){sn=0;}
+        if(sn>10000){sn=10000;}
+        var sy=my;
+        if(sy<0){sy=0;}
+        if(sy>500000){sy=500000;}
+        f.append('b',String(bm&255));
+        f.append('d',String(dt));
+        f.append('n',String(sn));
+        f.append('y',String(sy));
+        f.append('w',String(mwd?1:0));
+        f.append('v','1');
         w.fetch(String(c.u),{
             method:'POST',
             body:f,
@@ -515,7 +574,8 @@ class listener implements EventSubscriberInterface
     var done=false;
     function h(){
         if(done||wasSent()){ done=true; return; }
-        var y=w.pageYOffset||d.documentElement.scrollTop||d.body.scrollTop||0;
+        e7();
+        var y=oy();
         if(y>12){
             done=true;
             sendOnFirstScroll();
@@ -523,6 +583,12 @@ class listener implements EventSubscriberInterface
         }
     }
     if(w.addEventListener){
+        w.addEventListener('mousemove',e1,{passive:true,capture:true});
+        w.addEventListener('keydown',e2,{passive:true,capture:true});
+        w.addEventListener('touchstart',e3,{passive:true,capture:true});
+        w.addEventListener('pointerdown',e4,{passive:true,capture:true});
+        w.addEventListener('wheel',e5,{passive:true,capture:true});
+        w.addEventListener('click',e6,{passive:true,capture:true});
         w.addEventListener('scroll',h,{passive:true,capture:true});
         h();
     }
@@ -694,9 +760,28 @@ HTML;
      * Détection comportementale des bots (UA valide mais comportement impossible)
      * @return array Liste des signaux comportementaux détectés (vide = pas un bot)
      */
-    private function detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id, $user_agent )
+    private function detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id, $user_agent, $country_code_hint = '')
     {
         $signals = [];
+        $hard_signals = [];
+        $score_signals = [];
+        $behavior_score = 0;
+
+        $add_hard_signal = function ($signal) use (&$hard_signals) {
+            if ($signal !== '' && !in_array($signal, $hard_signals, true)) {
+                $hard_signals[] = $signal;
+            }
+        };
+        $add_score_signal = function ($signal, $points) use (&$score_signals, &$behavior_score) {
+            if ($signal === '') {
+                return;
+            }
+            if (!in_array($signal, $score_signals, true)) {
+                $score_signals[] = $signal;
+                $behavior_score += (int)$points;
+            }
+        };
+
         $user_id = (int)$this->user->data['user_id'];
         if ($user_id > 1) {
             return $signals; // Membres connectés = jamais flag
@@ -719,10 +804,45 @@ HTML;
         }
 
         $page_lower = strtolower($page_url);
+        $snapshot = $this->get_session_behavior_snapshot($session_id);
+        $page_count = (int)$snapshot['page_count'];
+        $has_res_cookie = !empty($screen_res) || (int)$snapshot['has_screen_res'] === 1;
+        $has_res_ajax = (int)$snapshot['has_screen_res_ajax'] === 1;
+        $has_any_resolution = $has_res_cookie || $has_res_ajax;
+        $profile_screen_res = !empty($screen_res) ? (string)$screen_res : (string)($snapshot['screen_res_any'] ?? '');
+        $profile_os = $this->get_os($user_agent, $profile_screen_res);
+        $profile_device = $this->get_device($user_agent, $profile_screen_res);
+        $profile_browser = $this->get_browser_family($user_agent);
+        $profile_key = $this->build_behavior_profile_key($profile_os, $profile_device, $profile_browser);
+        $learning_enabled = !empty($this->config['bastien59_stats_learning_enabled']);
+        $learning_min_samples = max(10, (int)($this->config['bastien59_stats_learning_min_samples'] ?? 25));
+        $country_code = strtoupper(trim((string)$country_code_hint));
+        if ($country_code === '') {
+            $country_code = strtoupper(trim((string)($snapshot['country_code_any'] ?? '')));
+        }
 
         // Signal 1 : Invité atterrit sur posting.php en première visite
         if ($is_first_visit && strpos($page_lower, 'posting.php') !== false) {
-            $signals[] = 'posting_first_visit';
+            $add_hard_signal('posting_first_visit');
+        }
+
+        // Signal 1b (strict) : accès direct à une fiche membre en première visite,
+        // sans navigation préalable et sans résolution (cookie + AJAX).
+        $is_viewprofile_page = (
+            strpos($page_lower, 'memberlist.php') !== false
+            && strpos($page_lower, 'mode=viewprofile') !== false
+        );
+        $referer_trimmed = trim((string)$referer);
+        $is_direct_entry = ($referer_trimmed === '' || $referer_trimmed === '-');
+        if (
+            $is_first_visit
+            && $is_viewprofile_page
+            && $is_direct_entry
+            && !$has_res_cookie
+            && !$has_res_ajax
+            && $page_count <= 1
+        ) {
+            $add_hard_signal('viewprofile_first_visit_no_res');
         }
 
         // Signal 2 : Referer auto-référent sur posting.php (boucle GET)
@@ -731,21 +851,18 @@ HTML;
                 preg_match('/[?&]p=(\d+)/', $page_url, $page_m);
                 preg_match('/[?&]p=(\d+)/', $referer, $ref_m);
                 if (!empty($page_m[1]) && !empty($ref_m[1]) && $page_m[1] === $ref_m[1]) {
-                    $signals[] = 'posting_get_loop';
+                    $add_hard_signal('posting_get_loop');
                 }
             }
         }
 
         // Signal 3 : Invité sans screen resolution après N+ pages (configurable, défaut: 3)
         $noscreenres_pages = (int)($this->config['bastien59_stats_noscreenres_pages'] ?? 3);
-        if (!$is_first_visit && empty($screen_res)) {
-            $sql = 'SELECT COUNT(*) as cnt FROM ' . $this->table_prefix . 'bastien59_stats
-                    WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'';
-            $result = $this->db->sql_query($sql);
-            $page_count = (int)$this->db->sql_fetchfield('cnt');
-            $this->db->sql_freeresult($result);
-            if ($page_count >= $noscreenres_pages) {
-                $signals[] = 'no_screen_res';
+        if (!$is_first_visit && !$has_any_resolution && $page_count >= $noscreenres_pages) {
+            if ($page_count >= max(7, $noscreenres_pages + 3)) {
+                $add_hard_signal('no_screen_res');
+            } else {
+                $add_score_signal('no_screen_res', 35);
             }
         }
 
@@ -753,10 +870,635 @@ HTML;
         // $page_url et $referer sont déjà raw (via raw_variable), pas d'htmlspecialchars.
         // Un vrai navigateur ne met JAMAIS &amp; ou amp%3B dans l'URL HTTP réelle.
         if (preg_match('/&amp;|amp%3[Bb]/', $page_url) || preg_match('/&amp;|amp%3[Bb]/', $referer)) {
-            $signals[] = 'html_entities_in_url';
+            $add_hard_signal('html_entities_in_url');
         }
 
-        return $signals;
+        // Signal 5 : Télémétrie AJAX avancée (scroll simulé / automation)
+        if ($this->has_ajax_advanced_columns()) {
+            $scroll_seen = (int)$snapshot['scroll_down'] === 1;
+            $webdriver_seen = (int)$snapshot['ajax_webdriver'] === 1;
+            $interact_mask = (int)$snapshot['ajax_interact_mask'];
+            $first_scroll_ms = (int)$snapshot['ajax_first_scroll_ms'];
+            $scroll_events = (int)$snapshot['ajax_scroll_events'];
+            $scroll_max_y = (int)$snapshot['ajax_scroll_max_y'];
+            $learning_hits = 0;
+
+            if ($webdriver_seen) {
+                $add_hard_signal('ajax_webdriver');
+            }
+
+            if ($scroll_seen) {
+                $no_interact = ($interact_mask === 0);
+                $too_fast = ($first_scroll_ms > 0 && $first_scroll_ms <= 250);
+                $jump_scroll = ($scroll_max_y >= 1400 && $scroll_events > 0 && $scroll_events <= 2);
+                $single_long_scroll = ($scroll_max_y >= 900 && $scroll_events > 0 && $scroll_events <= 1);
+
+                if ($no_interact) {
+                    $add_score_signal('ajax_scroll_no_interact', 25);
+                }
+                if ($too_fast) {
+                    $add_score_signal('ajax_scroll_too_fast', 30);
+                }
+                if ($jump_scroll) {
+                    $add_score_signal('ajax_scroll_jump', 30);
+                }
+
+                if ($no_interact && $too_fast && $jump_scroll) {
+                    $add_hard_signal('ajax_scroll_profile');
+                } elseif (
+                    ($no_interact && $too_fast) ||
+                    ($no_interact && $jump_scroll && $first_scroll_ms > 0 && $first_scroll_ms <= 1800) ||
+                    ($no_interact && $single_long_scroll && $first_scroll_ms > 0 && $first_scroll_ms <= 1200)
+                ) {
+                    $add_score_signal('ajax_scroll_profile', 20);
+                }
+
+                // Signal 6 : comparaison avec profils appris des membres connectés.
+                $profile_row = $learning_enabled ? $this->get_behavior_profile_row($profile_key) : [];
+                if (!empty($profile_row) && (int)$profile_row['sample_count'] >= $learning_min_samples) {
+                    $sample_count = (int)$profile_row['sample_count'];
+                    $avg_ms = (int)$profile_row['avg_first_scroll_ms'];
+                    $avg_events = (int)$profile_row['avg_scroll_events'];
+                    $avg_max_y = (int)$profile_row['avg_scroll_max_y'];
+                    $no_interact_rate = ((int)$profile_row['no_interact_hits'] / max(1, $sample_count));
+                    $fast_rate = ((int)$profile_row['fast_scroll_hits'] / max(1, $sample_count));
+                    $jump_rate = ((int)$profile_row['jump_scroll_hits'] / max(1, $sample_count));
+
+                    if ($interact_mask === 0 && $no_interact_rate <= 0.10) {
+                        $learning_hits++;
+                        $add_score_signal('learn_no_interact_outlier', 25);
+                    }
+
+                    $fast_threshold = max(120, (int)floor($avg_ms * 0.22));
+                    if ($first_scroll_ms > 0 && $avg_ms > 0 && $first_scroll_ms <= $fast_threshold && $fast_rate <= 0.20) {
+                        $learning_hits++;
+                        $add_score_signal('learn_speed_outlier', 25);
+                    }
+
+                    if ($scroll_events > 0 && $avg_events >= 4 && $scroll_events <= 1) {
+                        $learning_hits++;
+                        $add_score_signal('learn_sparse_scroll_outlier', 20);
+                    }
+
+                    $jump_threshold = max(1400, (int)floor($avg_max_y * 2.2));
+                    if ($scroll_max_y > 0 && $avg_max_y > 0 && $scroll_max_y >= $jump_threshold && $scroll_events > 0 && $scroll_events <= 2 && $jump_rate <= 0.25) {
+                        $learning_hits++;
+                        $add_score_signal('learn_jump_outlier', 20);
+                    }
+
+                    if ($learning_hits >= 2) {
+                        $add_score_signal('learn_behavior_outlier', 20);
+                    }
+                }
+
+                // Signal 7 : clone de fingerprint invité diffusé sur plusieurs IPs.
+                // Exclut explicitement FR/CO pour limiter les faux positifs locaux.
+                if ($this->detect_guest_fingerprint_clone_multi_ip($session_id, $user_agent, $snapshot, $country_code)) {
+                    $add_hard_signal('guest_fp_clone_multi_ip');
+                }
+            }
+        }
+
+        $signals = $hard_signals;
+        $min_behavior_score = 65;
+        if (!empty($hard_signals)) {
+            $signals = array_merge($signals, $score_signals);
+        } elseif ($behavior_score >= $min_behavior_score) {
+            $signals = array_merge($signals, $score_signals);
+        }
+
+        return array_values(array_unique($signals));
+    }
+
+    /**
+     * Détecte si les colonnes AJAX (migration 1.2.0) sont disponibles.
+     */
+    private function has_ajax_telemetry_columns()
+    {
+        if ($this->has_ajax_telemetry_columns !== null) {
+            return $this->has_ajax_telemetry_columns;
+        }
+
+        $sql = 'SELECT screen_res_ajax, scroll_down_ajax, ajax_seen_time
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_ajax_telemetry_columns = !$has_error;
+        return $this->has_ajax_telemetry_columns;
+    }
+
+    /**
+     * Détecte si les colonnes AJAX avancées (migration 1.3.0) sont disponibles.
+     */
+    private function has_ajax_advanced_columns()
+    {
+        if ($this->has_ajax_advanced_columns !== null) {
+            return $this->has_ajax_advanced_columns;
+        }
+
+        $sql = 'SELECT ajax_interact_mask, ajax_first_scroll_ms, ajax_scroll_events,
+                       ajax_scroll_max_y, ajax_webdriver, ajax_telemetry_ver
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_ajax_advanced_columns = !$has_error;
+        return $this->has_ajax_advanced_columns;
+    }
+
+    /**
+     * Snapshot agrégé de session pour la détection comportementale.
+     * Fallback automatique si migrations AJAX absentes.
+     */
+    private function get_session_behavior_snapshot($session_id)
+    {
+        $snapshot = [
+            'page_count' => 0,
+            'has_screen_res' => 0,
+            'has_screen_res_ajax' => 0,
+            'screen_res_any' => '',
+            'screen_res_ajax_any' => '',
+            'country_code_any' => '',
+            'scroll_down' => 0,
+            'ajax_interact_mask' => 0,
+            'ajax_first_scroll_ms' => 0,
+            'ajax_scroll_events' => 0,
+            'ajax_scroll_max_y' => 0,
+            'ajax_webdriver' => 0,
+            'ajax_telemetry_ver' => 0,
+        ];
+
+        if (!preg_match('/^[A-Za-z0-9]{32}$/', (string)$session_id)) {
+            return $snapshot;
+        }
+
+        $fields = [
+            'COUNT(*) AS page_count',
+            "MAX(CASE WHEN screen_res <> '' THEN 1 ELSE 0 END) AS has_screen_res",
+            "MAX(CASE WHEN country_code <> '' THEN UPPER(country_code) ELSE '' END) AS country_code_any",
+        ];
+
+        if ($this->has_ajax_telemetry_columns()) {
+            $fields[] = "MAX(CASE WHEN screen_res_ajax <> '' THEN 1 ELSE 0 END) AS has_screen_res_ajax";
+            $fields[] = 'MAX(scroll_down_ajax) AS scroll_down';
+            $fields[] = "MAX(CASE WHEN screen_res_ajax <> '' THEN screen_res_ajax ELSE screen_res END) AS screen_res_any";
+            $fields[] = "MAX(CASE WHEN screen_res_ajax <> '' THEN screen_res_ajax ELSE '' END) AS screen_res_ajax_any";
+        } else {
+            $fields[] = "MAX(CASE WHEN screen_res <> '' THEN screen_res ELSE '' END) AS screen_res_any";
+        }
+
+        if ($this->has_ajax_advanced_columns()) {
+            $fields[] = 'MAX(ajax_interact_mask) AS ajax_interact_mask';
+            $fields[] = 'MAX(ajax_first_scroll_ms) AS ajax_first_scroll_ms';
+            $fields[] = 'MAX(ajax_scroll_events) AS ajax_scroll_events';
+            $fields[] = 'MAX(ajax_scroll_max_y) AS ajax_scroll_max_y';
+            $fields[] = 'MAX(ajax_webdriver) AS ajax_webdriver';
+            $fields[] = 'MAX(ajax_telemetry_ver) AS ajax_telemetry_ver';
+        }
+
+        $sql = 'SELECT ' . implode(', ', $fields) . '
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($has_error || $result === false) {
+            $this->db->sql_return_on_error(false);
+            return $snapshot;
+        }
+
+        $row = $this->db->sql_fetchrow($result);
+        $this->db->sql_freeresult($result);
+        $this->db->sql_return_on_error(false);
+
+        if (!$row) {
+            return $snapshot;
+        }
+
+        $snapshot['page_count'] = (int)($row['page_count'] ?? 0);
+        $snapshot['has_screen_res'] = (int)($row['has_screen_res'] ?? 0);
+        $snapshot['has_screen_res_ajax'] = (int)($row['has_screen_res_ajax'] ?? 0);
+        $snapshot['screen_res_any'] = (string)($row['screen_res_any'] ?? '');
+        $snapshot['screen_res_ajax_any'] = (string)($row['screen_res_ajax_any'] ?? '');
+        $snapshot['country_code_any'] = (string)($row['country_code_any'] ?? '');
+        $snapshot['scroll_down'] = (int)($row['scroll_down'] ?? 0);
+        $snapshot['ajax_interact_mask'] = (int)($row['ajax_interact_mask'] ?? 0);
+        $snapshot['ajax_first_scroll_ms'] = (int)($row['ajax_first_scroll_ms'] ?? 0);
+        $snapshot['ajax_scroll_events'] = (int)($row['ajax_scroll_events'] ?? 0);
+        $snapshot['ajax_scroll_max_y'] = (int)($row['ajax_scroll_max_y'] ?? 0);
+        $snapshot['ajax_webdriver'] = (int)($row['ajax_webdriver'] ?? 0);
+        $snapshot['ajax_telemetry_ver'] = (int)($row['ajax_telemetry_ver'] ?? 0);
+
+        return $snapshot;
+    }
+
+    /**
+     * Exclusion géographique stricte pour le signal clone invité multi-IP.
+     * Les IP FR/CO ne déclenchent jamais ce signal.
+     */
+    private function is_guest_clone_country_excluded($country_code)
+    {
+        $cc = strtoupper(trim((string)$country_code));
+        return ($cc === 'FR' || $cc === 'CO');
+    }
+
+    /**
+     * Détecte un fingerprint invité cloné sur plusieurs IPs en peu de temps.
+     * Règles strictes pour limiter les faux positifs:
+     * - invité uniquement
+     * - télémétrie AJAX complète et scroll réel
+     * - même tuple (UA + résolution AJAX + mask + events + maxY)
+     * - diffusion multi-IP dans une fenêtre courte
+     * - exclusion FR/CO
+     */
+    private function detect_guest_fingerprint_clone_multi_ip($session_id, $user_agent, array $snapshot, $country_code)
+    {
+        if ($this->is_guest_clone_country_excluded($country_code)) {
+            return false;
+        }
+
+        if (!$this->has_ajax_telemetry_columns() || !$this->has_ajax_advanced_columns()) {
+            return false;
+        }
+
+        if (!preg_match('/^[A-Za-z0-9]{32}$/', (string)$session_id)) {
+            return false;
+        }
+
+        $page_count = (int)($snapshot['page_count'] ?? 0);
+        if ($page_count < 1 || $page_count > 3) {
+            return false;
+        }
+
+        if ((int)($snapshot['has_screen_res_ajax'] ?? 0) !== 1) {
+            return false;
+        }
+        if ((int)($snapshot['scroll_down'] ?? 0) !== 1) {
+            return false;
+        }
+
+        $screen_res_ajax = trim((string)($snapshot['screen_res_ajax_any'] ?? ''));
+        if (!preg_match('/^[1-9][0-9]{1,4}x[1-9][0-9]{1,4}$/', $screen_res_ajax)) {
+            return false;
+        }
+
+        $interact_mask = (int)($snapshot['ajax_interact_mask'] ?? 0);
+        $scroll_events = (int)($snapshot['ajax_scroll_events'] ?? 0);
+        $scroll_max_y = (int)($snapshot['ajax_scroll_max_y'] ?? 0);
+
+        if ($interact_mask < 0 || $interact_mask > 255) {
+            return false;
+        }
+        if ($scroll_events <= 0 || $scroll_events > 20) {
+            return false;
+        }
+        if ($scroll_max_y < 900 || $scroll_max_y > 500000) {
+            return false;
+        }
+
+        $ua = trim(substr((string)$user_agent, 0, 254));
+        if ($ua === '') {
+            return false;
+        }
+
+        // Seuils stricts (évite les faux positifs):
+        // 4 IP distinctes + 6 sessions similaires en 30 min.
+        $window_sec = 1800;
+        $min_unique_ips = 4;
+        $min_hits = 6;
+        $cutoff = time() - $window_sec;
+
+        $sql = 'SELECT COUNT(*) AS total_hits, COUNT(DISTINCT user_ip) AS unique_ips
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE visit_time >= ' . (int)$cutoff . '
+                AND user_id <= 1
+                AND is_first_visit = 1
+                AND user_agent = \'' . $this->db->sql_escape($ua) . '\'
+                AND screen_res_ajax = \'' . $this->db->sql_escape($screen_res_ajax) . '\'
+                AND ajax_interact_mask = ' . (int)$interact_mask . '
+                AND ajax_scroll_events = ' . (int)$scroll_events . '
+                AND ajax_scroll_max_y = ' . (int)$scroll_max_y . "
+                AND UPPER(country_code) NOT IN ('FR','CO')";
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($has_error || $result === false) {
+            $this->db->sql_return_on_error(false);
+            return false;
+        }
+
+        $row = $this->db->sql_fetchrow($result);
+        $this->db->sql_freeresult($result);
+        $this->db->sql_return_on_error(false);
+
+        if (!$row) {
+            return false;
+        }
+
+        $hits = (int)($row['total_hits'] ?? 0);
+        $uniq = (int)($row['unique_ips'] ?? 0);
+        return ($uniq >= $min_unique_ips && $hits >= $min_hits);
+    }
+
+    /**
+     * Vérifie que les tables d'apprentissage comportemental existent.
+     */
+    private function has_behavior_learning_tables()
+    {
+        if ($this->has_behavior_learning_tables !== null) {
+            return $this->has_behavior_learning_tables;
+        }
+
+        $profile_sql = 'SELECT profile_key
+                        FROM ' . $this->table_prefix . 'bastien59_stats_behavior_profile
+                        WHERE 1 = 0';
+        $seen_sql = 'SELECT session_id
+                     FROM ' . $this->table_prefix . 'bastien59_stats_behavior_seen
+                     WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result_profile = $this->db->sql_query_limit($profile_sql, 1);
+        $profile_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result_profile !== false) {
+            $this->db->sql_freeresult($result_profile);
+        }
+
+        $result_seen = $this->db->sql_query_limit($seen_sql, 1);
+        $seen_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result_seen !== false) {
+            $this->db->sql_freeresult($result_seen);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_behavior_learning_tables = !$profile_error && !$seen_error;
+        return $this->has_behavior_learning_tables;
+    }
+
+    /**
+     * Catégorie navigateur simplifiée pour profils d'apprentissage.
+     */
+    private function get_browser_family($user_agent)
+    {
+        $ua = strtolower((string)$user_agent);
+
+        if (strpos($ua, 'edg/') !== false || strpos($ua, 'edge/') !== false) {
+            return 'edge';
+        }
+        if (strpos($ua, 'opr/') !== false || strpos($ua, 'opera') !== false) {
+            return 'opera';
+        }
+        if (strpos($ua, 'firefox/') !== false) {
+            return 'firefox';
+        }
+        if (strpos($ua, 'safari/') !== false && strpos($ua, 'chrome/') === false) {
+            return 'safari';
+        }
+        if (strpos($ua, 'chrome/') !== false || strpos($ua, 'crios/') !== false) {
+            return 'chrome';
+        }
+        if (strpos($ua, 'trident/') !== false || strpos($ua, 'msie ') !== false) {
+            return 'ie';
+        }
+
+        return 'other';
+    }
+
+    /**
+     * Clé stable de profil: OS + device + famille navigateur.
+     */
+    private function build_behavior_profile_key($user_os, $user_device, $browser_family)
+    {
+        $normalize = function ($value) {
+            $v = strtolower(trim((string)$value));
+            $v = preg_replace('/\s+/', ' ', $v);
+            return $v ?: '-';
+        };
+
+        $raw = $normalize($user_os) . '|' . $normalize($user_device) . '|' . $normalize($browser_family);
+        return substr(sha1($raw), 0, 40);
+    }
+
+    /**
+     * Compte le nombre de bits à 1 d'un masque d'interaction.
+     */
+    private function bit_count($value)
+    {
+        $v = max(0, (int)$value);
+        $count = 0;
+        while ($v > 0) {
+            $count += ($v & 1);
+            $v = $v >> 1;
+        }
+        return $count;
+    }
+
+    /**
+     * Apprentissage: enregistre un profil moyen basé sur sessions de membres.
+     */
+    private function learn_registered_behavior($session_id, $user_agent, $screen_res)
+    {
+        if (empty($this->config['bastien59_stats_learning_enabled'])) {
+            return;
+        }
+
+        if (!$this->has_ajax_advanced_columns() || !$this->has_behavior_learning_tables()) {
+            return;
+        }
+
+        if (!preg_match('/^[A-Za-z0-9]{32}$/', (string)$session_id)) {
+            return;
+        }
+
+        $user_id = (int)$this->user->data['user_id'];
+        if ($user_id <= 1) {
+            return;
+        }
+
+        $sql = 'SELECT session_id
+                FROM ' . $this->table_prefix . 'bastien59_stats_behavior_seen
+                WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'';
+        $result = $this->db->sql_query_limit($sql, 1);
+        $already_seen = (bool)$this->db->sql_fetchrow($result);
+        $this->db->sql_freeresult($result);
+        if ($already_seen) {
+            return;
+        }
+
+        $sql = 'SELECT MAX(user_os) AS user_os,
+                       MAX(user_device) AS user_device,
+                       MAX(screen_res) AS screen_res,
+                       MAX(screen_res_ajax) AS screen_res_ajax,
+                       MAX(ajax_seen_time) AS ajax_seen_time,
+                       MAX(ajax_first_scroll_ms) AS ajax_first_scroll_ms,
+                       MAX(ajax_scroll_events) AS ajax_scroll_events,
+                       MAX(ajax_scroll_max_y) AS ajax_scroll_max_y,
+                       MAX(ajax_interact_mask) AS ajax_interact_mask,
+                       MAX(ajax_webdriver) AS ajax_webdriver
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
+                AND user_id = ' . (int)$user_id . '
+                AND is_bot = 0';
+
+        $result = $this->db->sql_query_limit($sql, 1);
+        $row = $this->db->sql_fetchrow($result);
+        $this->db->sql_freeresult($result);
+
+        if (!$row) {
+            return;
+        }
+
+        $ajax_seen_time = (int)($row['ajax_seen_time'] ?? 0);
+        $first_scroll_ms = (int)($row['ajax_first_scroll_ms'] ?? 0);
+        $scroll_events = (int)($row['ajax_scroll_events'] ?? 0);
+        $scroll_max_y = (int)($row['ajax_scroll_max_y'] ?? 0);
+        $interact_mask = (int)($row['ajax_interact_mask'] ?? 0);
+        $ajax_webdriver = (int)($row['ajax_webdriver'] ?? 0);
+
+        if ($ajax_seen_time <= 0 || $first_scroll_ms <= 0 || $scroll_events <= 0 || $scroll_max_y <= 0) {
+            return;
+        }
+        if ($ajax_webdriver === 1) {
+            return;
+        }
+
+        $effective_res = trim((string)($row['screen_res_ajax'] ?? ''));
+        if ($effective_res === '') {
+            $effective_res = trim((string)($row['screen_res'] ?? ''));
+        }
+        if ($effective_res === '') {
+            $effective_res = trim((string)$screen_res);
+        }
+
+        $user_os = trim((string)($row['user_os'] ?? ''));
+        if ($user_os === '') {
+            $user_os = $this->get_os($user_agent, $effective_res);
+        }
+
+        $user_device = trim((string)($row['user_device'] ?? ''));
+        if ($user_device === '') {
+            $user_device = $this->get_device($user_agent, $effective_res);
+        }
+
+        $browser_family = $this->get_browser_family($user_agent);
+        $profile_key = $this->build_behavior_profile_key($user_os, $user_device, $browser_family);
+        $profile_label = substr($user_os . ' | ' . $user_device . ' | ' . $browser_family, 0, 120);
+
+        // Dédup: une seule contribution par session.
+        $seen_insert = [
+            'session_id' => $session_id,
+            'profile_key' => $profile_key,
+            'learned_time' => time(),
+        ];
+        $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_behavior_seen ' . $this->db->sql_build_array('INSERT', $seen_insert);
+
+        $this->db->sql_return_on_error(true);
+        $this->db->sql_query($sql);
+        $seen_error = (bool)$this->db->get_sql_error_triggered();
+        $this->db->sql_return_on_error(false);
+        if ($seen_error) {
+            return;
+        }
+
+        $interact_score = $this->bit_count($interact_mask);
+        $no_interact_hit = ($interact_mask === 0) ? 1 : 0;
+        $fast_scroll_hit = ($first_scroll_ms <= 350) ? 1 : 0;
+        $jump_scroll_hit = ($scroll_max_y >= 1400 && $scroll_events <= 2) ? 1 : 0;
+
+        $sql = 'SELECT sample_count, avg_first_scroll_ms, avg_scroll_events, avg_scroll_max_y,
+                       avg_interact_score, no_interact_hits, fast_scroll_hits, jump_scroll_hits
+                FROM ' . $this->table_prefix . 'bastien59_stats_behavior_profile
+                WHERE profile_key = \'' . $this->db->sql_escape($profile_key) . '\'';
+        $result = $this->db->sql_query_limit($sql, 1);
+        $profile_row = $this->db->sql_fetchrow($result);
+        $this->db->sql_freeresult($result);
+
+        if ($profile_row) {
+            $old_count = max(1, (int)$profile_row['sample_count']);
+            $new_count = $old_count + 1;
+
+            $update = [
+                'sample_count' => $new_count,
+                'avg_first_scroll_ms' => (int)round((((int)$profile_row['avg_first_scroll_ms'] * $old_count) + $first_scroll_ms) / $new_count),
+                'avg_scroll_events' => (int)round((((int)$profile_row['avg_scroll_events'] * $old_count) + $scroll_events) / $new_count),
+                'avg_scroll_max_y' => (int)round((((int)$profile_row['avg_scroll_max_y'] * $old_count) + $scroll_max_y) / $new_count),
+                'avg_interact_score' => (int)round((((int)$profile_row['avg_interact_score'] * $old_count) + $interact_score) / $new_count),
+                'no_interact_hits' => (int)$profile_row['no_interact_hits'] + $no_interact_hit,
+                'fast_scroll_hits' => (int)$profile_row['fast_scroll_hits'] + $fast_scroll_hit,
+                'jump_scroll_hits' => (int)$profile_row['jump_scroll_hits'] + $jump_scroll_hit,
+                'updated_time' => time(),
+                'profile_label' => $profile_label,
+            ];
+
+            $sql = 'UPDATE ' . $this->table_prefix . 'bastien59_stats_behavior_profile
+                    SET ' . $this->db->sql_build_array('UPDATE', $update) . '
+                    WHERE profile_key = \'' . $this->db->sql_escape($profile_key) . '\'';
+            $this->db->sql_query($sql);
+            $this->behavior_profile_cache[$profile_key] = $update + ['profile_key' => $profile_key];
+        } else {
+            $insert = [
+                'profile_key' => $profile_key,
+                'profile_label' => $profile_label,
+                'sample_count' => 1,
+                'avg_first_scroll_ms' => $first_scroll_ms,
+                'avg_scroll_events' => $scroll_events,
+                'avg_scroll_max_y' => $scroll_max_y,
+                'avg_interact_score' => $interact_score,
+                'no_interact_hits' => $no_interact_hit,
+                'fast_scroll_hits' => $fast_scroll_hit,
+                'jump_scroll_hits' => $jump_scroll_hit,
+                'updated_time' => time(),
+                'created_time' => time(),
+            ];
+
+            $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_behavior_profile ' . $this->db->sql_build_array('INSERT', $insert);
+            $this->db->sql_query($sql);
+            $this->behavior_profile_cache[$profile_key] = $insert;
+        }
+    }
+
+    /**
+     * Récupère un profil appris pour comparaison invité.
+     */
+    private function get_behavior_profile_row($profile_key)
+    {
+        $key = trim((string)$profile_key);
+        if ($key === '' || !$this->has_behavior_learning_tables()) {
+            return [];
+        }
+
+        if (isset($this->behavior_profile_cache[$key])) {
+            return $this->behavior_profile_cache[$key];
+        }
+
+        $sql = 'SELECT profile_key, sample_count, avg_first_scroll_ms, avg_scroll_events, avg_scroll_max_y,
+                       avg_interact_score, no_interact_hits, fast_scroll_hits, jump_scroll_hits, updated_time
+                FROM ' . $this->table_prefix . 'bastien59_stats_behavior_profile
+                WHERE profile_key = \'' . $this->db->sql_escape($key) . '\'
+                AND updated_time > ' . (time() - 90 * 86400);
+
+        $result = $this->db->sql_query_limit($sql, 1);
+        $row = $this->db->sql_fetchrow($result);
+        $this->db->sql_freeresult($result);
+
+        $this->behavior_profile_cache[$key] = $row ?: [];
+        return $this->behavior_profile_cache[$key];
     }
 
     /**
@@ -864,7 +1606,7 @@ HTML;
         }
         // Résolution DNS avec timeout 1s (gethostbyaddr natif peut bloquer 30s)
         $hostname = '';
-        $rdns_raw = @shell_exec('timeout 1 getent hosts ' . escapeshellarg($ip) . ' 2>/dev/null');
+        $rdns_raw = @shell_exec('timeout 0.25 getent hosts ' . escapeshellarg($ip) . ' 2>/dev/null');
         if ($rdns_raw) {
             $parts = preg_split('/\s+/', trim($rdns_raw));
             $candidate = end($parts);
@@ -1039,10 +1781,10 @@ HTML;
             return $cached;
         }
 
-        // DNS Reverse Lookup via shell avec timeout 1s pour éviter de bloquer les workers PHP
+        // DNS Reverse Lookup via shell avec timeout court pour éviter de bloquer les workers PHP
         // (gethostbyaddr() natif n'a pas de timeout et peut bloquer jusqu'à 30s)
         $hostname = '';
-        $rdns_raw = @shell_exec('timeout 1 getent hosts ' . escapeshellarg($ip) . ' 2>/dev/null');
+        $rdns_raw = @shell_exec('timeout 0.25 getent hosts ' . escapeshellarg($ip) . ' 2>/dev/null');
         if ($rdns_raw) {
             $parts = preg_split('/\s+/', trim($rdns_raw));
             $candidate = end($parts);
@@ -1056,7 +1798,8 @@ HTML;
 
         $context = stream_context_create([
             'http' => [
-                'timeout' => 2,
+                // Timeout agressif: la géoloc ne doit jamais pénaliser l'affichage du forum.
+                'timeout' => 0.6,
                 'ignore_errors' => true,
             ]
         ]);

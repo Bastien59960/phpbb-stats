@@ -30,6 +30,11 @@ class main_info
                     'auth'  => 'ext_bastien59960/stats && acl_a_board',
                     'cat'   => ['ACP_STATS']
                 ],
+                'behavior' => [
+                    'title' => 'ACP_STATS_BEHAVIOR',
+                    'auth'  => 'ext_bastien59960/stats && acl_a_board',
+                    'cat'   => ['ACP_STATS']
+                ],
             ],
         ];
     }

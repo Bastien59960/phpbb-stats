@@ -6,9 +6,13 @@ Extension de statistiques avancées pour phpBB 3.3+. Collecte et affiche les don
 
 - **Tableau de bord analytique** : Vue d'ensemble des visites avec graphiques et compteurs
 - **Détection des bots** : Identification automatique des robots (User-Agent + liste phpBB)
+- **Apprentissage comportemental** : Profilage des métriques scroll/interactions des membres connectés pour affiner la détection des invités
+- **Signal strict viewprofile** : Détection des accès directs à `memberlist.php?mode=viewprofile` sans navigation préalable et sans résolution écran (cookie/AJAX)
+- **Signal clone multi-IP invité** : Détection d’un fingerprint invité cloné (UA + télémétrie AJAX scroll) observé sur plusieurs IPs en fenêtre courte, avec exclusion stricte des IP FR/CO
 - **Géolocalisation** : Carte du monde interactive (jVectorMap) avec cache IP
 - **Journal de navigation** : Log détaillé de chaque page visitée avec durée, referer, OS, navigateur
 - **Sessions** : Regroupement des pages vues par session utilisateur
+- **Onglet ACP Comportements** : Visualisation des profils appris (membres) et des écarts détectés sur invités/bots
 - **Filtres** : Période personnalisable (1h, 6h, 24h, 7j, 30j) et filtre bots
 - **Rétention configurable** : Durées de conservation séparées pour humains et bots
 - **Nettoyage automatique** : Tâche cron intégrée pour purger les anciennes données
@@ -72,6 +76,8 @@ stats/
 
 - `bastien59_stats` : Log principal des visites (IP, OS, navigateur, page, durée, etc.)
 - `bastien59_stats_geo_cache` : Cache de géolocalisation IP
+- `bastien59_stats_behavior_profile` : Profils agrégés d'apprentissage comportemental
+- `bastien59_stats_behavior_seen` : Déduplication des sessions déjà apprises
 
 ## Licence
 

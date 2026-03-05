@@ -18,6 +18,7 @@ class collect_controller
     protected $config;
     protected $table_prefix;
     protected $has_ajax_telemetry_columns = null;
+    protected $has_ajax_advanced_columns = null;
 
     const LINK_NAME = 'b59_stats_px';
 
@@ -37,7 +38,10 @@ class collect_controller
 
     /**
      * POST /stats/px
-     * Expected payload keys: k(token), s(session), i(log_id), a(scroll_flag), r(resolution)
+     * Expected payload keys:
+     * k(token), s(session), i(log_id), a(scroll_flag), r(resolution),
+     * b(interact_mask), d(first_scroll_ms), n(scroll_events), y(scroll_max_y),
+     * w(webdriver_flag), v(telemetry_version)
      */
     public function collect()
     {
@@ -82,6 +86,36 @@ class collect_controller
             return new JsonResponse(['ok' => 0], 400);
         }
 
+        $interact_mask = (int)$this->request->variable('b', 0);
+        if ($interact_mask < 0 || $interact_mask > 255) {
+            return new JsonResponse(['ok' => 0], 400);
+        }
+
+        $first_scroll_ms = (int)$this->request->variable('d', 0);
+        if ($first_scroll_ms < 0 || $first_scroll_ms > 120000) {
+            return new JsonResponse(['ok' => 0], 400);
+        }
+
+        $scroll_events = (int)$this->request->variable('n', 0);
+        if ($scroll_events < 0 || $scroll_events > 10000) {
+            return new JsonResponse(['ok' => 0], 400);
+        }
+
+        $scroll_max_y = (int)$this->request->variable('y', 0);
+        if ($scroll_max_y < 0 || $scroll_max_y > 500000) {
+            return new JsonResponse(['ok' => 0], 400);
+        }
+
+        $webdriver_flag = (int)$this->request->variable('w', 0);
+        if ($webdriver_flag !== 0 && $webdriver_flag !== 1) {
+            return new JsonResponse(['ok' => 0], 400);
+        }
+
+        $telemetry_ver = (int)$this->request->variable('v', 0);
+        if ($telemetry_ver < 0 || $telemetry_ver > 9) {
+            return new JsonResponse(['ok' => 0], 400);
+        }
+
         // Migration 1.2.0 absente -> endpoint noop (évite les erreurs SQL, client marqué OK)
         if (!$this->has_ajax_telemetry_columns()) {
             return new JsonResponse(['ok' => 1]);
@@ -119,6 +153,28 @@ class collect_controller
         }
         if ($scroll_flag === 1) {
             $update['scroll_down_ajax'] = 1;
+        }
+
+        $has_advanced_columns = $this->has_ajax_advanced_columns();
+        if ($has_advanced_columns) {
+            if ($interact_mask > 0) {
+                $update['ajax_interact_mask'] = $interact_mask;
+            }
+            if ($first_scroll_ms > 0) {
+                $update['ajax_first_scroll_ms'] = $first_scroll_ms;
+            }
+            if ($scroll_events > 0) {
+                $update['ajax_scroll_events'] = $scroll_events;
+            }
+            if ($scroll_max_y > 0) {
+                $update['ajax_scroll_max_y'] = $scroll_max_y;
+            }
+            if ($webdriver_flag === 1) {
+                $update['ajax_webdriver'] = 1;
+            }
+            if ($telemetry_ver > 0) {
+                $update['ajax_telemetry_ver'] = $telemetry_ver;
+            }
         }
 
         if (!empty($update)) {
@@ -232,5 +288,31 @@ class collect_controller
 
         $this->has_ajax_telemetry_columns = !$has_error;
         return $this->has_ajax_telemetry_columns;
+    }
+
+    /**
+     * Détecte si les colonnes AJAX avancées (migration 1.3.0) sont disponibles.
+     */
+    private function has_ajax_advanced_columns()
+    {
+        if ($this->has_ajax_advanced_columns !== null) {
+            return $this->has_ajax_advanced_columns;
+        }
+
+        $sql = 'SELECT ajax_interact_mask, ajax_first_scroll_ms, ajax_scroll_events,
+                       ajax_scroll_max_y, ajax_webdriver, ajax_telemetry_ver
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_ajax_advanced_columns = !$has_error;
+        return $this->has_ajax_advanced_columns;
     }
 }

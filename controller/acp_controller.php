@@ -17,6 +17,8 @@ class acp_controller
     protected $config;
     protected $table_prefix;
     protected $has_ajax_telemetry_columns = null;
+    protected $has_ajax_advanced_columns = null;
+    protected $has_behavior_learning_tables = null;
 
     public function __construct($db, $template, $request, $user, $config, $table_prefix)
     {
@@ -93,11 +95,43 @@ class acp_controller
 
         // Variables template
         $this->template->assign_vars([
-            'U_ACTION'        => append_sid($u_action),
+            'U_ACTION'        => $u_action,
             'FILTER_HOURS'    => $hours,
             'SHOW_BOTS'       => $show_bots,
             'DISPLAY_LIMIT'   => $display_limit,
         ]);
+    }
+
+    /**
+     * Onglet ACP "Comportements": apprentissage et comparaison profils.
+     */
+    public function display_behavior($u_action)
+    {
+        $this->user->add_lang_ext('bastien59960/stats', 'acp/info_acp_stats');
+
+        $hours = max(1, min(720, (int)$this->request->variable('hours', 24)));
+        $profile_limit = max(20, min(1000, (int)$this->request->variable('profile_limit', 100)));
+        $min_samples = max(5, min(5000, (int)$this->request->variable('min_samples', (int)($this->config['bastien59_stats_learning_min_samples'] ?? 25))));
+        $start_time = time() - ($hours * 3600);
+        $learning_enabled = !empty($this->config['bastien59_stats_learning_enabled']);
+
+        $this->template->assign_vars([
+            'U_ACTION' => $u_action,
+            'FILTER_HOURS' => $hours,
+            'PROFILE_LIMIT' => $profile_limit,
+            'MIN_SAMPLES' => $min_samples,
+            'LEARNING_ENABLED' => $learning_enabled ? 1 : 0,
+            'HAS_LEARNING_TABLES' => $this->has_behavior_learning_tables() ? 1 : 0,
+        ]);
+
+        if (!$this->has_behavior_learning_tables()) {
+            return;
+        }
+
+        $this->assign_behavior_profiles($min_samples, $profile_limit);
+        $this->assign_behavior_group_comparison($start_time);
+        $this->assign_behavior_outlier_signals($start_time);
+        $this->assign_recent_behavior_cases($start_time, 80);
     }
 
     /**
@@ -512,6 +546,232 @@ class acp_controller
     }
 
     /**
+     * Détecte si les colonnes AJAX avancées (migration 1.3.0) sont disponibles.
+     */
+    private function has_ajax_advanced_columns()
+    {
+        if ($this->has_ajax_advanced_columns !== null) {
+            return $this->has_ajax_advanced_columns;
+        }
+
+        $sql = 'SELECT ajax_interact_mask, ajax_first_scroll_ms, ajax_scroll_events,
+                       ajax_scroll_max_y, ajax_webdriver, ajax_telemetry_ver
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_ajax_advanced_columns = !$has_error;
+        return $this->has_ajax_advanced_columns;
+    }
+
+    /**
+     * Détecte la disponibilité des tables d'apprentissage comportemental.
+     */
+    private function has_behavior_learning_tables()
+    {
+        if ($this->has_behavior_learning_tables !== null) {
+            return $this->has_behavior_learning_tables;
+        }
+
+        $sql_profile = 'SELECT profile_key FROM ' . $this->table_prefix . 'bastien59_stats_behavior_profile WHERE 1 = 0';
+        $sql_seen = 'SELECT session_id FROM ' . $this->table_prefix . 'bastien59_stats_behavior_seen WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result_profile = $this->db->sql_query_limit($sql_profile, 1);
+        $profile_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result_profile !== false) {
+            $this->db->sql_freeresult($result_profile);
+        }
+
+        $result_seen = $this->db->sql_query_limit($sql_seen, 1);
+        $seen_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result_seen !== false) {
+            $this->db->sql_freeresult($result_seen);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_behavior_learning_tables = !$profile_error && !$seen_error;
+        return $this->has_behavior_learning_tables;
+    }
+
+    private function assign_behavior_profiles($min_samples, $limit)
+    {
+        $sql = 'SELECT profile_key, profile_label, sample_count,
+                       avg_first_scroll_ms, avg_scroll_events, avg_scroll_max_y,
+                       avg_interact_score, no_interact_hits, fast_scroll_hits, jump_scroll_hits,
+                       updated_time
+                FROM ' . $this->table_prefix . 'bastien59_stats_behavior_profile
+                WHERE sample_count >= ' . (int)$min_samples . '
+                ORDER BY sample_count DESC, updated_time DESC';
+        $result = $this->db->sql_query_limit($sql, $limit);
+
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $samples = max(1, (int)$row['sample_count']);
+            $no_interact_pct = round(((int)$row['no_interact_hits'] * 100) / $samples, 1);
+            $fast_pct = round(((int)$row['fast_scroll_hits'] * 100) / $samples, 1);
+            $jump_pct = round(((int)$row['jump_scroll_hits'] * 100) / $samples, 1);
+
+            $this->template->assign_block_vars('BEHAVIOR_PROFILES', [
+                'PROFILE_LABEL' => htmlspecialchars($row['profile_label'], ENT_COMPAT, 'UTF-8'),
+                'PROFILE_KEY' => htmlspecialchars($row['profile_key'], ENT_COMPAT, 'UTF-8'),
+                'SAMPLE_COUNT' => number_format((int)$row['sample_count'], 0, ',', ' '),
+                'AVG_FIRST_SCROLL_MS' => (int)$row['avg_first_scroll_ms'],
+                'AVG_SCROLL_EVENTS' => (int)$row['avg_scroll_events'],
+                'AVG_SCROLL_MAX_Y' => (int)$row['avg_scroll_max_y'],
+                'AVG_INTERACT_SCORE' => (int)$row['avg_interact_score'],
+                'NO_INTERACT_PCT' => number_format($no_interact_pct, 1, ',', ' '),
+                'FAST_SCROLL_PCT' => number_format($fast_pct, 1, ',', ' '),
+                'JUMP_SCROLL_PCT' => number_format($jump_pct, 1, ',', ' '),
+                'UPDATED_TIME' => $this->user->format_date((int)$row['updated_time']),
+            ]);
+        }
+        $this->db->sql_freeresult($result);
+    }
+
+    private function assign_behavior_group_comparison($start_time)
+    {
+        if (!$this->has_ajax_telemetry_columns()) {
+            return;
+        }
+
+        $metrics_sql = 'SELECT
+                           CASE
+                               WHEN is_bot = 1 THEN \'bots\'
+                               WHEN user_id > 1 THEN \'members\'
+                               ELSE \'guests\'
+                           END AS grp,
+                           COUNT(*) AS sessions,
+                           SUM(CASE WHEN ajax_seen_time > 0 THEN 1 ELSE 0 END) AS ajax_sessions,
+                           SUM(CASE WHEN scroll_down_ajax = 1 THEN 1 ELSE 0 END) AS scroll_sessions'
+            . ($this->has_ajax_advanced_columns()
+                ? ', AVG(CASE WHEN ajax_first_scroll_ms > 0 THEN ajax_first_scroll_ms END) AS avg_first_scroll_ms,
+                   AVG(CASE WHEN ajax_scroll_events > 0 THEN ajax_scroll_events END) AS avg_scroll_events,
+                   AVG(CASE WHEN ajax_scroll_max_y > 0 THEN ajax_scroll_max_y END) AS avg_scroll_max_y,
+                   SUM(CASE WHEN scroll_down_ajax = 1 AND ajax_interact_mask = 0 THEN 1 ELSE 0 END) AS zero_interact_scrolls'
+                : ', 0 AS avg_first_scroll_ms, 0 AS avg_scroll_events, 0 AS avg_scroll_max_y, 0 AS zero_interact_scrolls')
+            . ' FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE visit_time > ' . (int)$start_time . '
+                AND is_first_visit = 1
+                GROUP BY grp';
+
+        $result = $this->db->sql_query($metrics_sql);
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $sessions = max(1, (int)$row['sessions']);
+            $scroll_sessions = max(1, (int)$row['scroll_sessions']);
+            $ajax_pct = round(((int)$row['ajax_sessions'] * 100) / $sessions, 1);
+            $scroll_pct = round(((int)$row['scroll_sessions'] * 100) / $sessions, 1);
+            $zero_interact_pct = round(((int)$row['zero_interact_scrolls'] * 100) / $scroll_sessions, 1);
+
+            $group_label = $row['grp'];
+            if ($row['grp'] === 'members') {
+                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_MEMBERS');
+            } elseif ($row['grp'] === 'guests') {
+                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS');
+            } elseif ($row['grp'] === 'bots') {
+                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_BOTS');
+            }
+
+            $this->template->assign_block_vars('BEHAVIOR_GROUPS', [
+                'GROUP_LABEL' => htmlspecialchars($group_label, ENT_COMPAT, 'UTF-8'),
+                'SESSIONS' => number_format((int)$row['sessions'], 0, ',', ' '),
+                'AJAX_RATE' => number_format($ajax_pct, 1, ',', ' '),
+                'SCROLL_RATE' => number_format($scroll_pct, 1, ',', ' '),
+                'AVG_FIRST_SCROLL_MS' => (int)$row['avg_first_scroll_ms'],
+                'AVG_SCROLL_EVENTS' => number_format((float)$row['avg_scroll_events'], 1, ',', ' '),
+                'AVG_SCROLL_MAX_Y' => (int)$row['avg_scroll_max_y'],
+                'ZERO_INTERACT_RATE' => number_format($zero_interact_pct, 1, ',', ' '),
+                'IS_BOTS' => ($row['grp'] === 'bots') ? 1 : 0,
+            ]);
+        }
+        $this->db->sql_freeresult($result);
+    }
+
+    private function assign_behavior_outlier_signals($start_time)
+    {
+        $signal_defs = [
+            'learn_behavior_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_LEARN_BEHAVIOR'),
+            'learn_speed_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_SPEED'),
+            'learn_no_interact_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_NO_INTERACT'),
+            'learn_sparse_scroll_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_SPARSE'),
+            'learn_jump_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_JUMP'),
+            'ajax_webdriver' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_WEBDRIVER'),
+            'ajax_scroll_profile' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_AJAX_PROFILE'),
+            'guest_fp_clone_multi_ip' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_FP_CLONE'),
+        ];
+
+        $sql = 'SELECT COUNT(*) AS total_sessions
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE visit_time > ' . (int)$start_time . '
+                AND is_first_visit = 1
+                AND user_id <= 1';
+        $result = $this->db->sql_query($sql);
+        $total_sessions = (int)$this->db->sql_fetchfield('total_sessions');
+        $this->db->sql_freeresult($result);
+
+        foreach ($signal_defs as $signal => $label) {
+            $sql = 'SELECT COUNT(*) AS total
+                    FROM ' . $this->table_prefix . 'bastien59_stats
+                    WHERE visit_time > ' . (int)$start_time . '
+                    AND is_first_visit = 1
+                    AND user_id <= 1
+                    AND signals LIKE \'%' . $this->db->sql_escape($signal) . '%\'';
+            $result = $this->db->sql_query($sql);
+            $count = (int)$this->db->sql_fetchfield('total');
+            $this->db->sql_freeresult($result);
+
+            if ($count <= 0) {
+                continue;
+            }
+
+            $rate = ($total_sessions > 0) ? round(($count * 100) / $total_sessions, 2) : 0;
+            $this->template->assign_block_vars('BEHAVIOR_OUTLIERS', [
+                'SIGNAL' => htmlspecialchars($signal, ENT_COMPAT, 'UTF-8'),
+                'LABEL' => htmlspecialchars($label, ENT_COMPAT, 'UTF-8'),
+                'COUNT' => number_format($count, 0, ',', ' '),
+                'RATE' => number_format($rate, 2, ',', ' '),
+            ]);
+        }
+    }
+
+    private function assign_recent_behavior_cases($start_time, $limit)
+    {
+        $sql = 'SELECT visit_time, user_ip, country_code, country_name, page_title, page_url, signals, user_agent
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE visit_time > ' . (int)$start_time . '
+                AND is_first_visit = 1
+                AND user_id <= 1
+                AND (signals LIKE \'%learn_%\' OR signals LIKE \'%ajax_scroll_%\' OR signals LIKE \'%ajax_webdriver%\' OR signals LIKE \'%guest_fp_clone_multi_ip%\')
+                ORDER BY visit_time DESC';
+        $result = $this->db->sql_query_limit($sql, $limit);
+
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $country_display = '';
+            if (!empty($row['country_code'])) {
+                $country_display = $this->country_code_to_flag($row['country_code']) . ' ' . htmlspecialchars($row['country_name'] ?: $row['country_code'], ENT_COMPAT, 'UTF-8');
+            }
+
+            $this->template->assign_block_vars('BEHAVIOR_CASES', [
+                'TIME' => $this->user->format_date((int)$row['visit_time']),
+                'IP' => htmlspecialchars($row['user_ip'], ENT_COMPAT, 'UTF-8'),
+                'COUNTRY' => $country_display,
+                'PAGE_TITLE' => htmlspecialchars($row['page_title'], ENT_COMPAT, 'UTF-8'),
+                'PAGE_URL' => htmlspecialchars($row['page_url'], ENT_COMPAT, 'UTF-8'),
+                'SIGNALS' => htmlspecialchars($row['signals'], ENT_COMPAT, 'UTF-8'),
+                'SIGNALS_DESC' => $this->format_signals_description($row['signals']),
+                'USER_AGENT' => htmlspecialchars($row['user_agent'], ENT_COMPAT, 'UTF-8'),
+            ]);
+        }
+        $this->db->sql_freeresult($result);
+    }
+
+    /**
      * Formate une résolution brute (ex: 1366x768) en pixels lisibles.
      */
     private function format_resolution_px($resolution)
@@ -553,8 +813,20 @@ class acp_controller
             'fake_legit_bot'       => 'UA prétend être un bot légitime mais le reverse DNS ne correspond pas (90 pts)',
             'posting_first_visit'  => 'Accès direct à posting.php dès la 1ère visite (65 pts)',
             'posting_get_loop'     => 'Requêtes GET en boucle sur posting.php sans jamais poster (65 pts)',
+            'viewprofile_first_visit_no_res' => 'Accès direct à viewprofile en 1ère visite, sans referer interne et sans résolution (cookie/AJAX) (strict)',
             'no_screen_res'        => 'Pas de résolution d\'écran après 3+ pages — pas de JavaScript (35 pts)',
             'html_entities_in_url' => 'Entités HTML dans l\'URL — bot qui parse le HTML source (45 pts)',
+            'ajax_webdriver'       => 'navigator.webdriver = true détecté via télémétrie AJAX (95 pts)',
+            'ajax_scroll_no_interact' => 'Scroll AJAX sans aucune interaction utilisateur préalable (25 pts)',
+            'ajax_scroll_too_fast' => 'Premier scroll anormalement rapide après chargement (30 pts)',
+            'ajax_scroll_jump'     => 'Scroll en saut brusque (grande distance avec 1-2 événements) (30 pts)',
+            'ajax_scroll_profile'  => 'Profil de scroll automatisé (combinaison de signaux AJAX) (70 pts)',
+            'guest_fp_clone_multi_ip' => 'Fingerprint invité cloné sur plusieurs IPs en fenêtre courte (hors FR/CO) (strict)',
+            'learn_no_interact_outlier' => 'Écart au profil appris: absence d\'interaction inhabituel pour ce profil (25 pts)',
+            'learn_speed_outlier'   => 'Écart au profil appris: scroll initial anormalement rapide (25 pts)',
+            'learn_sparse_scroll_outlier' => 'Écart au profil appris: trop peu d\'événements de scroll (20 pts)',
+            'learn_jump_outlier'    => 'Écart au profil appris: saut de scroll atypique (20 pts)',
+            'learn_behavior_outlier'=> 'Écart global au profil appris des membres connectés (20 pts)',
         ];
 
         $parts = [];
@@ -563,6 +835,10 @@ class acp_controller
             if (empty($sig)) continue;
             if (isset($descriptions[$sig])) {
                 $parts[] = '<li><code>' . htmlspecialchars($sig) . '</code> — ' . $descriptions[$sig] . '</li>';
+            } elseif (preg_match('/^ua_pattern:(.+)$/', $sig, $m)) {
+                $parts[] = '<li><code>' . htmlspecialchars($sig) . '</code> — Pattern UA bot détecté : <strong>' . htmlspecialchars($m[1]) . '</strong> (70 pts)</li>';
+            } elseif (preg_match('/^legit_ua_pattern:(.+)$/', $sig, $m)) {
+                $parts[] = '<li><code>' . htmlspecialchars($sig) . '</code> — Pattern UA bot légitime détecté : <strong>' . htmlspecialchars($m[1]) . '</strong> (info)</li>';
             } elseif (preg_match('/^old_chrome_(\d+)$/', $sig, $m)) {
                 $parts[] = '<li><code>' . htmlspecialchars($sig) . '</code> — Chrome ' . $m[1] . ', version obsolète (50 pts)</li>';
             } else {
