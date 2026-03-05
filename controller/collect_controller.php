@@ -17,6 +17,7 @@ class collect_controller
     protected $user;
     protected $config;
     protected $table_prefix;
+    protected $has_ajax_telemetry_columns = null;
 
     const LINK_NAME = 'b59_stats_px';
 
@@ -81,6 +82,11 @@ class collect_controller
             return new JsonResponse(['ok' => 0], 400);
         }
 
+        // Migration 1.2.0 absente -> endpoint noop (évite les erreurs SQL, client marqué OK)
+        if (!$this->has_ajax_telemetry_columns()) {
+            return new JsonResponse(['ok' => 1]);
+        }
+
         $sql = 'SELECT session_id, user_ip, visit_time
                 FROM ' . $this->table_prefix . 'bastien59_stats
                 WHERE log_id = ' . (int)$log_id;
@@ -122,7 +128,14 @@ class collect_controller
                     SET ' . $this->db->sql_build_array('UPDATE', $update) . '
                     WHERE session_id = \'' . $this->db->sql_escape($tracked_session) . '\'
                     AND user_ip = \'' . $this->db->sql_escape((string)$this->user->ip) . '\'';
+            $this->db->sql_return_on_error(true);
             $this->db->sql_query($sql);
+            $sql_error = (bool)$this->db->get_sql_error_triggered();
+            $this->db->sql_return_on_error(false);
+
+            if ($sql_error) {
+                return new JsonResponse(['ok' => 0], 500);
+            }
         }
 
         return new JsonResponse(['ok' => 1]);
@@ -146,43 +159,78 @@ class collect_controller
 
     private function is_same_origin_request()
     {
-        $server_name = strtolower(trim((string)$this->request->server('SERVER_NAME', '')));
-        if ($server_name === '') {
+        $origin = trim((string)$this->request->server('HTTP_ORIGIN', ''));
+        $referer = trim((string)$this->request->server('HTTP_REFERER', ''));
+        $source = ($origin !== '') ? $origin : $referer;
+        if ($source === '') {
             return true;
         }
 
-        $origin = trim((string)$this->request->server('HTTP_ORIGIN', ''));
-        if ($origin !== '') {
-            return $this->url_host_matches($origin, $server_name);
-        }
-
-        $referer = trim((string)$this->request->server('HTTP_REFERER', ''));
-        if ($referer !== '') {
-            return $this->url_host_matches($referer, $server_name);
-        }
-
-        return true;
-    }
-
-    private function url_host_matches($url, $server_name)
-    {
-        $host = strtolower((string)parse_url($url, PHP_URL_HOST));
+        $host = strtolower((string)parse_url($source, PHP_URL_HOST));
         if ($host === '') {
             return false;
         }
 
-        if ($host === $server_name) {
+        $allowed_hosts = $this->get_allowed_hosts();
+        if (isset($allowed_hosts[$host])) {
             return true;
         }
 
-        // Tolérance www.
-        if (strpos($host, 'www.') === 0 && substr($host, 4) === $server_name) {
-            return true;
-        }
-        if (strpos($server_name, 'www.') === 0 && substr($server_name, 4) === $host) {
-            return true;
+        $cookie_domain = strtolower(ltrim((string)($this->config['cookie_domain'] ?? ''), '.'));
+        if ($cookie_domain !== '') {
+            if ($host === $cookie_domain) {
+                return true;
+            }
+            if (substr($host, -strlen('.' . $cookie_domain)) === '.' . $cookie_domain) {
+                return true;
+            }
         }
 
         return false;
+    }
+
+    private function get_allowed_hosts()
+    {
+        $hosts = [];
+
+        $server_name = strtolower(trim((string)$this->request->server('SERVER_NAME', '')));
+        if ($server_name !== '') {
+            $hosts[$server_name] = true;
+        }
+
+        $http_host = strtolower(trim((string)$this->request->server('HTTP_HOST', '')));
+        if ($http_host !== '') {
+            $http_host = preg_replace('/:\d+$/', '', $http_host);
+            if (!empty($http_host)) {
+                $hosts[$http_host] = true;
+            }
+        }
+
+        return $hosts;
+    }
+
+    /**
+     * Détecte si les colonnes AJAX (migration 1.2.0) sont disponibles.
+     */
+    private function has_ajax_telemetry_columns()
+    {
+        if ($this->has_ajax_telemetry_columns !== null) {
+            return $this->has_ajax_telemetry_columns;
+        }
+
+        $sql = 'SELECT screen_res_ajax, scroll_down_ajax, ajax_seen_time
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_ajax_telemetry_columns = !$has_error;
+        return $this->has_ajax_telemetry_columns;
     }
 }

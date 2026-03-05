@@ -16,6 +16,7 @@ class acp_controller
     protected $user;
     protected $config;
     protected $table_prefix;
+    protected $has_ajax_telemetry_columns = null;
 
     public function __construct($db, $template, $request, $user, $config, $table_prefix)
     {
@@ -193,7 +194,10 @@ class acp_controller
 
         // Requête 2 : Récupérer TOUTES les pages de TOUTES les sessions en une requête
         $pages_by_session = [];
-        $sql_pages = 'SELECT session_id, page_url, page_title, visit_time, duration, referer
+        $extra_ajax_columns = $this->has_ajax_telemetry_columns()
+            ? ', screen_res_ajax, scroll_down_ajax, ajax_seen_time'
+            : '';
+        $sql_pages = 'SELECT session_id, page_url, page_title, visit_time, duration, referer, screen_res' . $extra_ajax_columns . '
                       FROM ' . $this->table_prefix . 'bastien59_stats
                       WHERE session_id IN (' . implode(',', $session_ids) . ')
                       ORDER BY visit_time ASC';
@@ -264,9 +268,38 @@ class acp_controller
                 $forward_dns_status = '<span style="color:#999;">N/A (pas de Reverse DNS)</span>';
             }
 
+            $pages = $pages_by_session[$session_id] ?? [];
+
+            // Agrégation session complète:
+            // - scroll = vrai si au moins une page de la session a un signal
+            // - résolution cookie = dernière non vide vue dans la session
+            // - résolution ajax = dernière non vide par ajax_seen_time
+            $scroll_done = !empty($row['scroll_down_ajax']) ? 1 : 0;
             $res_cookie = trim((string)($row['screen_res'] ?? ''));
             $res_ajax = trim((string)($row['screen_res_ajax'] ?? ''));
-            $res_display = ($res_ajax !== '') ? $res_ajax : (($res_cookie !== '') ? $res_cookie : '-');
+            $ajax_time = (int)($row['ajax_seen_time'] ?? 0);
+
+            foreach ($pages as $page_row) {
+                if (!$scroll_done && !empty($page_row['scroll_down_ajax'])) {
+                    $scroll_done = 1;
+                }
+
+                $cookie_candidate = trim((string)($page_row['screen_res'] ?? ''));
+                if ($cookie_candidate !== '') {
+                    $res_cookie = $cookie_candidate;
+                }
+
+                $ajax_candidate = trim((string)($page_row['screen_res_ajax'] ?? ''));
+                $ajax_candidate_time = (int)($page_row['ajax_seen_time'] ?? 0);
+                if ($ajax_candidate !== '' && $ajax_candidate_time >= $ajax_time) {
+                    $res_ajax = $ajax_candidate;
+                    $ajax_time = $ajax_candidate_time;
+                }
+            }
+
+            $res_cookie_px = $this->format_resolution_px($res_cookie);
+            $res_ajax_px = $this->format_resolution_px($res_ajax);
+            $res_display = ($res_ajax !== '') ? $res_ajax_px : (($res_cookie !== '') ? $res_cookie_px : '-');
             $res_source_label = $this->user->lang('STATS_RES_SOURCE_UNKNOWN');
             if ($res_ajax !== '') {
                 $res_source_label = $this->user->lang('STATS_RES_SOURCE_AJAX');
@@ -289,7 +322,6 @@ class acp_controller
                 $res_compare_class = 'res-compare-mid';
             }
 
-            $scroll_done = !empty($row['scroll_down_ajax']) ? 1 : 0;
             $scroll_label = $scroll_done ? $this->user->lang('STATS_SCROLL_DONE') : $this->user->lang('STATS_SCROLL_NONE');
             $scroll_class = $scroll_done ? 'badge-scroll-yes' : 'badge-scroll-no';
 
@@ -306,6 +338,8 @@ class acp_controller
                 'RES'           => htmlspecialchars($res_display, ENT_COMPAT, 'UTF-8'),
                 'RES_COOKIE'    => htmlspecialchars($res_cookie ?: '-', ENT_COMPAT, 'UTF-8'),
                 'RES_AJAX'      => htmlspecialchars($res_ajax ?: '-', ENT_COMPAT, 'UTF-8'),
+                'RES_COOKIE_PX' => htmlspecialchars($res_cookie_px, ENT_COMPAT, 'UTF-8'),
+                'RES_AJAX_PX'   => htmlspecialchars($res_ajax_px, ENT_COMPAT, 'UTF-8'),
                 'RES_SOURCE_LABEL' => htmlspecialchars($res_source_label, ENT_COMPAT, 'UTF-8'),
                 'RES_COMPARE_LABEL' => htmlspecialchars($res_compare_label, ENT_COMPAT, 'UTF-8'),
                 'RES_COMPARE_CLASS' => $res_compare_class,
@@ -332,7 +366,6 @@ class acp_controller
             ]);
 
             // Assigner les pages de la session (à partir de la 2ème)
-            $pages = $pages_by_session[$session_id] ?? [];
             $first = true;
             foreach ($pages as $page) {
                 if ($first) {
@@ -451,6 +484,48 @@ class acp_controller
             return floor($seconds / 60) . 'm ' . ($seconds % 60) . 's';
         }
         return floor($seconds / 3600) . 'h ' . floor(($seconds % 3600) / 60) . 'm';
+    }
+
+    /**
+     * Détecte si les colonnes AJAX (migration 1.2.0) sont disponibles.
+     */
+    private function has_ajax_telemetry_columns()
+    {
+        if ($this->has_ajax_telemetry_columns !== null) {
+            return $this->has_ajax_telemetry_columns;
+        }
+
+        $sql = 'SELECT screen_res_ajax, scroll_down_ajax, ajax_seen_time
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_ajax_telemetry_columns = !$has_error;
+        return $this->has_ajax_telemetry_columns;
+    }
+
+    /**
+     * Formate une résolution brute (ex: 1366x768) en pixels lisibles.
+     */
+    private function format_resolution_px($resolution)
+    {
+        $res = trim((string)$resolution);
+        if ($res === '') {
+            return '-';
+        }
+
+        if (preg_match('/^([1-9][0-9]{1,4})x([1-9][0-9]{1,4})$/', $res, $m)) {
+            return $m[1] . 'x' . $m[2] . ' px';
+        }
+
+        return '-';
     }
 
     /**

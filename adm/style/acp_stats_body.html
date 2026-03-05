@@ -298,11 +298,13 @@
                     <td class="session-tech">
                         <!-- IF SESSIONS.IS_BOT -->
                         <strong style="color:#e74c3c;">{SESSIONS.BOT_NAME}</strong><br>
+                        <small style="color:#555;">{L_STATS_RES_COOKIE_LABEL} {SESSIONS.RES_COOKIE_PX} | {L_STATS_RES_AJAX_LABEL} {SESSIONS.RES_AJAX_PX}</small><br>
                         <small style="word-break:break-all; color:#666; font-size:10px;">{SESSIONS.USER_AGENT}</small>
                         <br><span class="badge {SESSIONS.SCROLL_CLASS}">{SESSIONS.SCROLL_LABEL}</span>
                         <br><small style="color:#777;">{L_STATS_RES_SOURCE_LABEL} {SESSIONS.RES_SOURCE_LABEL}</small>
                         <!-- ELSE -->
-                        <strong>{SESSIONS.OS}</strong> | {SESSIONS.DEVICE} | {SESSIONS.RES}<br>
+                        <strong>{SESSIONS.OS}</strong> | {SESSIONS.DEVICE}<br>
+                        <small style="color:#555;">{L_STATS_RES_COOKIE_LABEL} {SESSIONS.RES_COOKIE_PX} | {L_STATS_RES_AJAX_LABEL} {SESSIONS.RES_AJAX_PX}</small><br>
                         <small style="word-break:break-all; color:#666; font-size:10px;">{SESSIONS.USER_AGENT}</small>
                         <br><span class="badge {SESSIONS.SCROLL_CLASS}">{SESSIONS.SCROLL_LABEL}</span>
                         <br><small style="color:#777;">{L_STATS_RES_SOURCE_LABEL} {SESSIONS.RES_SOURCE_LABEL}</small>
@@ -327,8 +329,8 @@
                             <strong>Reverse DNS :</strong> <!-- IF SESSIONS.HOSTNAME -->{SESSIONS.HOSTNAME}<!-- ELSE --><span style="color:#999;">Aucun nom d'hôte trouvé.</span><!-- ENDIF --><br>
                             <strong>Forward DNS :</strong> {SESSIONS.FORWARD_DNS_STATUS}<!-- IF SESSIONS.FORWARD_DNS_IPS --> (IPs: {SESSIONS.FORWARD_DNS_IPS})<!-- ENDIF --><br>
                             <strong>{L_STATS_SCROLL_LABEL}</strong> <span class="badge {SESSIONS.SCROLL_CLASS}">{SESSIONS.SCROLL_LABEL}</span><br>
-                            <strong>{L_STATS_RES_COOKIE_LABEL}</strong> {SESSIONS.RES_COOKIE}<br>
-                            <strong>{L_STATS_RES_AJAX_LABEL}</strong> {SESSIONS.RES_AJAX}<br>
+                            <strong>{L_STATS_RES_COOKIE_LABEL}</strong> {SESSIONS.RES_COOKIE_PX}<br>
+                            <strong>{L_STATS_RES_AJAX_LABEL}</strong> {SESSIONS.RES_AJAX_PX}<br>
                             <strong>{L_STATS_RES_COMPARE_LABEL}</strong> <span class="{SESSIONS.RES_COMPARE_CLASS}">{SESSIONS.RES_COMPARE_LABEL}</span>
 
                             <!-- IF SESSIONS.IS_BOT -->

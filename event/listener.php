@@ -396,6 +396,7 @@ class listener implements EventSubscriberInterface
             't' => '',
             's' => (string)($this->user->session_id ?? ''),
             'i' => (int)$this->current_log_id,
+            'x' => (int)($this->config['bastien59_stats_session_timeout'] ?? 900),
         ];
 
         if ($ajax_payload['i'] > 0 && $ajax_payload['s'] !== '') {
@@ -410,7 +411,7 @@ class listener implements EventSubscriberInterface
 
         $ajax_json = json_encode($ajax_payload, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
         if ($ajax_json === false) {
-            $ajax_json = '{"u":"","t":"","s":"","i":0}';
+            $ajax_json = '{"u":"","t":"","s":"","i":0,"x":900}';
         }
 
         // Script léger:
@@ -428,15 +429,31 @@ class listener implements EventSubscriberInterface
         if(sw>9&&sh>9&&sw<=16384&&sh<=16384){return String(sw)+'x'+String(sh);}
         return '';
     }
+    function gc(){
+        var m=d.cookie.match(new RegExp('(?:^|;\\\\s*)'+n+'=([^;]*)'));
+        return m?decodeURIComponent(m[1]):'';
+    }
+    function sc(v){
+        var dt=new Date();
+        dt.setTime(dt.getTime()+(30*24*60*60*1000));
+        d.cookie=n+'='+encodeURIComponent(v)+';path=/;expires='+dt.toUTCString()+';SameSite=Lax';
+    }
+    function dc(){
+        d.cookie=n+'=;path=/;expires=Thu, 01 Jan 1970 00:00:00 GMT;SameSite=Lax';
+    }
 
     // Cookie historique conservé (comparaison cookie vs AJAX côté serveur)
-    if(!d.cookie.match(new RegExp('(?:^|;\\\\s*)'+n+'='))){
-        var v=g();
-        if(v){
-            var dt=new Date();
-            dt.setTime(dt.getTime()+(30*24*60*60*1000));
-            d.cookie=n+'='+v+';path=/;expires='+dt.toUTCString()+';SameSite=Lax';
+    var v=g();
+    var cv=gc();
+    if(v){
+        if(!cv){
+            sc(v);
+        }else if(cv!==v){
+            dc();
+            sc(v);
         }
+    }else if(cv){
+        dc();
     }
 
     // Nettoyer le paramètre _r de l'URL (referer original du redirect)
@@ -449,12 +466,32 @@ class listener implements EventSubscriberInterface
     // Endpoint AJAX (noms de clés volontairement opaques côté client)
     if(!c||!c.u||!c.t||!c.s||!c.i||!w.fetch||!w.FormData){return;}
 
-    function p(b){
+    var k='b59x3_'+String(c.s||'');
+    var ttl=Math.max(300,parseInt(c.x||900,10))*1000;
+    var sent=false;
+    var inflight=false;
+    function wasSent(){
+        try{
+            if(w.sessionStorage){
+                var raw=w.sessionStorage.getItem(k)||'';
+                var ts=parseInt(raw,10)||0;
+                if(ts>0&&(Date.now()-ts)<ttl){ return true; }
+                if(ts>0){ w.sessionStorage.removeItem(k); }
+            }
+        }catch(e){}
+        return false;
+    }
+    function markSent(){
+        try{ if(w.sessionStorage){ w.sessionStorage.setItem(k,String(Date.now())); } }catch(e){}
+    }
+    function sendOnFirstScroll(){
+        if(sent||inflight||wasSent()){ return; }
+        inflight=true;
         var f=new FormData();
         f.append('k',String(c.t||''));
         f.append('s',String(c.s||''));
         f.append('i',String(c.i||0));
-        f.append('a',b?'1':'0');
+        f.append('a','1');
         var r=g();
         if(r){f.append('r',r);}
         w.fetch(String(c.u),{
@@ -462,42 +499,26 @@ class listener implements EventSubscriberInterface
             body:f,
             credentials:'same-origin',
             headers:{'X-Requested-With':'XMLHttpRequest'}
-        }).catch(function(){});
+        }).then(function(resp){
+            if(!resp||!resp.ok){throw 0;}
+            return resp.json().catch(function(){ return {ok:1}; });
+        }).then(function(data){
+            if(data&&String(data.ok)==='1'){
+                sent=true;
+                markSent();
+            }
+        }).catch(function(){}).finally(function(){ inflight=false; });
     }
 
-    var q0='b59x0_'+String(c.s||'');
-    var q1='b59x1_'+String(c.s||'');
-    try{
-        if(w.sessionStorage){
-            if(w.sessionStorage.getItem(q0)!=='1'){
-                w.sessionStorage.setItem(q0,'1');
-                p(0);
-            }
-        }else{
-            p(0);
-        }
-    }catch(e){
-        p(0);
-    }
+    if(wasSent()){ return; }
 
     var done=false;
     function h(){
-        if(done){return;}
+        if(done||wasSent()){ done=true; return; }
         var y=w.pageYOffset||d.documentElement.scrollTop||d.body.scrollTop||0;
         if(y>12){
             done=true;
-            try{
-                if(w.sessionStorage){
-                    if(w.sessionStorage.getItem(q1)!=='1'){
-                        w.sessionStorage.setItem(q1,'1');
-                        p(1);
-                    }
-                }else{
-                    p(1);
-                }
-            }catch(e){
-                p(1);
-            }
+            sendOnFirstScroll();
             if(w.removeEventListener){w.removeEventListener('scroll',h,true);}
         }
     }
