@@ -264,6 +264,35 @@ class acp_controller
                 $forward_dns_status = '<span style="color:#999;">N/A (pas de Reverse DNS)</span>';
             }
 
+            $res_cookie = trim((string)($row['screen_res'] ?? ''));
+            $res_ajax = trim((string)($row['screen_res_ajax'] ?? ''));
+            $res_display = ($res_ajax !== '') ? $res_ajax : (($res_cookie !== '') ? $res_cookie : '-');
+            $res_source_label = $this->user->lang('STATS_RES_SOURCE_UNKNOWN');
+            if ($res_ajax !== '') {
+                $res_source_label = $this->user->lang('STATS_RES_SOURCE_AJAX');
+            } elseif ($res_cookie !== '') {
+                $res_source_label = $this->user->lang('STATS_RES_SOURCE_COOKIE');
+            }
+
+            $res_compare_label = $this->user->lang('STATS_RES_COMPARE_NONE');
+            $res_compare_class = 'res-compare-na';
+            if ($res_cookie !== '' && $res_ajax !== '') {
+                if ($res_cookie === $res_ajax) {
+                    $res_compare_label = $this->user->lang('STATS_RES_COMPARE_MATCH');
+                    $res_compare_class = 'res-compare-ok';
+                } else {
+                    $res_compare_label = $this->user->lang('STATS_RES_COMPARE_MISMATCH');
+                    $res_compare_class = 'res-compare-bad';
+                }
+            } elseif ($res_cookie !== '' || $res_ajax !== '') {
+                $res_compare_label = $this->user->lang('STATS_RES_COMPARE_PARTIAL');
+                $res_compare_class = 'res-compare-mid';
+            }
+
+            $scroll_done = !empty($row['scroll_down_ajax']) ? 1 : 0;
+            $scroll_label = $scroll_done ? $this->user->lang('STATS_SCROLL_DONE') : $this->user->lang('STATS_SCROLL_NONE');
+            $scroll_class = $scroll_done ? 'badge-scroll-yes' : 'badge-scroll-no';
+
             $this->template->assign_block_vars('SESSIONS', [
                 'SESSION_ID'        => substr($session_id, 0, 8) . '...',
                 'IP'                => $row['user_ip'],
@@ -274,7 +303,15 @@ class acp_controller
                 'COUNTRY_CODE'  => htmlspecialchars($row['country_code'] ?? '', ENT_COMPAT, 'UTF-8'),
                 'OS'            => htmlspecialchars($row['user_os'], ENT_COMPAT, 'UTF-8'),
                 'DEVICE'        => htmlspecialchars($row['user_device'], ENT_COMPAT, 'UTF-8'),
-                'RES'           => htmlspecialchars($row['screen_res'] ?: '-', ENT_COMPAT, 'UTF-8'),
+                'RES'           => htmlspecialchars($res_display, ENT_COMPAT, 'UTF-8'),
+                'RES_COOKIE'    => htmlspecialchars($res_cookie ?: '-', ENT_COMPAT, 'UTF-8'),
+                'RES_AJAX'      => htmlspecialchars($res_ajax ?: '-', ENT_COMPAT, 'UTF-8'),
+                'RES_SOURCE_LABEL' => htmlspecialchars($res_source_label, ENT_COMPAT, 'UTF-8'),
+                'RES_COMPARE_LABEL' => htmlspecialchars($res_compare_label, ENT_COMPAT, 'UTF-8'),
+                'RES_COMPARE_CLASS' => $res_compare_class,
+                'SCROLL_DONE'   => $scroll_done,
+                'SCROLL_LABEL'  => htmlspecialchars($scroll_label, ENT_COMPAT, 'UTF-8'),
+                'SCROLL_CLASS'  => $scroll_class,
                 'USER_AGENT'    => htmlspecialchars($row['user_agent'], ENT_COMPAT, 'UTF-8'),
                 'BOT_NAME'      => $this->extract_bot_name($row['user_agent']),
                 'IS_PHPBB_BOT'  => $is_phpbb_bot,

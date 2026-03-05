@@ -1,0 +1,4 @@
+bastien59960_stats_collect:
+    path: /stats/px
+    defaults: { _controller: bastien59960.stats.collect.controller:collect }
+    methods: [POST]

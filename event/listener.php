@@ -17,7 +17,11 @@ class listener implements EventSubscriberInterface
     protected $user;
     protected $config;
     protected $template;
+    protected $helper;
     protected $table_prefix;
+    protected $current_log_id = 0;
+
+    const AJAX_LINK_NAME = 'b59_stats_px';
 
     // Domaines reverse DNS légitimes pour vérification des bots prétendus
     // Source : https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot
@@ -98,6 +102,7 @@ class listener implements EventSubscriberInterface
         \phpbb\user $user,
         \phpbb\config\config $config,
         \phpbb\template\template $template,
+        \phpbb\controller\helper $helper,
         $table_prefix
     ) {
         $this->db = $db;
@@ -105,6 +110,7 @@ class listener implements EventSubscriberInterface
         $this->user = $user;
         $this->config = $config;
         $this->template = $template;
+        $this->helper = $helper;
         $this->table_prefix = $table_prefix;
     }
 
@@ -315,6 +321,7 @@ class listener implements EventSubscriberInterface
 
         $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats ' . $this->db->sql_build_array('INSERT', $sql_ary);
         $this->db->sql_query($sql);
+        $this->current_log_id = (int)$this->db->sql_nextid();
 
         // 5. Nettoyage automatique (1 chance sur 100)
         // Rétention différenciée : 5 jours pour les bots, 30 jours pour les humains
@@ -384,22 +391,123 @@ class listener implements EventSubscriberInterface
 
     public function inject_resolution_script($event)
     {
-        // Script léger pour capturer la résolution d'écran
-        $script = '<script>
-        (function(){
-            if(!document.cookie.match(/bastien59_stats_res/)){
-                var d = new Date();
-                d.setTime(d.getTime() + (30*24*60*60*1000));
-                var res = window.screen.width + "x" + window.screen.height;
-                document.cookie = "bastien59_stats_res=" + res + ";path=/;expires="+d.toUTCString()+";SameSite=Lax";
+        $ajax_payload = [
+            'u' => '',
+            't' => '',
+            's' => (string)($this->user->session_id ?? ''),
+            'i' => (int)$this->current_log_id,
+        ];
+
+        if ($ajax_payload['i'] > 0 && $ajax_payload['s'] !== '') {
+            try {
+                $ajax_payload['u'] = $this->helper->route('bastien59960_stats_collect');
+                $ajax_payload['t'] = generate_link_hash(self::AJAX_LINK_NAME);
+            } catch (\Throwable $e) {
+                $ajax_payload['u'] = '';
+                $ajax_payload['t'] = '';
             }
-            // Nettoyer le parametre _r de l URL (referer original du redirect)
-            if(window.history&&window.history.replaceState&&location.search.indexOf("_r=")>-1){
-                var u=new URL(location.href);u.searchParams.delete("_r");
-                window.history.replaceState(null,"",u.toString());
+        }
+
+        $ajax_json = json_encode($ajax_payload, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
+        if ($ajax_json === false) {
+            $ajax_json = '{"u":"","t":"","s":"","i":0}';
+        }
+
+        // Script léger:
+        // - garde la méthode cookie existante
+        // - envoie immédiatement résolution + état scroll via endpoint AJAX sécurisé
+        $script = <<<HTML
+<script>
+(function(w,d,c){
+    if(!w||!d){return;}
+
+    var n='bastien59_stats_res';
+    function g(){
+        var sw=(w.screen&&w.screen.width)?parseInt(w.screen.width,10):0;
+        var sh=(w.screen&&w.screen.height)?parseInt(w.screen.height,10):0;
+        if(sw>9&&sh>9&&sw<=16384&&sh<=16384){return String(sw)+'x'+String(sh);}
+        return '';
+    }
+
+    // Cookie historique conservé (comparaison cookie vs AJAX côté serveur)
+    if(!d.cookie.match(new RegExp('(?:^|;\\\\s*)'+n+'='))){
+        var v=g();
+        if(v){
+            var dt=new Date();
+            dt.setTime(dt.getTime()+(30*24*60*60*1000));
+            d.cookie=n+'='+v+';path=/;expires='+dt.toUTCString()+';SameSite=Lax';
+        }
+    }
+
+    // Nettoyer le paramètre _r de l'URL (referer original du redirect)
+    if(w.history&&w.history.replaceState&&w.location&&w.location.search.indexOf('_r=')>-1){
+        var u=new URL(w.location.href);
+        u.searchParams.delete('_r');
+        w.history.replaceState(null,'',u.toString());
+    }
+
+    // Endpoint AJAX (noms de clés volontairement opaques côté client)
+    if(!c||!c.u||!c.t||!c.s||!c.i||!w.fetch||!w.FormData){return;}
+
+    function p(b){
+        var f=new FormData();
+        f.append('k',String(c.t||''));
+        f.append('s',String(c.s||''));
+        f.append('i',String(c.i||0));
+        f.append('a',b?'1':'0');
+        var r=g();
+        if(r){f.append('r',r);}
+        w.fetch(String(c.u),{
+            method:'POST',
+            body:f,
+            credentials:'same-origin',
+            headers:{'X-Requested-With':'XMLHttpRequest'}
+        }).catch(function(){});
+    }
+
+    var q0='b59x0_'+String(c.s||'');
+    var q1='b59x1_'+String(c.s||'');
+    try{
+        if(w.sessionStorage){
+            if(w.sessionStorage.getItem(q0)!=='1'){
+                w.sessionStorage.setItem(q0,'1');
+                p(0);
             }
-        })();
-        </script>';
+        }else{
+            p(0);
+        }
+    }catch(e){
+        p(0);
+    }
+
+    var done=false;
+    function h(){
+        if(done){return;}
+        var y=w.pageYOffset||d.documentElement.scrollTop||d.body.scrollTop||0;
+        if(y>12){
+            done=true;
+            try{
+                if(w.sessionStorage){
+                    if(w.sessionStorage.getItem(q1)!=='1'){
+                        w.sessionStorage.setItem(q1,'1');
+                        p(1);
+                    }
+                }else{
+                    p(1);
+                }
+            }catch(e){
+                p(1);
+            }
+            if(w.removeEventListener){w.removeEventListener('scroll',h,true);}
+        }
+    }
+    if(w.addEventListener){
+        w.addEventListener('scroll',h,{passive:true,capture:true});
+        h();
+    }
+})(window,document,$ajax_json);
+</script>
+HTML;
 
         $this->template->append_var('RUN_CRON_TASK', $script);
     }
@@ -437,16 +545,32 @@ class listener implements EventSubscriberInterface
      */
     private function detect_bot($user_agent)
     {
-        $signals = [];
 
-        // User-Agent vide = très suspect
+
+
+	$signals = [];
         if (empty($user_agent)) {
             return ['empty_ua'];
         }
 
         $ua_lower = strtolower($user_agent);
 
-        // Patterns de bots connus dans le UA
+        // 1. On définit qui est "Ami"
+        $is_friend = false;
+        $behavior_safe_bots = array_merge(self::$legit_bot_uas, [
+            'googlebot', 'bingbot', 'applebot', 'yandexbot', 'duckduckbot',
+            'baiduspider', 'petalbot', 'facebookexternalhit', 'linkedinbot',
+            'twitterbot', 'claudebot', 'gptbot', 'amazonbot', 'bytespider',
+        ]);
+
+        foreach ($behavior_safe_bots as $lb) {
+            if (strpos($ua_lower, $lb) !== false) {
+                $is_friend = true;
+                break;
+            }
+        }
+
+        // 2. DETECTION DES PATTERNS
         $bot_keywords = [
             'bot/', 'bot;', 'crawler', 'spider', 'scraper', 'headlesschrome',
             'phantomjs', 'selenium', 'puppeteer', 'scrapy', 'nutch',
@@ -454,12 +578,22 @@ class listener implements EventSubscriberInterface
             'okhttp', 'axios', 'node-fetch', 'wget', 'curl/',
             'go-http-client', 'mozlila/', 'bulid/',
         ];
+
         foreach ($bot_keywords as $pattern) {
             if (strpos($ua_lower, $pattern) !== false) {
-                $signals[] = 'ua_pattern';
+                $clean_pattern = trim($pattern, '/;');
+                
+                // SI c'est un ami, on change le nom du signal
+                if ($is_friend) {
+                    $signals[] = 'legit_ua_pattern:' . $clean_pattern;
+                } else {
+                    $signals[] = 'ua_pattern:' . $clean_pattern;
+                }
                 break;
             }
         }
+
+
 
         // Pas de navigateur reconnu dans le UA
         $browsers = ['mozilla', 'chrome', 'safari', 'firefox', 'edge', 'opera', 'msie', 'trident'];
@@ -539,7 +673,7 @@ class listener implements EventSubscriberInterface
      * Détection comportementale des bots (UA valide mais comportement impossible)
      * @return array Liste des signaux comportementaux détectés (vide = pas un bot)
      */
-    private function detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id, $user_agent = '')
+    private function detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id, $user_agent )
     {
         $signals = [];
         $user_id = (int)$this->user->data['user_id'];
@@ -707,9 +841,17 @@ class listener implements EventSubscriberInterface
         if ($geo && !empty($geo['hostname'])) {
             return $geo['hostname'];
         }
-        // Résolution DNS rapide (timeout par défaut du système)
-        $hostname = @gethostbyaddr($ip);
-        return ($hostname && $hostname !== $ip) ? $hostname : '-';
+        // Résolution DNS avec timeout 1s (gethostbyaddr natif peut bloquer 30s)
+        $hostname = '';
+        $rdns_raw = @shell_exec('timeout 1 getent hosts ' . escapeshellarg($ip) . ' 2>/dev/null');
+        if ($rdns_raw) {
+            $parts = preg_split('/\s+/', trim($rdns_raw));
+            $candidate = end($parts);
+            if ($candidate && $candidate !== $ip) {
+                $hostname = $candidate;
+            }
+        }
+        return $hostname ?: '-';
     }
 
     /**
@@ -876,10 +1018,16 @@ class listener implements EventSubscriberInterface
             return $cached;
         }
 
-        // DNS Reverse Lookup (avec timeout court)
-        $hostname = @gethostbyaddr($ip);
-        if ($hostname === $ip) {
-            $hostname = ''; // Pas de résolution
+        // DNS Reverse Lookup via shell avec timeout 1s pour éviter de bloquer les workers PHP
+        // (gethostbyaddr() natif n'a pas de timeout et peut bloquer jusqu'à 30s)
+        $hostname = '';
+        $rdns_raw = @shell_exec('timeout 1 getent hosts ' . escapeshellarg($ip) . ' 2>/dev/null');
+        if ($rdns_raw) {
+            $parts = preg_split('/\s+/', trim($rdns_raw));
+            $candidate = end($parts);
+            if ($candidate && $candidate !== $ip) {
+                $hostname = $candidate;
+            }
         }
 
         // Appel API ip-api.com (gratuit, 45 req/min)
