@@ -9,6 +9,9 @@ Extension de statistiques avancées pour phpBB 3.3+. Collecte et affiche les don
 - **Apprentissage comportemental** : Profilage des métriques scroll/interactions des membres connectés pour affiner la détection des invités
 - **Signal strict viewprofile** : Détection des accès directs à `memberlist.php?mode=viewprofile` sans navigation préalable et sans résolution écran (cookie/AJAX)
 - **Signal clone multi-IP invité** : Détection d’un fingerprint invité cloné (UA + télémétrie AJAX scroll) observé sur plusieurs IPs en fenêtre courte, avec exclusion stricte des IP FR/CO
+- **Signal clone cookie visiteur multi-IP** : Détection d’un cookie visiteur invité signé (`b59_vid`) réutilisé sur plusieurs IPs en fenêtre courte, avec exclusion stricte des IP FR/CO
+- **Signal strict cookie AJAX** : Détection d’un invité JS-actif dont le cookie signé n’est pas relu (ou incohérent) sur la requête AJAX
+- **Mode observation FR/CO** : Les mêmes contrôles cookie/AJAX tournent aussi sur FR/CO, mais avec signal `_shadow` (analyse/ACP uniquement, pas de ban fail2ban)
 - **Signal cross-IP distribué (CLI)** : Détection comportementale anti-spoof sur téléchargements PJ distribués via IP différentes (source Apache + jointures phpBB), avec exclusion stricte des IP FR
 - **Géolocalisation** : Carte du monde interactive (jVectorMap) avec cache IP
 - **Journal de navigation** : Log détaillé de chaque page visitée avec durée, referer, OS, navigateur
@@ -100,6 +103,21 @@ Snippets fail2ban fournis :
 - `fail2ban/phpbb-crossip-soft.conf`
 - `fail2ban/phpbb-crossip-hard.conf`
 - `fail2ban/jail.crossip.local.example`
+- `fail2ban/phpbb-guest-cookie-clone.conf`
+- `fail2ban/jail.guest-cookie-clone.local.example`
+
+La jail `phpbb-guest-cookie-clone` couvre les signaux stricts cookie :
+
+- `guest_cookie_clone_multi_ip`
+- `guest_cookie_ajax_fail`
+
+Le signal `guest_cookie_ajax_fail_shadow` (FR/CO) est conservé en base pour l’analyse comportementale, mais n’est pas matché par la jail fail2ban.
+
+Les états de relecture cookie via AJAX sont distingués :
+
+- `visitor_cookie_ajax_state=2` : cookie absent
+- `visitor_cookie_ajax_state=3` : cookie invalide (format/signature)
+- `visitor_cookie_ajax_state=4` : cookie incohérent (mismatch cookie page vs cookie AJAX)
 
 ## Structure
 
@@ -120,7 +138,7 @@ stats/
 
 ## Tables créées
 
-- `bastien59_stats` : Log principal des visites (IP, OS, navigateur, page, durée, etc.)
+- `bastien59_stats` : Log principal des visites (IP, OS, navigateur, page, durée, hash cookie visiteur, etc.)
 - `bastien59_stats_geo_cache` : Cache de géolocalisation IP
 - `bastien59_stats_behavior_profile` : Profils agrégés d'apprentissage comportemental
 - `bastien59_stats_behavior_seen` : Déduplication des sessions déjà apprises

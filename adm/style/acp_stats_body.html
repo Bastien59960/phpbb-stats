@@ -69,6 +69,10 @@
 .res-compare-bad { color: #c0392b; font-weight: bold; }
 .res-compare-mid { color: #d35400; font-weight: bold; }
 .res-compare-na { color: #999; }
+.diag-cookie-ok { color: #27ae60; font-weight: bold; }
+.diag-cookie-mid { color: #d35400; font-weight: bold; }
+.diag-cookie-bad { color: #c0392b; font-weight: bold; }
+.diag-cookie-na { color: #999; }
 
 /* Session info */
 .session-info { line-height: 1.6; }
@@ -298,13 +302,21 @@
                     <td class="session-tech">
                         <!-- IF SESSIONS.IS_BOT -->
                         <strong style="color:#e74c3c;">{SESSIONS.BOT_NAME}</strong><br>
+                        <!-- IF SESSIONS.RES_BOTH_MISSING -->
+                        <small style="color:#555;">{L_STATS_RES_SCREEN_LABEL} {SESSIONS.RES_SCREEN_PX}</small><br>
+                        <!-- ELSE -->
                         <small style="color:#555;">{L_STATS_RES_COOKIE_LABEL} {SESSIONS.RES_COOKIE_PX} | {L_STATS_RES_AJAX_LABEL} {SESSIONS.RES_AJAX_PX}</small><br>
+                        <!-- ENDIF -->
                         <small style="word-break:break-all; color:#666; font-size:10px;">{SESSIONS.USER_AGENT}</small>
                         <br><span class="badge {SESSIONS.SCROLL_CLASS}">{SESSIONS.SCROLL_LABEL}</span>
                         <br><small style="color:#777;">{L_STATS_RES_SOURCE_LABEL} {SESSIONS.RES_SOURCE_LABEL}</small>
                         <!-- ELSE -->
                         <strong>{SESSIONS.OS}</strong> | {SESSIONS.DEVICE}<br>
+                        <!-- IF SESSIONS.RES_BOTH_MISSING -->
+                        <small style="color:#555;">{L_STATS_RES_SCREEN_LABEL} {SESSIONS.RES_SCREEN_PX}</small><br>
+                        <!-- ELSE -->
                         <small style="color:#555;">{L_STATS_RES_COOKIE_LABEL} {SESSIONS.RES_COOKIE_PX} | {L_STATS_RES_AJAX_LABEL} {SESSIONS.RES_AJAX_PX}</small><br>
+                        <!-- ENDIF -->
                         <small style="word-break:break-all; color:#666; font-size:10px;">{SESSIONS.USER_AGENT}</small>
                         <br><span class="badge {SESSIONS.SCROLL_CLASS}">{SESSIONS.SCROLL_LABEL}</span>
                         <br><small style="color:#777;">{L_STATS_RES_SOURCE_LABEL} {SESSIONS.RES_SOURCE_LABEL}</small>
@@ -329,9 +341,20 @@
                             <strong>Reverse DNS :</strong> <!-- IF SESSIONS.HOSTNAME -->{SESSIONS.HOSTNAME}<!-- ELSE --><span style="color:#999;">Aucun nom d'hôte trouvé.</span><!-- ENDIF --><br>
                             <strong>Forward DNS :</strong> {SESSIONS.FORWARD_DNS_STATUS}<!-- IF SESSIONS.FORWARD_DNS_IPS --> (IPs: {SESSIONS.FORWARD_DNS_IPS})<!-- ENDIF --><br>
                             <strong>{L_STATS_SCROLL_LABEL}</strong> <span class="badge {SESSIONS.SCROLL_CLASS}">{SESSIONS.SCROLL_LABEL}</span><br>
+                            <!-- IF SESSIONS.RES_BOTH_MISSING -->
+                            <strong>{L_STATS_RES_SCREEN_LABEL}</strong> {SESSIONS.RES_SCREEN_PX}<br>
+                            <!-- ELSE -->
                             <strong>{L_STATS_RES_COOKIE_LABEL}</strong> {SESSIONS.RES_COOKIE_PX}<br>
                             <strong>{L_STATS_RES_AJAX_LABEL}</strong> {SESSIONS.RES_AJAX_PX}<br>
-                            <strong>{L_STATS_RES_COMPARE_LABEL}</strong> <span class="{SESSIONS.RES_COMPARE_CLASS}">{SESSIONS.RES_COMPARE_LABEL}</span>
+                            <!-- ENDIF -->
+                            <strong>{L_STATS_RES_COMPARE_LABEL}</strong> <span class="{SESSIONS.RES_COMPARE_CLASS}">{SESSIONS.RES_COMPARE_LABEL}</span><br>
+                            <strong>{L_STATS_VISITOR_COOKIE_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_STATUS_CLASS}">{SESSIONS.VISITOR_COOKIE_STATUS_LABEL}</span><br>
+                            <strong>{L_STATS_VISITOR_COOKIE_PREEXISTING_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_PREEXISTING_CLASS}">{SESSIONS.VISITOR_COOKIE_PREEXISTING_LABEL}</span><br>
+                            <strong>{L_STATS_VISITOR_COOKIE_AJAX_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_AJAX_CLASS}">{SESSIONS.VISITOR_COOKIE_AJAX_LABEL}</span><br>
+                            <strong>{L_STATS_VISITOR_COOKIE_CROSSIP_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_CROSSIP_CLASS}">{SESSIONS.VISITOR_COOKIE_CROSSIP_LABEL}</span>
+                            <!-- IF SESSIONS.VISITOR_COOKIE_CROSSIP_IPS --><br><small style="color:#666;">{SESSIONS.VISITOR_COOKIE_CROSSIP_IPS}</small><!-- ENDIF --><br>
+                            <strong>{L_STATS_VISITOR_COOKIE_RISK_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_RISK_CLASS}">{SESSIONS.VISITOR_COOKIE_RISK_LABEL}</span><br>
+                            <strong>{L_STATS_VISITOR_COOKIE_FAIL2BAN_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_FAIL2BAN_CLASS}">{SESSIONS.VISITOR_COOKIE_FAIL2BAN_LABEL}</span>
 
                             <!-- IF SESSIONS.IS_BOT -->
                                 <br><br>

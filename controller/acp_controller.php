@@ -18,6 +18,8 @@ class acp_controller
     protected $table_prefix;
     protected $has_ajax_telemetry_columns = null;
     protected $has_ajax_advanced_columns = null;
+    protected $has_visitor_cookie_column = null;
+    protected $has_visitor_cookie_debug_columns = null;
     protected $has_behavior_learning_tables = null;
 
     public function __construct($db, $template, $request, $user, $config, $table_prefix)
@@ -56,10 +58,10 @@ class acp_controller
         $show_bots = $this->request->variable('show_bots', 1);
         $bot_filter = ($show_bots) ? '' : ' AND is_bot = 0';
 
-        // Limite d'affichage (50 par défaut pour des performances optimales)
-        $display_limit = $this->request->variable('limit', 50);
+        // Limite d'affichage (500 par défaut)
+        $display_limit = $this->request->variable('limit', 500);
         if ($display_limit < 10) $display_limit = 10;
-        if ($display_limit > 500) $display_limit = 500;
+        if ($display_limit > 5000) $display_limit = 5000;
 
         // ================================================================
         // 1. STATISTIQUES GLOBALES
@@ -122,6 +124,9 @@ class acp_controller
             'MIN_SAMPLES' => $min_samples,
             'LEARNING_ENABLED' => $learning_enabled ? 1 : 0,
             'HAS_LEARNING_TABLES' => $this->has_behavior_learning_tables() ? 1 : 0,
+            'BEHAVIOR_GROUP_SESSIONS_TOTAL_PURE' => 0,
+            'BEHAVIOR_GROUP_SESSIONS_TOTAL_ALL' => 0,
+            'BEHAVIOR_GROUP_SESSIONS_MIXED' => 0,
         ]);
 
         if (!$this->has_behavior_learning_tables()) {
@@ -202,16 +207,21 @@ class acp_controller
      * Liste des sessions avec pages visitées
      * Optimisé : 2 requêtes au lieu de N+1 (plus de boucle de requêtes par session)
      */
-    private function assign_sessions($start_time, $bot_filter, $limit = 500)
+    private function assign_sessions($start_time, $bot_filter, $limit = 5000)
     {
-        // Requête 1 : Récupérer les sessions uniques avec page_count (correlated subquery)
-        $sql = 'SELECT s.*,
-                       (SELECT COUNT(*) FROM ' . $this->table_prefix . 'bastien59_stats s2
-                        WHERE s2.session_id = s.session_id) as page_count
+        // Requête 1 : sessions uniques triées par dernière activité.
+        // On garde la ligne is_first_visit=1 comme "landing", mais l'ordre et le filtre
+        // temporel se basent sur MAX(visit_time) de la session.
+        $sql = 'SELECT s.*, sess.page_count, sess.last_visit_time
                 FROM ' . $this->table_prefix . 'bastien59_stats s
-                WHERE s.visit_time > ' . $start_time . $bot_filter . '
+                INNER JOIN (
+                    SELECT session_id, COUNT(*) AS page_count, MAX(visit_time) AS last_visit_time
+                    FROM ' . $this->table_prefix . 'bastien59_stats
+                    GROUP BY session_id
+                ) sess ON sess.session_id = s.session_id
+                WHERE sess.last_visit_time > ' . (int)$start_time . $bot_filter . '
                 AND s.is_first_visit = 1
-                ORDER BY s.visit_time DESC';
+                ORDER BY sess.last_visit_time DESC';
 
         $result = $this->db->sql_query_limit($sql, $limit);
 
@@ -229,10 +239,21 @@ class acp_controller
 
         // Requête 2 : Récupérer TOUTES les pages de TOUTES les sessions en une requête
         $pages_by_session = [];
+        $has_cookie_column = $this->has_visitor_cookie_column();
+        $has_cookie_debug_columns = $this->has_visitor_cookie_debug_columns();
         $extra_ajax_columns = $this->has_ajax_telemetry_columns()
             ? ', screen_res_ajax, scroll_down_ajax, ajax_seen_time'
             : '';
-        $sql_pages = 'SELECT session_id, page_url, page_title, visit_time, duration, referer, screen_res' . $extra_ajax_columns . '
+        $extra_cookie_columns = $has_cookie_column
+            ? ', visitor_cookie_hash'
+            : '';
+        $extra_cookie_debug_columns = $has_cookie_debug_columns
+            ? ', visitor_cookie_preexisting, visitor_cookie_ajax_state, visitor_cookie_ajax_hash'
+            : '';
+        $sql_pages = 'SELECT session_id, page_url, page_title, visit_time, duration, referer, screen_res'
+                    . $extra_ajax_columns
+                    . $extra_cookie_columns
+                    . $extra_cookie_debug_columns . '
                       FROM ' . $this->table_prefix . 'bastien59_stats
                       WHERE session_id IN (' . implode(',', $session_ids) . ')
                       ORDER BY visit_time ASC';
@@ -241,6 +262,28 @@ class acp_controller
             $pages_by_session[$page['session_id']][] = $page;
         }
         $this->db->sql_freeresult($result_pages);
+
+        // Prépare une vue globale multi-IP par hash cookie visiteur (fenêtre 24h).
+        $session_cookie_hashes = [];
+        foreach ($sessions as $row) {
+            $hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
+            if ($this->is_valid_visitor_cookie_hash($hash)) {
+                $session_cookie_hashes[(string)$row['session_id']] = $hash;
+            }
+        }
+        foreach ($pages_by_session as $sid => $rows) {
+            if (isset($session_cookie_hashes[(string)$sid])) {
+                continue;
+            }
+            foreach ($rows as $page_row) {
+                $hash = strtolower(trim((string)($page_row['visitor_cookie_hash'] ?? '')));
+                if ($this->is_valid_visitor_cookie_hash($hash)) {
+                    $session_cookie_hashes[(string)$sid] = $hash;
+                    break;
+                }
+            }
+        }
+        $cookie_overview = $this->get_visitor_cookie_cross_ip_overview(array_values(array_unique(array_values($session_cookie_hashes))), 86400);
 
         // Assigner les sessions au template
         foreach ($sessions as $row) {
@@ -313,6 +356,10 @@ class acp_controller
             $res_cookie = trim((string)($row['screen_res'] ?? ''));
             $res_ajax = trim((string)($row['screen_res_ajax'] ?? ''));
             $ajax_time = (int)($row['ajax_seen_time'] ?? 0);
+            $visitor_cookie_hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
+            $visitor_cookie_preexisting = (int)($row['visitor_cookie_preexisting'] ?? 0);
+            $visitor_cookie_ajax_state = (int)($row['visitor_cookie_ajax_state'] ?? 0); // 0=none, 1=ok, 2=absent, 3=invalid, 4=mismatch
+            $visitor_cookie_ajax_hash = strtolower(trim((string)($row['visitor_cookie_ajax_hash'] ?? '')));
 
             foreach ($pages as $page_row) {
                 if (!$scroll_done && !empty($page_row['scroll_down_ajax'])) {
@@ -330,11 +377,35 @@ class acp_controller
                     $res_ajax = $ajax_candidate;
                     $ajax_time = $ajax_candidate_time;
                 }
+
+                $cookie_hash_candidate = strtolower(trim((string)($page_row['visitor_cookie_hash'] ?? '')));
+                if ($this->is_valid_visitor_cookie_hash($cookie_hash_candidate)) {
+                    $visitor_cookie_hash = $cookie_hash_candidate;
+                }
+
+                if ($has_cookie_debug_columns) {
+                    if (!empty($page_row['visitor_cookie_preexisting'])) {
+                        $visitor_cookie_preexisting = 1;
+                    }
+                    $ajax_state_candidate = (int)($page_row['visitor_cookie_ajax_state'] ?? 0);
+                    if ($ajax_state_candidate >= 0 && $ajax_state_candidate <= 4 && $ajax_state_candidate > $visitor_cookie_ajax_state) {
+                        $visitor_cookie_ajax_state = $ajax_state_candidate;
+                    }
+                    $ajax_hash_candidate = strtolower(trim((string)($page_row['visitor_cookie_ajax_hash'] ?? '')));
+                    if ($this->is_valid_visitor_cookie_hash($ajax_hash_candidate)) {
+                        $visitor_cookie_ajax_hash = $ajax_hash_candidate;
+                    }
+                }
+            }
+
+            if (isset($session_cookie_hashes[(string)$session_id]) && $this->is_valid_visitor_cookie_hash($session_cookie_hashes[(string)$session_id])) {
+                $visitor_cookie_hash = $session_cookie_hashes[(string)$session_id];
             }
 
             $res_cookie_px = $this->format_resolution_px($res_cookie);
             $res_ajax_px = $this->format_resolution_px($res_ajax);
             $res_display = ($res_ajax !== '') ? $res_ajax_px : (($res_cookie !== '') ? $res_cookie_px : '-');
+            $res_both_missing = ($res_cookie === '' && $res_ajax === '');
             $res_source_label = $this->user->lang('STATS_RES_SOURCE_UNKNOWN');
             if ($res_ajax !== '') {
                 $res_source_label = $this->user->lang('STATS_RES_SOURCE_AJAX');
@@ -357,6 +428,107 @@ class acp_controller
                 $res_compare_class = 'res-compare-mid';
             }
 
+            $visitor_cookie_present = $has_cookie_column && $this->is_valid_visitor_cookie_hash($visitor_cookie_hash);
+            $cookie_status_label = $visitor_cookie_present
+                ? $this->user->lang('STATS_VISITOR_COOKIE_STATUS_SET')
+                : $this->user->lang('STATS_VISITOR_COOKIE_STATUS_MISSING');
+            $cookie_status_class = $visitor_cookie_present ? 'diag-cookie-ok' : 'diag-cookie-bad';
+
+            if (!$has_cookie_debug_columns) {
+                $cookie_preexisting_label = $this->user->lang('STATS_VISITOR_COOKIE_PREEXISTING_UNKNOWN');
+                $cookie_preexisting_class = 'diag-cookie-na';
+            } elseif (!$visitor_cookie_present) {
+                $cookie_preexisting_label = '-';
+                $cookie_preexisting_class = 'diag-cookie-na';
+            } elseif ($visitor_cookie_preexisting === 1) {
+                $cookie_preexisting_label = $this->user->lang('STATS_VISITOR_COOKIE_STATUS_PREEXISTING_YES');
+                $cookie_preexisting_class = 'diag-cookie-mid';
+            } else {
+                $cookie_preexisting_label = $this->user->lang('STATS_VISITOR_COOKIE_STATUS_PREEXISTING_NO');
+                $cookie_preexisting_class = 'diag-cookie-ok';
+            }
+
+            $cookie_ajax_fail = false;
+            $cookie_ajax_mismatch = false;
+            if (!$has_cookie_debug_columns) {
+                $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_UNAVAILABLE');
+                $cookie_ajax_class = 'diag-cookie-na';
+            } elseif ($visitor_cookie_ajax_state === 0) {
+                $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_NONE');
+                $cookie_ajax_class = 'diag-cookie-na';
+            } elseif ($visitor_cookie_ajax_state === 1) {
+                if ($visitor_cookie_present && $this->is_valid_visitor_cookie_hash($visitor_cookie_ajax_hash) && !hash_equals($visitor_cookie_hash, $visitor_cookie_ajax_hash)) {
+                    $cookie_ajax_mismatch = true;
+                    $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_MISMATCH');
+                    $cookie_ajax_class = 'diag-cookie-bad';
+                } else {
+                    $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_OK');
+                    $cookie_ajax_class = 'diag-cookie-ok';
+                }
+            } elseif ($visitor_cookie_ajax_state === 2) {
+                $cookie_ajax_fail = true;
+                $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_ABSENT');
+                $cookie_ajax_class = 'diag-cookie-bad';
+            } elseif ($visitor_cookie_ajax_state === 3) {
+                $cookie_ajax_fail = true;
+                $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_INVALID');
+                $cookie_ajax_class = 'diag-cookie-bad';
+            } elseif ($visitor_cookie_ajax_state === 4) {
+                $cookie_ajax_mismatch = true;
+                $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_MISMATCH');
+                $cookie_ajax_class = 'diag-cookie-bad';
+            } else {
+                $cookie_ajax_fail = true;
+                $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_FAIL');
+                $cookie_ajax_class = 'diag-cookie-bad';
+            }
+
+            $cookie_cross_label = $this->user->lang('STATS_VISITOR_COOKIE_CROSSIP_NONE');
+            $cookie_cross_class = 'diag-cookie-ok';
+            $cookie_other_ips = '';
+            $cookie_other_ips_count = 0;
+            if ($visitor_cookie_present && isset($cookie_overview[$visitor_cookie_hash])) {
+                $ip_items = [];
+                foreach ($cookie_overview[$visitor_cookie_hash]['ips'] as $seen_ip => $seen_time) {
+                    if ((string)$seen_ip === (string)$row['user_ip']) {
+                        continue;
+                    }
+                    $ip_items[] = $seen_ip . ' (' . $this->user->format_date((int)$seen_time, 'd M H:i') . ')';
+                }
+                $cookie_other_ips_count = count($ip_items);
+                if ($cookie_other_ips_count > 0) {
+                    $preview = implode(', ', array_slice($ip_items, 0, 3));
+                    $cookie_other_ips = implode(', ', $ip_items);
+                    $cookie_cross_label = sprintf($this->user->lang('STATS_VISITOR_COOKIE_CROSSIP_FOUND'), $cookie_other_ips_count, $preview);
+                    $cookie_cross_class = ($cookie_other_ips_count >= 2) ? 'diag-cookie-bad' : 'diag-cookie-mid';
+                }
+            } elseif (!$visitor_cookie_present) {
+                $cookie_cross_label = '-';
+                $cookie_cross_class = 'diag-cookie-na';
+            }
+
+            $cookie_risk_label = $this->user->lang('STATS_VISITOR_COOKIE_RISK_LOW');
+            $cookie_risk_class = 'diag-cookie-ok';
+            if ($cookie_ajax_fail || $cookie_ajax_mismatch) {
+                $cookie_risk_label = $this->user->lang('STATS_VISITOR_COOKIE_RISK_MEDIUM');
+                $cookie_risk_class = 'diag-cookie-mid';
+            }
+            if (($cookie_ajax_fail || $cookie_ajax_mismatch) && $cookie_other_ips_count > 0) {
+                $cookie_risk_label = $this->user->lang('STATS_VISITOR_COOKIE_RISK_HIGH');
+                $cookie_risk_class = 'diag-cookie-bad';
+            }
+
+            $country_code_upper = strtoupper(trim((string)($row['country_code'] ?? '')));
+            $cookie_fail2ban_label = $this->user->lang('STATS_VISITOR_COOKIE_FAIL2BAN_NONE');
+            $cookie_fail2ban_class = 'diag-cookie-na';
+            if ($country_code_upper === 'FR' || $country_code_upper === 'CO') {
+                $cookie_fail2ban_label = $this->user->lang('STATS_VISITOR_COOKIE_FAIL2BAN_OBSERVE');
+                $cookie_fail2ban_class = 'diag-cookie-mid';
+            } elseif ($cookie_ajax_fail || $cookie_ajax_mismatch) {
+                $cookie_fail2ban_label = $this->user->lang('STATS_VISITOR_COOKIE_FAIL2BAN_ACTIVE');
+                $cookie_fail2ban_class = 'diag-cookie-bad';
+            }
+
             $scroll_label = $scroll_done ? $this->user->lang('STATS_SCROLL_DONE') : $this->user->lang('STATS_SCROLL_NONE');
             $scroll_class = $scroll_done ? 'badge-scroll-yes' : 'badge-scroll-no';
 
@@ -375,9 +547,24 @@ class acp_controller
                 'RES_AJAX'      => htmlspecialchars($res_ajax ?: '-', ENT_COMPAT, 'UTF-8'),
                 'RES_COOKIE_PX' => htmlspecialchars($res_cookie_px, ENT_COMPAT, 'UTF-8'),
                 'RES_AJAX_PX'   => htmlspecialchars($res_ajax_px, ENT_COMPAT, 'UTF-8'),
+                'RES_SCREEN_PX' => htmlspecialchars($res_display, ENT_COMPAT, 'UTF-8'),
+                'RES_BOTH_MISSING' => $res_both_missing ? 1 : 0,
                 'RES_SOURCE_LABEL' => htmlspecialchars($res_source_label, ENT_COMPAT, 'UTF-8'),
                 'RES_COMPARE_LABEL' => htmlspecialchars($res_compare_label, ENT_COMPAT, 'UTF-8'),
                 'RES_COMPARE_CLASS' => $res_compare_class,
+                'VISITOR_COOKIE_STATUS_LABEL' => htmlspecialchars($cookie_status_label, ENT_COMPAT, 'UTF-8'),
+                'VISITOR_COOKIE_STATUS_CLASS' => $cookie_status_class,
+                'VISITOR_COOKIE_PREEXISTING_LABEL' => htmlspecialchars($cookie_preexisting_label, ENT_COMPAT, 'UTF-8'),
+                'VISITOR_COOKIE_PREEXISTING_CLASS' => $cookie_preexisting_class,
+                'VISITOR_COOKIE_AJAX_LABEL' => htmlspecialchars($cookie_ajax_label, ENT_COMPAT, 'UTF-8'),
+                'VISITOR_COOKIE_AJAX_CLASS' => $cookie_ajax_class,
+                'VISITOR_COOKIE_CROSSIP_LABEL' => htmlspecialchars($cookie_cross_label, ENT_COMPAT, 'UTF-8'),
+                'VISITOR_COOKIE_CROSSIP_CLASS' => $cookie_cross_class,
+                'VISITOR_COOKIE_CROSSIP_IPS' => htmlspecialchars($cookie_other_ips, ENT_COMPAT, 'UTF-8'),
+                'VISITOR_COOKIE_RISK_LABEL' => htmlspecialchars($cookie_risk_label, ENT_COMPAT, 'UTF-8'),
+                'VISITOR_COOKIE_RISK_CLASS' => $cookie_risk_class,
+                'VISITOR_COOKIE_FAIL2BAN_LABEL' => htmlspecialchars($cookie_fail2ban_label, ENT_COMPAT, 'UTF-8'),
+                'VISITOR_COOKIE_FAIL2BAN_CLASS' => $cookie_fail2ban_class,
                 'SCROLL_DONE'   => $scroll_done,
                 'SCROLL_LABEL'  => htmlspecialchars($scroll_label, ENT_COMPAT, 'UTF-8'),
                 'SCROLL_CLASS'  => $scroll_class,
@@ -391,7 +578,7 @@ class acp_controller
                 'BOT_SOURCE'    => htmlspecialchars($bot_source, ENT_COMPAT, 'UTF-8'),
                 'SIGNALS'       => htmlspecialchars($row['signals'] ?? '', ENT_COMPAT, 'UTF-8'),
                 'SIGNALS_DESC'  => $this->format_signals_description($row['signals'] ?? ''),
-                'START_TIME'    => $this->user->format_date($row['visit_time']),
+                'START_TIME'    => $this->user->format_date((int)($row['last_visit_time'] ?? $row['visit_time'])),
                 'LANDING_PAGE'  => htmlspecialchars($row['page_title'], ENT_COMPAT, 'UTF-8'),
                 'LANDING_URL'   => htmlspecialchars($row['page_url'], ENT_COMPAT, 'UTF-8'),
                 'REFERER'       => $this->format_referer($row['referer']),
@@ -573,6 +760,115 @@ class acp_controller
     }
 
     /**
+     * Détecte si la colonne visitor_cookie_hash (migration 1.7.0) existe.
+     */
+    private function has_visitor_cookie_column()
+    {
+        if ($this->has_visitor_cookie_column !== null) {
+            return $this->has_visitor_cookie_column;
+        }
+
+        $sql = 'SELECT visitor_cookie_hash
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_visitor_cookie_column = !$has_error;
+        return $this->has_visitor_cookie_column;
+    }
+
+    /**
+     * Détecte si les colonnes debug cookie (migration 1.8.0) existent.
+     */
+    private function has_visitor_cookie_debug_columns()
+    {
+        if ($this->has_visitor_cookie_debug_columns !== null) {
+            return $this->has_visitor_cookie_debug_columns;
+        }
+
+        $sql = 'SELECT visitor_cookie_preexisting, visitor_cookie_ajax_state, visitor_cookie_ajax_hash
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_visitor_cookie_debug_columns = !$has_error;
+        return $this->has_visitor_cookie_debug_columns;
+    }
+
+    /**
+     * Retourne vrai si le hash cookie visiteur est valide.
+     */
+    private function is_valid_visitor_cookie_hash($hash)
+    {
+        return (bool)preg_match('/^[a-f0-9]{64}$/', strtolower(trim((string)$hash)));
+    }
+
+    /**
+     * Construit un aperçu des IPs observées par hash cookie visiteur.
+     * @return array<string,array{ips:array<string,int>}>
+     */
+    private function get_visitor_cookie_cross_ip_overview(array $hashes, $window_sec = 86400)
+    {
+        $overview = [];
+        if (!$this->has_visitor_cookie_column()) {
+            return $overview;
+        }
+
+        $valid_hashes = [];
+        foreach ($hashes as $hash) {
+            $hash = strtolower(trim((string)$hash));
+            if ($this->is_valid_visitor_cookie_hash($hash)) {
+                $valid_hashes[$hash] = true;
+            }
+        }
+        if (empty($valid_hashes)) {
+            return $overview;
+        }
+
+        $escaped_hashes = [];
+        foreach (array_keys($valid_hashes) as $hash) {
+            $escaped_hashes[] = '\'' . $this->db->sql_escape($hash) . '\'';
+            $overview[$hash] = ['ips' => []];
+        }
+
+        $cutoff = time() - max(3600, (int)$window_sec);
+        $sql = 'SELECT visitor_cookie_hash, user_ip, MAX(visit_time) AS last_seen
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE visitor_cookie_hash IN (' . implode(',', $escaped_hashes) . ')
+                AND visit_time >= ' . (int)$cutoff . '
+                GROUP BY visitor_cookie_hash, user_ip
+                ORDER BY last_seen DESC';
+        $result = $this->db->sql_query($sql);
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
+            $ip = trim((string)($row['user_ip'] ?? ''));
+            if (!isset($overview[$hash]) || $ip === '') {
+                continue;
+            }
+            if (!isset($overview[$hash]['ips'][$ip])) {
+                $overview[$hash]['ips'][$ip] = (int)($row['last_seen'] ?? 0);
+            }
+        }
+        $this->db->sql_freeresult($result);
+
+        return $overview;
+    }
+
+    /**
      * Détecte la disponibilité des tables d'apprentissage comportemental.
      */
     private function has_behavior_learning_tables()
@@ -664,11 +960,15 @@ class acp_controller
                     SELECT
                         session_id,
                         CASE
-                            WHEN MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 1 THEN \'bots\'
+                            WHEN MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 1
+                                 AND MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0
+                                 AND MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0 THEN \'bots\'
                             WHEN MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 1
-                                 AND MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0 THEN \'members\'
+                                 AND MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0
+                                 AND MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 0 THEN \'members\'
                             WHEN MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 1
-                                 AND MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0 THEN \'guests\'
+                                 AND MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0
+                                 AND MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 0 THEN \'guests\'
                             ELSE \'mixed\'
                         END AS grp,
                         MAX(CASE WHEN ajax_seen_time > 0 THEN 1 ELSE 0 END) AS ajax_seen,
@@ -681,23 +981,38 @@ class acp_controller
                     WHERE visit_time > ' . (int)$start_time . '
                     GROUP BY session_id
                 ) AS sess
-                WHERE sess.grp <> \'mixed\'
                 GROUP BY sess.grp';
+
+        $group_counts = [
+            'members' => 0,
+            'guests' => 0,
+            'bots' => 0,
+            'mixed' => 0,
+        ];
 
         $result = $this->db->sql_query($metrics_sql);
         while ($row = $this->db->sql_fetchrow($result)) {
+            $grp = (string)($row['grp'] ?? '');
+            if (isset($group_counts[$grp])) {
+                $group_counts[$grp] = (int)$row['sessions'];
+            }
+
+            if ($grp === 'mixed') {
+                continue;
+            }
+
             $sessions = max(1, (int)$row['sessions']);
             $scroll_sessions = max(1, (int)$row['scroll_sessions']);
             $ajax_pct = round(((int)$row['ajax_sessions'] * 100) / $sessions, 1);
             $scroll_pct = round(((int)$row['scroll_sessions'] * 100) / $sessions, 1);
             $zero_interact_pct = round(((int)$row['zero_interact_scrolls'] * 100) / $scroll_sessions, 1);
 
-            $group_label = $row['grp'];
-            if ($row['grp'] === 'members') {
+            $group_label = $grp;
+            if ($grp === 'members') {
                 $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_MEMBERS');
-            } elseif ($row['grp'] === 'guests') {
+            } elseif ($grp === 'guests') {
                 $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS');
-            } elseif ($row['grp'] === 'bots') {
+            } elseif ($grp === 'bots') {
                 $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_BOTS');
             }
 
@@ -710,10 +1025,18 @@ class acp_controller
                 'AVG_SCROLL_EVENTS' => number_format((float)$row['avg_scroll_events'], 1, ',', ' '),
                 'AVG_SCROLL_MAX_Y' => (int)$row['avg_scroll_max_y'],
                 'ZERO_INTERACT_RATE' => number_format($zero_interact_pct, 1, ',', ' '),
-                'IS_BOTS' => ($row['grp'] === 'bots') ? 1 : 0,
+                'IS_BOTS' => ($grp === 'bots') ? 1 : 0,
             ]);
         }
         $this->db->sql_freeresult($result);
+
+        $pure_total = (int)$group_counts['members'] + (int)$group_counts['guests'] + (int)$group_counts['bots'];
+        $all_total = $pure_total + (int)$group_counts['mixed'];
+        $this->template->assign_vars([
+            'BEHAVIOR_GROUP_SESSIONS_TOTAL_PURE' => number_format($pure_total, 0, ',', ' '),
+            'BEHAVIOR_GROUP_SESSIONS_TOTAL_ALL' => number_format($all_total, 0, ',', ' '),
+            'BEHAVIOR_GROUP_SESSIONS_MIXED' => number_format((int)$group_counts['mixed'], 0, ',', ' '),
+        ]);
     }
 
     /**
@@ -817,6 +1140,9 @@ class acp_controller
             'ajax_webdriver' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_WEBDRIVER'),
             'ajax_scroll_profile' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_AJAX_PROFILE'),
             'guest_fp_clone_multi_ip' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_FP_CLONE'),
+            'guest_cookie_clone_multi_ip' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_CLONE'),
+            'guest_cookie_ajax_fail' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_AJAX_FAIL'),
+            'guest_cookie_ajax_fail_shadow' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_AJAX_FAIL_SHADOW'),
         ];
 
         $sql = 'SELECT COUNT(*) AS total_sessions
@@ -860,7 +1186,7 @@ class acp_controller
                 WHERE visit_time > ' . (int)$start_time . '
                 AND is_first_visit = 1
                 AND user_id <= 1
-                AND (signals LIKE \'%learn_%\' OR signals LIKE \'%ajax_scroll_%\' OR signals LIKE \'%ajax_webdriver%\' OR signals LIKE \'%guest_fp_clone_multi_ip%\')
+                AND (signals LIKE \'%learn_%\' OR signals LIKE \'%ajax_scroll_%\' OR signals LIKE \'%ajax_webdriver%\' OR signals LIKE \'%guest_fp_clone_multi_ip%\' OR signals LIKE \'%guest_cookie_clone_multi_ip%\' OR signals LIKE \'%guest_cookie_ajax_fail%\' OR signals LIKE \'%guest_cookie_ajax_fail_shadow%\')
                 ORDER BY visit_time DESC';
         $result = $this->db->sql_query_limit($sql, $limit);
 
@@ -935,6 +1261,9 @@ class acp_controller
             'ajax_scroll_jump'     => 'Scroll en saut brusque (grande distance avec 1-2 événements) (30 pts)',
             'ajax_scroll_profile'  => 'Profil de scroll automatisé (combinaison de signaux AJAX) (70 pts)',
             'guest_fp_clone_multi_ip' => 'Fingerprint invité cloné sur plusieurs IPs en fenêtre courte (hors FR/CO) (strict)',
+            'guest_cookie_clone_multi_ip' => 'Cookie visiteur invité réutilisé sur plusieurs IPs en fenêtre courte (hors FR/CO) (strict)',
+            'guest_cookie_ajax_fail' => 'Cookie visiteur signé non relu (ou incohérent) lors de l\'AJAX malgré JS actif (hors FR/CO) (strict)',
+            'guest_cookie_ajax_fail_shadow' => 'Cookie visiteur signé non relu (ou incohérent) en AJAX — mode observation FR/CO (non signalé fail2ban)',
             'learn_no_interact_outlier' => 'Écart au profil appris: absence d\'interaction inhabituel pour ce profil (25 pts)',
             'learn_speed_outlier'   => 'Écart au profil appris: scroll initial anormalement rapide (25 pts)',
             'learn_sparse_scroll_outlier' => 'Écart au profil appris: trop peu d\'événements de scroll (20 pts)',
@@ -1056,7 +1385,7 @@ class acp_controller
     /**
      * Referers complets cliquables (externes uniquement)
      */
-    private function assign_full_referers($start_time, $limit = 500)
+    private function assign_full_referers($start_time, $limit = 5000)
     {
         $server_name = $this->request->server('SERVER_NAME', '');
 

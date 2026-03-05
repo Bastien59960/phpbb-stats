@@ -75,6 +75,14 @@
             <div class="k">{L_STATS_BEHAVIOR_TABLES_STATUS}</div>
             <div class="v"><!-- IF HAS_LEARNING_TABLES -->OK<!-- ELSE -->N/A<!-- ENDIF --></div>
         </div>
+        <div class="behavior-card">
+            <div class="k">{L_STATS_BEHAVIOR_PURE_SESSIONS}</div>
+            <div class="v">{BEHAVIOR_GROUP_SESSIONS_TOTAL_PURE}</div>
+        </div>
+        <div class="behavior-card">
+            <div class="k">{L_STATS_BEHAVIOR_MIXED_SESSIONS}</div>
+            <div class="v">{BEHAVIOR_GROUP_SESSIONS_MIXED}</div>
+        </div>
     </div>
 
     <!-- IF not HAS_LEARNING_TABLES -->
@@ -86,6 +94,10 @@
     <!-- IF HAS_LEARNING_TABLES -->
     <div class="behavior-box">
         <h3>{L_STATS_BEHAVIOR_GROUP_COMPARISON}</h3>
+        <p class="behavior-muted" style="padding:10px 12px; margin:0; border-bottom:1px solid #eee;">
+            {L_STATS_BEHAVIOR_MIXED_EXPLAIN}
+            ({BEHAVIOR_GROUP_SESSIONS_TOTAL_PURE} / {BEHAVIOR_GROUP_SESSIONS_TOTAL_ALL}).
+        </p>
         <table class="behavior-table">
             <thead>
                 <tr>

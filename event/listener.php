@@ -22,10 +22,15 @@ class listener implements EventSubscriberInterface
     protected $current_log_id = 0;
     protected $has_ajax_telemetry_columns = null;
     protected $has_ajax_advanced_columns = null;
+    protected $has_visitor_cookie_column = null;
+    protected $has_visitor_cookie_debug_columns = null;
     protected $has_behavior_learning_tables = null;
     protected $behavior_profile_cache = [];
+    protected $visitor_cookie_preexisting = false;
 
     const AJAX_LINK_NAME = 'b59_stats_px';
+    const VISITOR_COOKIE_NAME = 'b59_vid';
+    const VISITOR_COOKIE_TTL = 15552000; // 180 days
 
     // Domaines reverse DNS légitimes pour vérification des bots prétendus
     // Source : https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot
@@ -140,18 +145,20 @@ class listener implements EventSubscriberInterface
         }
 
         $time_now = time();
-        $session_id = $this->user->session_id;
+        $user_ip = (string)$this->user->ip;
+        $native_session_id = (string)($this->user->session_id ?? '');
+        $session_id = $this->build_tracking_session_id($native_session_id, $user_ip, (int)$this->user->data['user_id']);
         $user_agent = $this->user->browser ?? '';
-        $user_ip = $this->user->ip;
 
         // Timeout de session configurable (15 min par défaut)
         $session_timeout = (int)($this->config['bastien59_stats_session_timeout'] ?? 900);
 
-        // 1. Vérifier si c'est la première visite de ce visiteur (basé sur IP + timeout)
-        // Un visiteur est "nouveau" s'il n'a pas de visite dans les X dernières minutes
+        // 1. Vérifier si c'est la première visite de ce visiteur (session trackée + timeout)
+        // Le tracking est isolé par (session phpBB + IP + user_id) pour éviter les mélanges NAT/proxy.
         $sql = 'SELECT log_id, visit_time, session_id as last_session
                 FROM ' . $this->table_prefix . 'bastien59_stats
-                WHERE user_ip = \'' . $this->db->sql_escape($user_ip) . '\'
+                WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
+                AND user_ip = \'' . $this->db->sql_escape($user_ip) . '\'
                 ORDER BY visit_time DESC';
 
         $result = $this->db->sql_query_limit($sql, 1);
@@ -167,7 +174,7 @@ class listener implements EventSubscriberInterface
             if ($time_since_last > $session_timeout) {
                 $is_first_visit = 1; // Nouvelle session après timeout
             } else {
-                // Même session : utiliser le session_id de la dernière visite pour cohérence
+                // Même session : conserver la clé session trackée.
                 $session_id = $last_row['last_session'];
             }
         }
@@ -212,6 +219,8 @@ class listener implements EventSubscriberInterface
 
         // Résolution via cookie
         $screen_res = $this->request->variable('bastien59_stats_res', '', true, \phpbb\request\request_interface::COOKIE);
+        $visitor_cookie_id = $this->get_or_init_visitor_cookie_id();
+        $visitor_cookie_hash = ($visitor_cookie_id !== '') ? hash('sha256', $visitor_cookie_id) : '';
 
         // === DÉTECTION DES BOTS (2 couches) ===
         // Couche 1 : Protection bots légitimes (phpBB natif + whitelist + vérif rDNS)
@@ -256,6 +265,7 @@ class listener implements EventSubscriberInterface
         $is_bot = $is_legit_bot ? 1 : 0;
         $bot_source = $is_legit_bot ? 'phpbb' : '';
         $all_signals = [];
+        $actionable_signals = [];
 
         if (!$is_legit_bot) {
             // Couche 2a : Détection par User-Agent (versions anciennes, patterns bots, anomalies)
@@ -271,13 +281,17 @@ class listener implements EventSubscriberInterface
                 $screen_res,
                 $session_id,
                 $user_agent,
-                (string)($geo_data['country_code'] ?? '')
+                (string)($geo_data['country_code'] ?? ''),
+                $visitor_cookie_hash
             );
 
             // Combiner : faux bot légitime + UA + comportementaux
             $all_signals = array_merge($fake_bot_signals, $ua_signals, $behavior_signals);
+            $actionable_signals = array_values(array_filter($all_signals, function ($sig) {
+                return !preg_match('/_shadow$/', (string)$sig);
+            }));
 
-            if (!empty($all_signals)) {
+            if (!empty($actionable_signals)) {
                 $is_bot = 1;
                 $bot_source = !empty($strong_ua_signals) ? 'extension' : 'behavior';
             }
@@ -286,9 +300,24 @@ class listener implements EventSubscriberInterface
         // Classification du referer
         $referer_type = $this->classify_referer($referer);
 
-        // 4. Écriture security_audit.log (bridge vers fail2ban)
+        // 4. Reclassification rétroactive:
+        // si la session est désormais bot, marquer les lignes précédentes de cette session en bot.
+        if ($is_bot === 1 && !empty($actionable_signals) && !$is_first_visit) {
+            $sql_reclass = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
+                            SET is_bot = 1,
+                                bot_source = CASE
+                                    WHEN bot_source = \'\' THEN \'' . $this->db->sql_escape($bot_source) . '\'
+                                    ELSE bot_source
+                                END
+                            WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
+                            AND user_ip = \'' . $this->db->sql_escape($user_ip) . '\'
+                            AND is_bot = 0';
+            $this->db->sql_query($sql_reclass);
+        }
+
+        // 5. Écriture security_audit.log (bridge vers fail2ban)
         // Ne log que les bots avec signaux détectés (pas phpBB natifs légitimes)
-        if (!empty($all_signals)) {
+        if (!empty($actionable_signals)) {
             // Compter les pages dans la session pour le log
             $page_count = 0;
             if (!$is_first_visit) {
@@ -302,14 +331,14 @@ class listener implements EventSubscriberInterface
             $this->write_security_audit(
                 $this->user->ip, $session_id,
                 (int)$this->user->data['user_id'],
-                $all_signals, $user_agent, $page_url,
+                $actionable_signals, $user_agent, $page_url,
                 $screen_res, $page_count,
                 $hostname_check ?? ($geo_data['hostname'] ?? ''),
                 $claimed_bot, $rdns_fail_reason
             );
         }
 
-        // 5. Enregistrement
+        // 6. Enregistrement
         $sql_ary = [
             'session_id'     => $session_id,
             'user_id'        => (int)$this->user->data['user_id'],
@@ -332,6 +361,14 @@ class listener implements EventSubscriberInterface
             'is_first_visit' => $is_first_visit,
             'signals'        => substr(implode(',', $all_signals), 0, 255),
         ];
+        if ($this->has_visitor_cookie_column()) {
+            $sql_ary['visitor_cookie_hash'] = substr(strtolower($visitor_cookie_hash), 0, 64);
+        }
+        if ($this->has_visitor_cookie_debug_columns()) {
+            $sql_ary['visitor_cookie_preexisting'] = $this->visitor_cookie_preexisting ? 1 : 0;
+            $sql_ary['visitor_cookie_ajax_state'] = 0;
+            $sql_ary['visitor_cookie_ajax_hash'] = '';
+        }
 
         $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats ' . $this->db->sql_build_array('INSERT', $sql_ary);
         $this->db->sql_query($sql);
@@ -343,7 +380,7 @@ class listener implements EventSubscriberInterface
             $this->learn_registered_behavior($session_id, $user_agent, $screen_res);
         }
 
-        // 5. Nettoyage automatique (1 chance sur 100)
+        // 7. Nettoyage automatique (1 chance sur 100)
         // Rétention différenciée : 5 jours pour les bots, 30 jours pour les humains
         if (mt_rand(1, 100) === 1) {
             $retention_humans = (int)($this->config['bastien59_stats_retention'] ?? 30);
@@ -436,7 +473,8 @@ class listener implements EventSubscriberInterface
 
         // Script léger:
         // - garde la méthode cookie existante
-        // - envoie immédiatement résolution + état scroll via endpoint AJAX sécurisé
+        // - envoie un ping AJAX immédiat pour vérifier le cookie visiteur
+        // - conserve un envoi AJAX séparé au 1er scroll pour la télémétrie comportementale
         $script = <<<HTML
 <script>
 (function(w,d,c){
@@ -488,10 +526,13 @@ class listener implements EventSubscriberInterface
     // Endpoint AJAX (noms de clés volontairement opaques côté client)
     if(!c||!c.u||!c.t||!c.s||!c.i||!w.fetch||!w.FormData){return;}
 
-    var k='b59x3_'+String(c.s||'');
+    var kCookie='b59x3c_'+String(c.s||'');
+    var kScroll='b59x3s_'+String(c.s||'');
     var ttl=Math.max(300,parseInt(c.x||900,10))*1000;
-    var sent=false;
-    var inflight=false;
+    var cookieSent=false;
+    var cookieInflight=false;
+    var scrollSent=false;
+    var scrollInflight=false;
     var t0=Date.now();
     var bm=0;
     var se=0;
@@ -514,7 +555,7 @@ class listener implements EventSubscriberInterface
         se++;
         if(y>my){my=y;}
     }
-    function wasSent(){
+    function wasSent(k){
         try{
             if(w.sessionStorage){
                 var raw=w.sessionStorage.getItem(k)||'';
@@ -525,19 +566,50 @@ class listener implements EventSubscriberInterface
         }catch(e){}
         return false;
     }
-    function markSent(){
+    function markSent(k){
         try{ if(w.sessionStorage){ w.sessionStorage.setItem(k,String(Date.now())); } }catch(e){}
     }
-    function sendOnFirstScroll(){
-        if(sent||inflight||wasSent()){ return; }
-        inflight=true;
+    function postAjax(f,onOk,onDone){
+        w.fetch(String(c.u),{
+            method:'POST',
+            body:f,
+            credentials:'same-origin',
+            headers:{'X-Requested-With':'XMLHttpRequest'}
+        }).then(function(resp){
+            if(!resp||!resp.ok){throw 0;}
+            return resp.json().catch(function(){ return {ok:1}; });
+        }).then(function(data){
+            if(data&&String(data.ok)==='1'&&typeof onOk==='function'){
+                onOk();
+            }
+        }).catch(function(){}).finally(function(){
+            if(typeof onDone==='function'){ onDone(); }
+        });
+    }
+    function basePayload(scrollFlag){
         var f=new FormData();
         f.append('k',String(c.t||''));
         f.append('s',String(c.s||''));
         f.append('i',String(c.i||0));
-        f.append('a','1');
+        f.append('a',String(scrollFlag?1:0));
         var r=g();
         if(r){f.append('r',r);}
+        f.append('v','2');
+        return f;
+    }
+    function sendCookieProbe(){
+        if(cookieSent||cookieInflight||wasSent(kCookie)){ cookieSent=true; return; }
+        cookieInflight=true;
+        var f=basePayload(0);
+        postAjax(f,function(){
+            cookieSent=true;
+            markSent(kCookie);
+        },function(){ cookieInflight=false; });
+    }
+    function sendOnFirstScroll(){
+        if(scrollSent||scrollInflight||wasSent(kScroll)){ scrollSent=true; return; }
+        scrollInflight=true;
+        var f=basePayload(1);
         var dt=Date.now()-t0;
         if(dt<0){dt=0;}
         if(dt>120000){dt=120000;}
@@ -552,28 +624,17 @@ class listener implements EventSubscriberInterface
         f.append('n',String(sn));
         f.append('y',String(sy));
         f.append('w',String(mwd?1:0));
-        f.append('v','1');
-        w.fetch(String(c.u),{
-            method:'POST',
-            body:f,
-            credentials:'same-origin',
-            headers:{'X-Requested-With':'XMLHttpRequest'}
-        }).then(function(resp){
-            if(!resp||!resp.ok){throw 0;}
-            return resp.json().catch(function(){ return {ok:1}; });
-        }).then(function(data){
-            if(data&&String(data.ok)==='1'){
-                sent=true;
-                markSent();
-            }
-        }).catch(function(){}).finally(function(){ inflight=false; });
+        postAjax(f,function(){
+            scrollSent=true;
+            markSent(kScroll);
+        },function(){ scrollInflight=false; });
     }
 
-    if(wasSent()){ return; }
+    if(wasSent(kCookie)&&wasSent(kScroll)){ return; }
 
     var done=false;
     function h(){
-        if(done||wasSent()){ done=true; return; }
+        if(done||wasSent(kScroll)){ done=true; return; }
         e7();
         var y=oy();
         if(y>12){
@@ -582,7 +643,7 @@ class listener implements EventSubscriberInterface
             if(w.removeEventListener){w.removeEventListener('scroll',h,true);}
         }
     }
-    if(w.addEventListener){
+    if(w.addEventListener && !wasSent(kScroll)){
         w.addEventListener('mousemove',e1,{passive:true,capture:true});
         w.addEventListener('keydown',e2,{passive:true,capture:true});
         w.addEventListener('touchstart',e3,{passive:true,capture:true});
@@ -592,11 +653,205 @@ class listener implements EventSubscriberInterface
         w.addEventListener('scroll',h,{passive:true,capture:true});
         h();
     }
+    if(!wasSent(kCookie)){
+        if(w.setTimeout){
+            w.setTimeout(sendCookieProbe,120);
+        }else{
+            sendCookieProbe();
+        }
+    }
 })(window,document,$ajax_json);
 </script>
 HTML;
 
         $this->template->append_var('RUN_CRON_TASK', $script);
+    }
+
+    /**
+     * Construit une clé de session de tracking stable et cloisonnée.
+     * Évite les collisions entre visiteurs partageant IP/NAT/proxy.
+     */
+    private function build_tracking_session_id($native_session_id, $user_ip, $user_id)
+    {
+        $sid = trim((string)$native_session_id);
+        $ip = trim((string)$user_ip);
+        $uid = (int)$user_id;
+
+        if ($sid !== '' && $ip !== '') {
+            return md5($sid . '|' . $ip . '|' . $uid);
+        }
+        if ($sid !== '') {
+            return md5('sid|' . $sid . '|' . $uid);
+        }
+        if ($ip !== '') {
+            return md5('ip|' . $ip . '|' . $uid);
+        }
+
+        return md5('fallback|' . microtime(true) . '|' . mt_rand());
+    }
+
+    /**
+     * Récupère un identifiant visiteur signé via cookie, ou en émet un nouveau.
+     */
+    private function get_or_init_visitor_cookie_id()
+    {
+        $raw = trim((string)$this->request->variable(self::VISITOR_COOKIE_NAME, '', true, \phpbb\request\request_interface::COOKIE));
+        $id = $this->parse_signed_visitor_cookie($raw);
+        if ($id !== '') {
+            $this->visitor_cookie_preexisting = true;
+            return $id;
+        }
+        $this->visitor_cookie_preexisting = false;
+
+        $id = $this->generate_visitor_cookie_id();
+        if ($id === '') {
+            return '';
+        }
+
+        $signed = $this->build_signed_visitor_cookie($id);
+        if ($signed !== '') {
+            $this->issue_visitor_cookie($signed);
+        }
+
+        return $id;
+    }
+
+    /**
+     * Valide et extrait l'identifiant d'un cookie signé format v1.<id>.<sig>.
+     */
+    private function parse_signed_visitor_cookie($raw)
+    {
+        if (!preg_match('/^v1\.([a-f0-9]{32})\.([a-f0-9]{24})$/i', (string)$raw, $m)) {
+            return '';
+        }
+
+        $id = strtolower((string)$m[1]);
+        $sig = strtolower((string)$m[2]);
+        foreach ($this->get_visitor_cookie_secrets() as $secret) {
+            $expected = substr(hash_hmac('sha256', 'v1|' . $id, $secret), 0, 24);
+            if (hash_equals($expected, $sig)) {
+                return $id;
+            }
+        }
+
+        return '';
+    }
+
+    /**
+     * Construit la valeur signée d'un cookie visiteur.
+     */
+    private function build_signed_visitor_cookie($id)
+    {
+        $cookie_id = strtolower(trim((string)$id));
+        if (!preg_match('/^[a-f0-9]{32}$/', $cookie_id)) {
+            return '';
+        }
+
+        $sig = substr(hash_hmac('sha256', 'v1|' . $cookie_id, $this->get_visitor_cookie_secret()), 0, 24);
+        return 'v1.' . $cookie_id . '.' . $sig;
+    }
+
+    /**
+     * Émet le cookie visiteur (HttpOnly) avec paramètres de cookie phpBB.
+     */
+    private function issue_visitor_cookie($value)
+    {
+        $val = trim((string)$value);
+        if ($val === '' || headers_sent()) {
+            return;
+        }
+
+        $expires = time() + self::VISITOR_COOKIE_TTL;
+        $path = (string)($this->config['cookie_path'] ?? '/');
+        if ($path === '') {
+            $path = '/';
+        }
+        $domain = (string)($this->config['cookie_domain'] ?? '');
+        $secure = !empty($this->config['cookie_secure']);
+
+        if (PHP_VERSION_ID >= 70300) {
+            @setcookie(self::VISITOR_COOKIE_NAME, $val, [
+                'expires' => $expires,
+                'path' => $path,
+                'domain' => $domain,
+                'secure' => $secure,
+                'httponly' => true,
+                'samesite' => 'Lax',
+            ]);
+            return;
+        }
+
+        @setcookie(
+            self::VISITOR_COOKIE_NAME,
+            $val,
+            $expires,
+            $path . '; samesite=lax',
+            $domain,
+            $secure,
+            true
+        );
+    }
+
+    /**
+     * Génère un identifiant visiteur 128 bits en hex.
+     */
+    private function generate_visitor_cookie_id()
+    {
+        try {
+            return bin2hex(random_bytes(16));
+        } catch (\Throwable $e) {
+            // Fallbacks pour environnements restreints.
+        }
+
+        if (function_exists('openssl_random_pseudo_bytes')) {
+            $bytes = @openssl_random_pseudo_bytes(16);
+            if (is_string($bytes) && strlen($bytes) === 16) {
+                return bin2hex($bytes);
+            }
+        }
+
+        return substr(sha1(uniqid('', true) . '|' . mt_rand()), 0, 32);
+    }
+
+    /**
+     * Secret local pour signature du cookie visiteur.
+     */
+    private function get_visitor_cookie_secret()
+    {
+        $secrets = $this->get_visitor_cookie_secrets();
+        return $secrets[0];
+    }
+
+    /**
+     * Secrets de validation du cookie visiteur.
+     * Le premier est utilisé pour signer les nouveaux cookies.
+     * Les suivants sont acceptés en lecture pour compatibilité.
+     *
+     * @return string[]
+     */
+    private function get_visitor_cookie_secrets()
+    {
+        $secrets = [];
+
+        $seed_primary = (string)($this->config['bastien59_stats_cookie_secret'] ?? '');
+        if ($seed_primary === '') {
+            $seed_primary = (string)($this->config['cookie_name'] ?? '') . '|' . (string)($this->config['server_name'] ?? '');
+        }
+        if ($seed_primary === '') {
+            $seed_primary = 'b59-fallback-seed';
+        }
+        $secrets[] = hash('sha256', 'b59-visitor-cookie|' . $seed_primary);
+
+        // Compat ancienne signature (listener historique basé sur rand_seed).
+        $seed_legacy = (string)($this->config['rand_seed'] ?? '');
+        if ($seed_legacy !== '') {
+            $legacy = hash('sha256', 'b59-visitor-cookie|' . $seed_legacy);
+            if (!in_array($legacy, $secrets, true)) {
+                $secrets[] = $legacy;
+            }
+        }
+
+        return $secrets;
     }
 
     /**
@@ -760,11 +1015,12 @@ HTML;
      * Détection comportementale des bots (UA valide mais comportement impossible)
      * @return array Liste des signaux comportementaux détectés (vide = pas un bot)
      */
-    private function detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id, $user_agent, $country_code_hint = '')
+    private function detect_bot_behavior($page_url, $referer, $is_first_visit, $screen_res, $session_id, $user_agent, $country_code_hint = '', $visitor_cookie_hash = '')
     {
         $signals = [];
         $hard_signals = [];
         $score_signals = [];
+        $observation_signals = [];
         $behavior_score = 0;
 
         $add_hard_signal = function ($signal) use (&$hard_signals) {
@@ -779,6 +1035,11 @@ HTML;
             if (!in_array($signal, $score_signals, true)) {
                 $score_signals[] = $signal;
                 $behavior_score += (int)$points;
+            }
+        };
+        $add_observe_signal = function ($signal) use (&$observation_signals) {
+            if ($signal !== '' && !in_array($signal, $observation_signals, true)) {
+                $observation_signals[] = $signal;
             }
         };
 
@@ -967,6 +1228,37 @@ HTML;
                 if ($this->detect_guest_fingerprint_clone_multi_ip($session_id, $user_agent, $snapshot, $country_code)) {
                     $add_hard_signal('guest_fp_clone_multi_ip');
                 }
+
+                // Signal 8 : même cookie visiteur réutilisé sur plusieurs IPs en fenêtre courte.
+                if ($this->detect_guest_cookie_clone_multi_ip($visitor_cookie_hash, $country_code)) {
+                    $add_hard_signal('guest_cookie_clone_multi_ip');
+                }
+
+                // Signal 9 (strict) : AJAX reçu mais cookie signé non relu/invalide/incohérent.
+                if ($this->has_visitor_cookie_debug_columns()) {
+                    $cookie_hash = strtolower(trim((string)$visitor_cookie_hash));
+                    $ajax_cookie_hash = strtolower(trim((string)($snapshot['visitor_cookie_ajax_hash_any'] ?? '')));
+                    $ajax_cookie_state = (int)($snapshot['visitor_cookie_ajax_state'] ?? 0); // 0=none, 1=ok, 2=absent, 3=invalid, 4=mismatch
+                    $cookie_preexisting = (int)($snapshot['visitor_cookie_preexisting'] ?? 0) === 1;
+                    $country_excluded = $this->is_guest_clone_country_excluded($country_code);
+                    $cookie_hash_valid = preg_match('/^[a-f0-9]{64}$/', $cookie_hash);
+                    $ajax_hash_valid = preg_match('/^[a-f0-9]{64}$/', $ajax_cookie_hash);
+                    $ajax_cookie_mismatch = (
+                        $ajax_cookie_state === 4
+                        || ($ajax_cookie_state === 1 && $cookie_hash_valid && $ajax_hash_valid && !hash_equals($cookie_hash, $ajax_cookie_hash))
+                    );
+                    $ajax_cookie_absent = ($ajax_cookie_state === 2);
+                    $ajax_cookie_invalid = ($ajax_cookie_state === 3);
+
+                    // Conditions strictes: invité JS actif + scroll réel + cookie créé pendant la visite.
+                    if ($cookie_hash_valid && !$cookie_preexisting && $page_count <= 2 && ($ajax_cookie_absent || $ajax_cookie_invalid || $ajax_cookie_mismatch)) {
+                        if ($country_excluded) {
+                            $add_observe_signal('guest_cookie_ajax_fail_shadow');
+                        } else {
+                            $add_hard_signal('guest_cookie_ajax_fail');
+                        }
+                    }
+                }
             }
         }
 
@@ -976,6 +1268,9 @@ HTML;
             $signals = array_merge($signals, $score_signals);
         } elseif ($behavior_score >= $min_behavior_score) {
             $signals = array_merge($signals, $score_signals);
+        }
+        if (!empty($observation_signals)) {
+            $signals = array_merge($signals, $observation_signals);
         }
 
         return array_values(array_unique($signals));
@@ -1033,6 +1328,56 @@ HTML;
     }
 
     /**
+     * Détecte si la colonne visitor_cookie_hash est disponible (migration 1.7.0).
+     */
+    private function has_visitor_cookie_column()
+    {
+        if ($this->has_visitor_cookie_column !== null) {
+            return $this->has_visitor_cookie_column;
+        }
+
+        $sql = 'SELECT visitor_cookie_hash
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_visitor_cookie_column = !$has_error;
+        return $this->has_visitor_cookie_column;
+    }
+
+    /**
+     * Détecte si les colonnes debug cookie (migration 1.8.0) sont disponibles.
+     */
+    private function has_visitor_cookie_debug_columns()
+    {
+        if ($this->has_visitor_cookie_debug_columns !== null) {
+            return $this->has_visitor_cookie_debug_columns;
+        }
+
+        $sql = 'SELECT visitor_cookie_preexisting, visitor_cookie_ajax_state, visitor_cookie_ajax_hash
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_visitor_cookie_debug_columns = !$has_error;
+        return $this->has_visitor_cookie_debug_columns;
+    }
+
+    /**
      * Snapshot agrégé de session pour la détection comportementale.
      * Fallback automatique si migrations AJAX absentes.
      */
@@ -1052,6 +1397,9 @@ HTML;
             'ajax_scroll_max_y' => 0,
             'ajax_webdriver' => 0,
             'ajax_telemetry_ver' => 0,
+            'visitor_cookie_preexisting' => 0,
+            'visitor_cookie_ajax_state' => 0,
+            'visitor_cookie_ajax_hash_any' => '',
         ];
 
         if (!preg_match('/^[A-Za-z0-9]{32}$/', (string)$session_id)) {
@@ -1080,6 +1428,11 @@ HTML;
             $fields[] = 'MAX(ajax_scroll_max_y) AS ajax_scroll_max_y';
             $fields[] = 'MAX(ajax_webdriver) AS ajax_webdriver';
             $fields[] = 'MAX(ajax_telemetry_ver) AS ajax_telemetry_ver';
+        }
+        if ($this->has_visitor_cookie_debug_columns()) {
+            $fields[] = 'MAX(visitor_cookie_preexisting) AS visitor_cookie_preexisting';
+            $fields[] = 'MAX(visitor_cookie_ajax_state) AS visitor_cookie_ajax_state';
+            $fields[] = "MAX(CASE WHEN visitor_cookie_ajax_hash <> '' THEN visitor_cookie_ajax_hash ELSE '' END) AS visitor_cookie_ajax_hash_any";
         }
 
         $sql = 'SELECT ' . implode(', ', $fields) . '
@@ -1115,6 +1468,9 @@ HTML;
         $snapshot['ajax_scroll_max_y'] = (int)($row['ajax_scroll_max_y'] ?? 0);
         $snapshot['ajax_webdriver'] = (int)($row['ajax_webdriver'] ?? 0);
         $snapshot['ajax_telemetry_ver'] = (int)($row['ajax_telemetry_ver'] ?? 0);
+        $snapshot['visitor_cookie_preexisting'] = (int)($row['visitor_cookie_preexisting'] ?? 0);
+        $snapshot['visitor_cookie_ajax_state'] = (int)($row['visitor_cookie_ajax_state'] ?? 0);
+        $snapshot['visitor_cookie_ajax_hash_any'] = (string)($row['visitor_cookie_ajax_hash_any'] ?? '');
 
         return $snapshot;
     }
@@ -1226,6 +1582,62 @@ HTML;
         $hits = (int)($row['total_hits'] ?? 0);
         $uniq = (int)($row['unique_ips'] ?? 0);
         return ($uniq >= $min_unique_ips && $hits >= $min_hits);
+    }
+
+    /**
+     * Détecte un cookie visiteur invité cloné sur plusieurs IPs en fenêtre courte.
+     * Strict: exclut FR/CO + seuils élevés pour limiter les faux positifs.
+     */
+    private function detect_guest_cookie_clone_multi_ip($visitor_cookie_hash, $country_code)
+    {
+        if ($this->is_guest_clone_country_excluded($country_code)) {
+            return false;
+        }
+
+        if (!$this->has_visitor_cookie_column()) {
+            return false;
+        }
+
+        $hash = strtolower(trim((string)$visitor_cookie_hash));
+        if (!preg_match('/^[a-f0-9]{64}$/', $hash)) {
+            return false;
+        }
+
+        $window_sec = 1800;
+        $min_unique_ips = 4;
+        $min_hits = 6;
+        $cutoff = time() - $window_sec;
+
+        $sql = 'SELECT COUNT(*) AS total_hits,
+                       COUNT(DISTINCT user_ip) AS unique_ips,
+                       COUNT(DISTINCT session_id) AS unique_sessions
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE visit_time >= ' . (int)$cutoff . '
+                AND user_id <= 1
+                AND is_first_visit = 1
+                AND visitor_cookie_hash = \'' . $this->db->sql_escape($hash) . '\'
+                AND UPPER(country_code) NOT IN (\'FR\',\'CO\')';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($has_error || $result === false) {
+            $this->db->sql_return_on_error(false);
+            return false;
+        }
+
+        $row = $this->db->sql_fetchrow($result);
+        $this->db->sql_freeresult($result);
+        $this->db->sql_return_on_error(false);
+
+        if (!$row) {
+            return false;
+        }
+
+        $hits = (int)($row['total_hits'] ?? 0);
+        $uniq_ips = (int)($row['unique_ips'] ?? 0);
+        $uniq_sessions = (int)($row['unique_sessions'] ?? 0);
+        return ($uniq_ips >= $min_unique_ips && $hits >= $min_hits && $uniq_sessions >= $min_hits);
     }
 
     /**
