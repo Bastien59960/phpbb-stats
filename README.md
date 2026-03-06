@@ -1,154 +1,175 @@
-# Bastien59960 - Stats - Extension phpBB
+# Bastien59 Stats - phpBB 3.3+ Extension
 
-Extension de statistiques avancées pour phpBB 3.3+. Collecte et affiche les données de navigation des visiteurs directement dans le panneau d'administration.
+[Français](README.fr.md)
 
-## Fonctionnalités
+**Turn your ACP into an anti-bot operations center.**
 
-- **Tableau de bord analytique** : Vue d'ensemble des visites avec graphiques et compteurs
-- **Détection des bots** : Identification automatique des robots (User-Agent + liste phpBB)
-- **Apprentissage comportemental** : Profilage des métriques scroll/interactions des membres connectés pour affiner la détection des invités
-- **Signal strict viewprofile** : Détection des accès directs à `memberlist.php?mode=viewprofile` sans navigation préalable et sans résolution écran (cookie/AJAX)
-- **Signal clone multi-IP invité** : Détection d’un fingerprint invité cloné (UA + télémétrie AJAX scroll) observé sur plusieurs IPs en fenêtre courte, avec exclusion stricte des IP FR/CO
-- **Signal clone cookie visiteur multi-IP** : Détection d’un cookie visiteur invité signé (`b59_vid`) réutilisé sur plusieurs IPs en fenêtre courte, avec exclusion stricte des IP FR/CO
-- **Signal strict cookie AJAX** : Détection d’un invité JS-actif dont le cookie signé n’est pas relu (ou incohérent) sur la requête AJAX
-- **Mode observation FR/CO** : Les mêmes contrôles cookie/AJAX tournent aussi sur FR/CO, mais avec signal `_shadow` (analyse/ACP uniquement, pas de ban fail2ban)
-- **Signal cross-IP distribué (CLI)** : Détection comportementale anti-spoof sur téléchargements PJ distribués via IP différentes (source Apache + jointures phpBB), avec exclusion stricte des IP FR
-- **Géolocalisation** : Carte du monde interactive (jVectorMap) avec cache IP
-- **Journal de navigation** : Log détaillé de chaque page visitée avec durée, referer, OS, navigateur
-- **Sessions** : Regroupement des pages vues par session utilisateur
-- **Onglet ACP Comportements** : Visualisation des profils appris (membres) et des écarts détectés sur invités/bots
-- **Filtres** : Période personnalisable (1h, 6h, 24h, 7j, 30j) et filtre bots
-- **Rétention configurable** : Durées de conservation séparées pour humains et bots
-- **Nettoyage automatique** : Tâche cron intégrée pour purger les anciennes données
-- **Bilingue** : Interface disponible en français et anglais
+As AI training demand grows, genuinely human-written forum content becomes more valuable than ever. This also increases large-scale scraping pressure from automated traffic. Bastien59 Stats helps phpBB administrators detect and contain abusive bot behavior with actionable telemetry, behavioral signals, and Fail2ban-ready security events.
 
-## Pré-requis
+## Why install it
 
-- PHP >= 7.1.3
-- phpBB >= 3.3.0
+- Quickly identify who consumes your resources (humans vs bots).
+- Detect automation patterns that bypass simple User-Agent checks.
+- Correlate session, AJAX telemetry, signed visitor cookie, IP, country, and cursor traces.
+- Feed Fail2ban with high-signal events without exposing server secrets.
+
+## Key features
+
+### Operations-focused ACP
+
+- Overview with human/bot counters, traffic sources, OS, devices, and screen resolutions.
+- **Sessions** tab with timeline, visited pages, cookie/AJAX diagnostics, signals, and country/flag display.
+- **Pages** tab (top pages + full referers).
+- **Map** tab (jVectorMap) for geographic distribution.
+- **Behavior** tab with members/guests/bots comparison, learned profiles, outlier signals, cursor capture health, and recent cases with SVG traces.
+
+### Multi-signal bot detection
+
+Strict and observation signals depending on geo context:
+
+- `old_chrome_*`, `old_firefox`, `no_screen_res`
+- `ajax_webdriver`, `ajax_scroll_profile`
+- `guest_fp_clone_multi_ip` and `_shadow`
+- `guest_cookie_clone_multi_ip` and `_shadow`
+- `guest_cookie_ajax_fail` and `_shadow`
+- `cursor_no_movement`, `cursor_no_clicks`, `cursor_speed_outlier`, `cursor_script_path`
+- `learn_*_outlier` based on learned behavior profiles
+
+### AJAX telemetry + signed visitor cookie
+
+- Secure `POST /stats/px` endpoint (link token + same-origin + session checks).
+- Collects resolution, scroll, interactions, webdriver, and cursor/touch traces.
+- Signed visitor cookie `b59_vid` (stored hashed in DB, never in clear text).
+- Distinct AJAX cookie states: absent, invalid, mismatch.
+
+### Robust async geolocation (`geo_async` cron task)
+
+- IP resolution via `ip-api.com` with DB caching.
+- IPv4 cache by full IP and by `/16` prefix (`v4:a.b`) to avoid redundant live lookups.
+- Configurable cache TTL (default 45 days).
+- Safe throttling policy: 40 req/min target, 45 req/min service limit, fixed 5s inter-batch pause, additional quota-aware pauses.
+- On HTTP 429: live lookup loop stops early and remaining IPs are retried on next run.
+- CLI progress output for batch and global progression.
+
+### Security bridge / Fail2ban
+
+- Writes `PHPBB-SIGNAL` lines (behavior signals) to `security_audit.log`.
+- `bin/cross_ip_audit.php` detects distributed cross-IP attachment download patterns (`PHPBB-XIP`).
+- Included Fail2ban snippets: `fail2ban/phpbb-guest-cookie-clone.conf`, `fail2ban/phpbb-crossip-soft.conf`, `fail2ban/phpbb-crossip-hard.conf`, `fail2ban/jail.guest-cookie-clone.local.example`, `fail2ban/jail.crossip.local.example`.
+
+## Requirements
+
+- PHP `>= 7.1.3`
+- phpBB `>= 3.3.0`
 
 ## Installation
 
-1. Téléchargez et décompressez l'archive
-2. Copiez le dossier `bastien59960/stats` dans `ext/` de votre forum phpBB
-3. Dans le PCA, allez dans **Personnalisation** > **Extensions** > **Gérer les extensions**
-4. Cliquez sur **Activer** en face de « Bastien59 Stats »
-
-Ou via CLI :
+1. Copy `bastien59960/stats` into `ext/`.
+2. Enable the extension:
 
 ```bash
 php bin/phpbbcli.php extension:enable bastien59960/stats
 ```
 
-## Désinstallation
+## Update
 
-Via CLI :
+After updating files:
+
+```bash
+php bin/phpbbcli.php db:migrate
+php bin/phpbbcli.php cache:purge
+```
+
+## Uninstall
 
 ```bash
 php bin/phpbbcli.php extension:disable bastien59960/stats
 php bin/phpbbcli.php extension:purge bastien59960/stats
 ```
 
-Ou via le PCA dans **Personnalisation** > **Extensions** > **Gérer les extensions**.
+## Quick ACP setup
 
-## Configuration
+In **Extensions > Stats Settings**:
 
-Après activation, un onglet **Statistiques** apparaît dans le PCA (après Extensions). Les réglages sont accessibles dans **Extensions** > **Réglages des Statistiques** :
+- Enable/disable tracking.
+- Set human and bot retention.
+- Configure session timeout.
+- Configure security log path (default `/var/log/security_audit.log`).
+- Tune browser/JS detection thresholds.
 
-| Paramètre | Description | Défaut |
-|---|---|---|
-| Activer le tracking | Active/désactive la collecte | Oui |
-| Rétention humains | Jours de conservation des données visiteurs | 30 |
-| Rétention bots | Jours de conservation des données bots | 5 |
+Production checklist:
 
-## Signal Cross-IP (audit + fail2ban)
+- Ensure PHP process can write to security log.
+- Enable matching Fail2ban jails.
+- Ensure phpBB cron runs regularly.
 
-Le script CLI `bin/cross_ip_audit.php` génère des lignes dédiées dans `security_audit.log` avec le préfixe `PHPBB-XIP` (séparé de `PHPBB-SIGNAL`), pour faciliter le debug des jails.
+## Cron and useful commands
 
-Exemple de ligne :
+### Run phpBB cron
 
-```text
-2026-03-05 17:43:37 PHPBB-XIP ip=203.0.113.42 cc=CH method=xip_dl_soft_v1 severity=soft score=65 downloads=13 ...
+```bash
+php /var/www/forum/bin/phpbbcli.php cron:run
 ```
 
-Règles clés anti faux-positifs :
+### Run only async geolocation task
 
-- scoring multi-critères (download-only, ratio cross-IP distribué, burst, etc.)
-- si l'extension `bastien59960/reactions` est active: contrôle du chargement par IP de
-  `reactions.css` (pour les invités, le `reactions.js` peut être absent sans anomalie)
-- vérification inverse/forward DNS des crawlers légitimes connus avant signal
-- exclusion stricte des IP `FR`
-- déduplication temporelle par IP + méthode
+```bash
+php /var/www/forum/bin/phpbbcli.php cron:run cron.task.bastien59960.stats.geo_async
+```
 
-Mode test (n'écrit rien dans le log) :
+### Cross-IP audit (dry-run)
 
 ```bash
 php ext/bastien59960/stats/bin/cross_ip_audit.php --target=86400 --context=172800 --verbose
 ```
 
-Mode émission vers `security_audit.log` :
+### Cross-IP audit (emit to `security_audit.log`)
 
 ```bash
 php ext/bastien59960/stats/bin/cross_ip_audit.php --emit --target=10800 --context=86400
 ```
 
-Le process CLI doit avoir le droit d'écriture sur le fichier de log (ex: exécution en `www-data` ou via cron root).
-
-Exemple cron (toutes les 30 min) :
+Example cron (every 30 minutes):
 
 ```cron
 */30 * * * * php /var/www/forum/ext/bastien59960/stats/bin/cross_ip_audit.php --emit --target=10800 --context=86400 >> /var/log/phpbb_crossip_audit.log 2>&1
 ```
 
-Snippets fail2ban fournis :
+### Reactions assets backfill (optional)
 
-- `fail2ban/phpbb-crossip-soft.conf`
-- `fail2ban/phpbb-crossip-hard.conf`
-- `fail2ban/jail.crossip.local.example`
-- `fail2ban/phpbb-guest-cookie-clone.conf`
-- `fail2ban/jail.guest-cookie-clone.local.example`
+If `bastien59960/reactions` is enabled:
 
-La jail `phpbb-guest-cookie-clone` couvre les signaux stricts cookie :
-
-- `guest_cookie_clone_multi_ip`
-- `guest_cookie_ajax_fail`
-
-Le signal `guest_cookie_ajax_fail_shadow` (FR/CO) est conservé en base pour l’analyse comportementale, mais n’est pas matché par la jail fail2ban.
-
-Les états de relecture cookie via AJAX sont distingués :
-
-- `visitor_cookie_ajax_state=2` : cookie absent
-- `visitor_cookie_ajax_state=3` : cookie invalide (format/signature)
-- `visitor_cookie_ajax_state=4` : cookie incohérent (mismatch cookie page vs cookie AJAX)
-
-## Structure
-
-```
-stats/
-├── acp/                    # Modules ACP (info + modules)
-├── adm/style/              # Templates HTML du panneau admin
-├── config/                 # Définitions de services (services.yml)
-├── controller/             # Contrôleur ACP principal
-├── event/                  # Event listener (collecte des données)
-├── bin/                    # Outils CLI (cross-IP audit)
-├── fail2ban/               # Filtres/jails fail2ban (snippets)
-├── language/{en,fr}/       # Fichiers de langue
-├── migrations/             # Migration de base de données
-├── composer.json           # Métadonnées de l'extension
-└── ext.php                 # Classe de base de l'extension
+```bash
+php ext/bastien59960/stats/bin/backfill_reactions_assets.php --window=120 --verbose
+php ext/bastien59960/stats/bin/backfill_reactions_assets.php --apply --window=120
 ```
 
-## Tables créées
+## Stored data (summary)
 
-- `bastien59_stats` : Log principal des visites (IP, OS, navigateur, page, durée, hash cookie visiteur, etc.)
-- `bastien59_stats_geo_cache` : Cache de géolocalisation IP
-- `bastien59_stats_behavior_profile` : Profils agrégés d'apprentissage comportemental
-- `bastien59_stats_behavior_seen` : Déduplication des sessions déjà apprises
+Main tables:
 
-## Licence
+- `bastien59_stats`: sessions/pages, signals, AJAX, cookie hash, cursor metrics, diagnostics.
+- `bastien59_stats_geo_cache`: geolocation cache + IPv4 `/16` keys.
+- `bastien59_stats_behavior_profile`: learned behavior profiles.
+- `bastien59_stats_behavior_seen`: dedup table for learned sessions.
+
+## Security and privacy
+
+- No passwords, API tokens, or server secrets are versioned.
+- Visitor cookie is stored as hash in DB.
+- AJAX endpoint enforces method, token, session, and same-origin checks.
+- Country-sensitive FR/CO signals can be kept in observation mode when applicable.
+
+## Known limits
+
+- Geo map relies on jVectorMap assets loaded from CDN.
+- Geolocation depends on `ip-api.com` availability.
+- Network blocking is delegated to Fail2ban (not performed directly by this extension).
+
+## License
 
 [GPL-2.0-only](LICENSE)
 
-## Auteur
+## Author
 
-**Bastien** (bastien59960)
+**Bastien** (`bastien59960`)
