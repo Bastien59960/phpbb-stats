@@ -100,6 +100,10 @@
 .cursor-modal-close { position: absolute; top: 8px; right: 10px; border: 1px solid #c8d6e5; background: #fff; color: #334; border-radius: 4px; font-size: 20px; line-height: 18px; width: 30px; height: 30px; cursor: pointer; }
 .cursor-modal-close:hover { background: #f3f7fc; }
 .cursor-modal-title { margin: 0 36px 10px 0; font-size: 18px; color: #105289; }
+.cursor-modal-hint { margin: 0 0 10px 0; color: #556; font-size: 12px; }
+.cursor-modal-page { margin-top: 10px; padding-top: 10px; border-top: 1px solid #e6eef8; }
+.cursor-modal-page-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: #334; margin-bottom: 6px; }
+.cursor-modal-page-url { margin: 0 0 8px 0; font-size: 12px; color: #556; word-break: break-all; }
 .cursor-modal-svg-box .behavior-cursor-svg { display: block; width: 100%; max-width: 820px; height: auto; border: 1px solid #d8e4f2; border-radius: 6px; background: #fff; }
 .cursor-modal-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px 14px; font-size: 12px; color: #334; }
 .cursor-modal-summary { margin-top: 10px; padding: 8px 10px; border: 1px solid #e1eaf5; border-radius: 6px; background: #f8fbff; font-size: 12px; color: #2a3b4f; }
@@ -339,29 +343,41 @@ body.cursor-modal-open { overflow: hidden; }
                         <!-- ENDIF -->
                         <div class="session-cursor-block">
                             <!-- IF SESSIONS.CURSOR_HAS_DATA -->
-                                <button type="button" class="session-cursor-open" onclick="openCursorModal(event, '{SESSIONS.CURSOR_MODAL_ID}')">{L_STATS_SESSION_CURSOR_OPEN}</button>
+                                <button type="button" class="session-cursor-open" onclick="openCursorModal(event, '{SESSIONS.CURSOR_MODAL_ID}')">{L_STATS_SESSION_CURSOR_OPEN} ({SESSIONS.CURSOR_GRAPH_COUNT})</button>
                                 <div class="session-cursor-thumb" onclick="openCursorModal(event, '{SESSIONS.CURSOR_MODAL_ID}')">
                                     {SESSIONS.CURSOR_SVG_THUMB}
                                 </div>
                                 <small class="session-cursor-meta">{SESSIONS.CURSOR_DEVICE_LABEL} | {SESSIONS.CURSOR_VIEWPORT_LABEL}</small>
                                 <div id="{SESSIONS.CURSOR_MODAL_ID}" style="display:none;">
-                                    <h3 class="cursor-modal-title">{L_STATS_SESSION_CURSOR_MODAL_TITLE}</h3>
-                                    <div class="cursor-modal-svg-box">{SESSIONS.CURSOR_SVG_LARGE}</div>
-                                    <div class="cursor-modal-grid">
-                                        <div><strong>{L_STATS_SESSION_CURSOR_CAPTURED_AT}</strong> {SESSIONS.CURSOR_CAPTURE_LABEL}</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_DEVICE}</strong> {SESSIONS.CURSOR_DEVICE_LABEL}</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_VIEWPORT}</strong> {SESSIONS.CURSOR_VIEWPORT_LABEL}</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_CANVAS}</strong> {SESSIONS.CURSOR_CANVAS_LABEL}</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_POINTS}</strong> {SESSIONS.CURSOR_POINTS}</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_DURATION}</strong> {SESSIONS.CURSOR_DURATION_MS} ms</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_DISTANCE}</strong> {SESSIONS.CURSOR_TOTAL_DISTANCE} px</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_AVG_SPEED}</strong> {SESSIONS.CURSOR_AVG_SPEED} px/s</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_MAX_SPEED}</strong> {SESSIONS.CURSOR_MAX_SPEED} px/s</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_DIR_CHANGES}</strong> {SESSIONS.CURSOR_DIRECTION_CHANGES}</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_LINEARITY}</strong> {SESSIONS.CURSOR_LINEARITY}%</div>
-                                        <div><strong>{L_STATS_SESSION_CURSOR_CLICKS}</strong> {SESSIONS.CURSOR_CLICK_COUNT}</div>
+                                    <h3 class="cursor-modal-title">{L_STATS_SESSION_CURSOR_MODAL_TITLE} ({SESSIONS.CURSOR_GRAPH_COUNT})</h3>
+                                    <p class="cursor-modal-hint">{L_STATS_SESSION_CURSOR_MODAL_HINT}</p>
+                                    <!-- BEGIN CURSOR_PAGES -->
+                                    <div class="cursor-modal-page">
+                                        <div class="cursor-modal-page-head">
+                                            <strong>{SESSIONS.CURSOR_PAGES.PAGE_INDEX}</strong>
+                                            <span>{SESSIONS.CURSOR_PAGES.CAPTURE_LABEL}</span>
+                                        </div>
+                                        <div class="cursor-modal-page-url">
+                                            <strong>{SESSIONS.CURSOR_PAGES.PAGE_TITLE}</strong><br>
+                                            <span>{SESSIONS.CURSOR_PAGES.PAGE_URL}</span>
+                                        </div>
+                                        <div class="cursor-modal-svg-box">{SESSIONS.CURSOR_PAGES.SVG_LARGE}</div>
+                                        <div class="cursor-modal-grid">
+                                            <div><strong>{L_STATS_SESSION_CURSOR_DEVICE}</strong> {SESSIONS.CURSOR_PAGES.DEVICE_LABEL}</div>
+                                            <div><strong>{L_STATS_SESSION_CURSOR_VIEWPORT}</strong> {SESSIONS.CURSOR_PAGES.VIEWPORT_LABEL}</div>
+                                            <div><strong>{L_STATS_SESSION_CURSOR_CANVAS}</strong> {SESSIONS.CURSOR_PAGES.CANVAS_LABEL}</div>
+                                            <div><strong>{L_STATS_SESSION_CURSOR_POINTS}</strong> {SESSIONS.CURSOR_PAGES.POINTS}</div>
+                                            <div><strong>{L_STATS_SESSION_CURSOR_DURATION}</strong> {SESSIONS.CURSOR_PAGES.DURATION_MS} ms</div>
+                                            <div><strong>{L_STATS_SESSION_CURSOR_DISTANCE}</strong> {SESSIONS.CURSOR_PAGES.TOTAL_DISTANCE} px</div>
+                                            <div><strong>{L_STATS_SESSION_CURSOR_AVG_SPEED}</strong> {SESSIONS.CURSOR_PAGES.AVG_SPEED} px/s</div>
+                                            <div><strong>{L_STATS_SESSION_CURSOR_MAX_SPEED}</strong> {SESSIONS.CURSOR_PAGES.MAX_SPEED} px/s</div>
+                                            <div><strong>{L_STATS_SESSION_CURSOR_DIR_CHANGES}</strong> {SESSIONS.CURSOR_PAGES.DIRECTION_CHANGES}</div>
+                                            <div><strong>{L_STATS_SESSION_CURSOR_LINEARITY}</strong> {SESSIONS.CURSOR_PAGES.LINEARITY}%</div>
+                                            <div><strong>{L_STATS_SESSION_CURSOR_CLICKS}</strong> {SESSIONS.CURSOR_PAGES.CLICK_COUNT}</div>
+                                        </div>
+                                        <div class="cursor-modal-summary">{SESSIONS.CURSOR_PAGES.SUMMARY}</div>
                                     </div>
-                                    <div class="cursor-modal-summary">{SESSIONS.CURSOR_SUMMARY}</div>
+                                    <!-- END CURSOR_PAGES -->
                                 </div>
                             <!-- ELSE -->
                                 <small class="session-cursor-none">{L_STATS_SESSION_CURSOR_NONE}</small>

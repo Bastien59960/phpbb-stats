@@ -201,6 +201,8 @@ $lang = array_merge($lang, [
 	'STATS_SESSION_CURSOR_OPEN'		=> 'View cursor trace',
 	'STATS_SESSION_CURSOR_NONE'		=> 'No usable cursor trace',
 	'STATS_SESSION_CURSOR_MODAL_TITLE' => 'Cursor trace (session)',
+	'STATS_SESSION_CURSOR_MODAL_HINT' => '1 graph = 1 visited page (chronological order).',
+	'STATS_SESSION_CURSOR_PAGE_INDEX' => 'Page #%d',
 	'STATS_SESSION_CURSOR_CAPTURED_AT' => 'Captured at',
 	'STATS_SESSION_CURSOR_DEVICE'	=> 'Device',
 	'STATS_SESSION_CURSOR_VIEWPORT'	=> 'Viewport',

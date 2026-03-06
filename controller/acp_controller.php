@@ -375,31 +375,6 @@ class acp_controller
                 $visitor_cookie_ajax_hash_time = 0;
             }
 
-            $cursor_capture = [];
-            $cursor_best_points = 0;
-            $cursor_best_time = 0;
-            if ($has_cursor_columns) {
-                $cursor_capture = [
-                    'cursor_track_points' => (int)($row['cursor_track_points'] ?? 0),
-                    'cursor_track_duration_ms' => (int)($row['cursor_track_duration_ms'] ?? 0),
-                    'cursor_track_path' => (string)($row['cursor_track_path'] ?? ''),
-                    'cursor_click_points' => (string)($row['cursor_click_points'] ?? ''),
-                    'cursor_device_class' => (string)($row['cursor_device_class'] ?? ''),
-                    'cursor_viewport' => (string)($row['cursor_viewport'] ?? ''),
-                    'cursor_total_distance' => (int)($row['cursor_total_distance'] ?? 0),
-                    'cursor_avg_speed' => (int)($row['cursor_avg_speed'] ?? 0),
-                    'cursor_max_speed' => (int)($row['cursor_max_speed'] ?? 0),
-                    'cursor_direction_changes' => (int)($row['cursor_direction_changes'] ?? 0),
-                    'cursor_linearity' => (int)($row['cursor_linearity'] ?? 0),
-                    'cursor_click_count' => (int)($row['cursor_click_count'] ?? 0),
-                    'screen_res' => (string)($row['screen_res'] ?? ''),
-                    'screen_res_ajax' => (string)($row['screen_res_ajax'] ?? ''),
-                    'visit_time' => (int)($row['visit_time'] ?? 0),
-                ];
-                $cursor_best_points = (int)$cursor_capture['cursor_track_points'];
-                $cursor_best_time = (int)$cursor_capture['visit_time'];
-            }
-
             foreach ($pages as $page_row) {
                 if (!$scroll_done && !empty($page_row['scroll_down_ajax'])) {
                     $scroll_done = 1;
@@ -456,34 +431,6 @@ class acp_controller
                     }
                 }
 
-                if ($has_cursor_columns) {
-                    $page_cursor_points = (int)($page_row['cursor_track_points'] ?? 0);
-                    $page_cursor_time = (int)($page_row['visit_time'] ?? 0);
-                    if (
-                        $page_cursor_points > 0
-                        && ($page_cursor_points > $cursor_best_points || ($page_cursor_points === $cursor_best_points && $page_cursor_time >= $cursor_best_time))
-                    ) {
-                        $cursor_capture = [
-                            'cursor_track_points' => $page_cursor_points,
-                            'cursor_track_duration_ms' => (int)($page_row['cursor_track_duration_ms'] ?? 0),
-                            'cursor_track_path' => (string)($page_row['cursor_track_path'] ?? ''),
-                            'cursor_click_points' => (string)($page_row['cursor_click_points'] ?? ''),
-                            'cursor_device_class' => (string)($page_row['cursor_device_class'] ?? ''),
-                            'cursor_viewport' => (string)($page_row['cursor_viewport'] ?? ''),
-                            'cursor_total_distance' => (int)($page_row['cursor_total_distance'] ?? 0),
-                            'cursor_avg_speed' => (int)($page_row['cursor_avg_speed'] ?? 0),
-                            'cursor_max_speed' => (int)($page_row['cursor_max_speed'] ?? 0),
-                            'cursor_direction_changes' => (int)($page_row['cursor_direction_changes'] ?? 0),
-                            'cursor_linearity' => (int)($page_row['cursor_linearity'] ?? 0),
-                            'cursor_click_count' => (int)($page_row['cursor_click_count'] ?? 0),
-                            'screen_res' => (string)($page_row['screen_res'] ?? ''),
-                            'screen_res_ajax' => (string)($page_row['screen_res_ajax'] ?? ''),
-                            'visit_time' => $page_cursor_time,
-                        ];
-                        $cursor_best_points = $page_cursor_points;
-                        $cursor_best_time = $page_cursor_time;
-                    }
-                }
             }
 
             if (isset($session_cookie_hashes[(string)$session_id]) && $this->is_valid_visitor_cookie_hash($session_cookie_hashes[(string)$session_id])) {
@@ -626,44 +573,89 @@ class acp_controller
 
             $cursor_modal_id = 'cursor_' . (int)($row['log_id'] ?? 0) . '_' . substr((string)$session_id, 0, 8);
             $cursor_has_data = 0;
-            $cursor_svg_thumb = '';
-            $cursor_svg_large = '';
-            $cursor_device_label = $this->user->lang('STATS_BEHAVIOR_CURSOR_DEVICE_UNKNOWN');
-            $cursor_summary_label = $this->user->lang('STATS_BEHAVIOR_CURSOR_NONE');
-            $cursor_viewport_label = '-';
-            $cursor_canvas_label = '-';
-            $cursor_capture_label = '-';
-            $cursor_points = 0;
-            $cursor_duration = 0;
-            $cursor_distance = 0;
-            $cursor_avg_speed = 0;
-            $cursor_max_speed = 0;
-            $cursor_direction_changes = 0;
-            $cursor_linearity = 0;
-            $cursor_click_count = 0;
-            if ($has_cursor_columns && !empty($cursor_capture) && (int)($cursor_capture['cursor_track_points'] ?? 0) > 0) {
-                $cursor_svg_thumb = $this->build_cursor_trace_svg($cursor_capture, 160, 96);
-                $cursor_svg_large = $this->build_cursor_trace_svg($cursor_capture, 560, 320);
-                if ($cursor_svg_thumb !== '' && $cursor_svg_large !== '') {
-                    $cursor_has_data = 1;
+            $cursor_graph_count = 0;
+            $cursor_preview_svg = '';
+            $cursor_preview_device_label = $this->user->lang('STATS_BEHAVIOR_CURSOR_DEVICE_UNKNOWN');
+            $cursor_preview_viewport_label = '-';
+            $cursor_page_blocks = [];
+            if ($has_cursor_columns) {
+                $cursor_candidates = $pages;
+                if (empty($cursor_candidates)) {
+                    $cursor_candidates = [$row];
                 }
-                $cursor_device_label = $this->format_cursor_device_label((string)($cursor_capture['cursor_device_class'] ?? ''));
-                $cursor_summary_label = $this->format_cursor_summary($cursor_capture);
-                $cursor_viewport_label = $this->format_resolution_px((string)($cursor_capture['cursor_viewport'] ?? ''));
-                list($canvas_w, $canvas_h) = $this->resolve_cursor_canvas_size($cursor_capture);
-                $cursor_canvas_label = $canvas_w . 'x' . $canvas_h . ' px';
-                $cursor_capture_time = (int)($cursor_capture['visit_time'] ?? 0);
-                if ($cursor_capture_time > 0) {
-                    $cursor_capture_label = $this->user->format_date($cursor_capture_time, 'd M Y H:i:s');
+
+                foreach ($cursor_candidates as $cursor_row_src) {
+                    $cursor_points = (int)($cursor_row_src['cursor_track_points'] ?? 0);
+
+                    $cursor_row = [
+                        'cursor_track_points' => $cursor_points,
+                        'cursor_track_duration_ms' => (int)($cursor_row_src['cursor_track_duration_ms'] ?? 0),
+                        'cursor_track_path' => (string)($cursor_row_src['cursor_track_path'] ?? ''),
+                        'cursor_click_points' => (string)($cursor_row_src['cursor_click_points'] ?? ''),
+                        'cursor_device_class' => (string)($cursor_row_src['cursor_device_class'] ?? ''),
+                        'cursor_viewport' => (string)($cursor_row_src['cursor_viewport'] ?? ''),
+                        'cursor_total_distance' => (int)($cursor_row_src['cursor_total_distance'] ?? 0),
+                        'cursor_avg_speed' => (int)($cursor_row_src['cursor_avg_speed'] ?? 0),
+                        'cursor_max_speed' => (int)($cursor_row_src['cursor_max_speed'] ?? 0),
+                        'cursor_direction_changes' => (int)($cursor_row_src['cursor_direction_changes'] ?? 0),
+                        'cursor_linearity' => (int)($cursor_row_src['cursor_linearity'] ?? 0),
+                        'cursor_click_count' => (int)($cursor_row_src['cursor_click_count'] ?? 0),
+                        'screen_res' => (string)($cursor_row_src['screen_res'] ?? ''),
+                        'screen_res_ajax' => (string)($cursor_row_src['screen_res_ajax'] ?? ''),
+                        'visit_time' => (int)($cursor_row_src['visit_time'] ?? 0),
+                    ];
+
+                    $svg_thumb = $this->build_cursor_trace_svg($cursor_row, 160, 0);
+                    $svg_large = $this->build_cursor_trace_svg($cursor_row, 560, 0);
+                    if ($svg_thumb === '' || $svg_large === '') {
+                        $svg_thumb = $this->build_cursor_empty_svg($cursor_row, 160, 0);
+                        $svg_large = $this->build_cursor_empty_svg($cursor_row, 560, 0);
+                    }
+
+                    $device_label = $this->format_cursor_device_label((string)($cursor_row['cursor_device_class'] ?? ''));
+                    $summary_label = $this->format_cursor_summary($cursor_row);
+                    $viewport_label = $this->format_resolution_px((string)($cursor_row['cursor_viewport'] ?? ''));
+                    list($canvas_w, $canvas_h) = $this->resolve_cursor_canvas_size($cursor_row);
+                    $canvas_label = $canvas_w . 'x' . $canvas_h . ' px';
+                    $capture_time = (int)($cursor_row['visit_time'] ?? 0);
+                    $capture_label = ($capture_time > 0)
+                        ? $this->user->format_date($capture_time, 'd M Y H:i:s')
+                        : '-';
+                    $page_title = trim((string)($cursor_row_src['page_title'] ?? ''));
+                    if ($page_title === '') {
+                        $page_title = '-';
+                    }
+                    $page_url = trim((string)($cursor_row_src['page_url'] ?? ''));
+
+                    $cursor_page_blocks[] = [
+                        'PAGE_TITLE' => htmlspecialchars($page_title, ENT_COMPAT, 'UTF-8'),
+                        'PAGE_URL' => htmlspecialchars($page_url, ENT_COMPAT, 'UTF-8'),
+                        'CAPTURE_LABEL' => htmlspecialchars($capture_label, ENT_COMPAT, 'UTF-8'),
+                        'DEVICE_LABEL' => htmlspecialchars($device_label, ENT_COMPAT, 'UTF-8'),
+                        'VIEWPORT_LABEL' => htmlspecialchars($viewport_label, ENT_COMPAT, 'UTF-8'),
+                        'CANVAS_LABEL' => htmlspecialchars($canvas_label, ENT_COMPAT, 'UTF-8'),
+                        'POINTS' => max(0, (int)$cursor_row['cursor_track_points']),
+                        'DURATION_MS' => max(0, (int)$cursor_row['cursor_track_duration_ms']),
+                        'TOTAL_DISTANCE' => max(0, (int)$cursor_row['cursor_total_distance']),
+                        'AVG_SPEED' => max(0, (int)$cursor_row['cursor_avg_speed']),
+                        'MAX_SPEED' => max(0, (int)$cursor_row['cursor_max_speed']),
+                        'DIRECTION_CHANGES' => max(0, (int)$cursor_row['cursor_direction_changes']),
+                        'LINEARITY' => max(0, min(100, (int)$cursor_row['cursor_linearity'])),
+                        'CLICK_COUNT' => max(0, (int)$cursor_row['cursor_click_count']),
+                        'SVG_LARGE' => $svg_large,
+                        'SUMMARY' => htmlspecialchars($summary_label, ENT_COMPAT, 'UTF-8'),
+                    ];
+
+                    // Aperçu session = dernière page capturée de la session.
+                    $cursor_preview_svg = $svg_thumb;
+                    $cursor_preview_device_label = $device_label;
+                    $cursor_preview_viewport_label = $viewport_label;
                 }
-                $cursor_points = max(0, (int)($cursor_capture['cursor_track_points'] ?? 0));
-                $cursor_duration = max(0, (int)($cursor_capture['cursor_track_duration_ms'] ?? 0));
-                $cursor_distance = max(0, (int)($cursor_capture['cursor_total_distance'] ?? 0));
-                $cursor_avg_speed = max(0, (int)($cursor_capture['cursor_avg_speed'] ?? 0));
-                $cursor_max_speed = max(0, (int)($cursor_capture['cursor_max_speed'] ?? 0));
-                $cursor_direction_changes = max(0, (int)($cursor_capture['cursor_direction_changes'] ?? 0));
-                $cursor_linearity = max(0, min(100, (int)($cursor_capture['cursor_linearity'] ?? 0)));
-                $cursor_click_count = max(0, (int)($cursor_capture['cursor_click_count'] ?? 0));
+            }
+
+            $cursor_graph_count = count($cursor_page_blocks);
+            if ($cursor_graph_count > 0) {
+                $cursor_has_data = 1;
             }
 
             $this->template->assign_block_vars('SESSIONS', [
@@ -721,22 +713,33 @@ class acp_controller
                 'PAGES_COUNT_LABEL' => sprintf($this->user->lang('STATS_PAGES_COUNT'), (int)$row['page_count']),
                 'CURSOR_HAS_DATA' => $cursor_has_data,
                 'CURSOR_MODAL_ID' => htmlspecialchars($cursor_modal_id, ENT_COMPAT, 'UTF-8'),
-                'CURSOR_SVG_THUMB' => $cursor_svg_thumb,
-                'CURSOR_SVG_LARGE' => $cursor_svg_large,
-                'CURSOR_DEVICE_LABEL' => htmlspecialchars($cursor_device_label, ENT_COMPAT, 'UTF-8'),
-                'CURSOR_SUMMARY' => htmlspecialchars($cursor_summary_label, ENT_COMPAT, 'UTF-8'),
-                'CURSOR_VIEWPORT_LABEL' => htmlspecialchars($cursor_viewport_label, ENT_COMPAT, 'UTF-8'),
-                'CURSOR_CANVAS_LABEL' => htmlspecialchars($cursor_canvas_label, ENT_COMPAT, 'UTF-8'),
-                'CURSOR_CAPTURE_LABEL' => htmlspecialchars($cursor_capture_label, ENT_COMPAT, 'UTF-8'),
-                'CURSOR_POINTS' => $cursor_points,
-                'CURSOR_DURATION_MS' => $cursor_duration,
-                'CURSOR_TOTAL_DISTANCE' => $cursor_distance,
-                'CURSOR_AVG_SPEED' => $cursor_avg_speed,
-                'CURSOR_MAX_SPEED' => $cursor_max_speed,
-                'CURSOR_DIRECTION_CHANGES' => $cursor_direction_changes,
-                'CURSOR_LINEARITY' => $cursor_linearity,
-                'CURSOR_CLICK_COUNT' => $cursor_click_count,
+                'CURSOR_GRAPH_COUNT' => $cursor_graph_count,
+                'CURSOR_SVG_THUMB' => $cursor_preview_svg,
+                'CURSOR_DEVICE_LABEL' => htmlspecialchars($cursor_preview_device_label, ENT_COMPAT, 'UTF-8'),
+                'CURSOR_VIEWPORT_LABEL' => htmlspecialchars($cursor_preview_viewport_label, ENT_COMPAT, 'UTF-8'),
             ]);
+
+            foreach ($cursor_page_blocks as $idx => $cursor_block) {
+                $this->template->assign_block_vars('SESSIONS.CURSOR_PAGES', [
+                    'PAGE_INDEX' => sprintf($this->user->lang('STATS_SESSION_CURSOR_PAGE_INDEX'), (int)$idx + 1),
+                    'PAGE_TITLE' => $cursor_block['PAGE_TITLE'],
+                    'PAGE_URL' => $cursor_block['PAGE_URL'],
+                    'CAPTURE_LABEL' => $cursor_block['CAPTURE_LABEL'],
+                    'DEVICE_LABEL' => $cursor_block['DEVICE_LABEL'],
+                    'VIEWPORT_LABEL' => $cursor_block['VIEWPORT_LABEL'],
+                    'CANVAS_LABEL' => $cursor_block['CANVAS_LABEL'],
+                    'POINTS' => $cursor_block['POINTS'],
+                    'DURATION_MS' => $cursor_block['DURATION_MS'],
+                    'TOTAL_DISTANCE' => $cursor_block['TOTAL_DISTANCE'],
+                    'AVG_SPEED' => $cursor_block['AVG_SPEED'],
+                    'MAX_SPEED' => $cursor_block['MAX_SPEED'],
+                    'DIRECTION_CHANGES' => $cursor_block['DIRECTION_CHANGES'],
+                    'LINEARITY' => $cursor_block['LINEARITY'],
+                    'CLICK_COUNT' => $cursor_block['CLICK_COUNT'],
+                    'SVG_LARGE' => $cursor_block['SVG_LARGE'],
+                    'SUMMARY' => $cursor_block['SUMMARY'],
+                ]);
+            }
 
             // Assigner les pages de la session (à partir de la 2ème)
             $first = true;
@@ -1570,7 +1573,11 @@ class acp_controller
         $clicks = $this->decode_cursor_points_json((string)($row['cursor_click_points'] ?? ''), 120);
         list($canvas_w, $canvas_h) = $this->resolve_cursor_canvas_size($row);
         $render_w = max(96, min(1280, (int)$display_width));
-        $render_h = max(64, min(960, (int)$display_height));
+        $requested_h = (int)$display_height;
+        if ($requested_h <= 0) {
+            $requested_h = (int)round(($render_w * (float)$canvas_h) / max(1.0, (float)$canvas_w));
+        }
+        $render_h = max(64, min(960, $requested_h));
 
         $plot = [];
         foreach ($points as $p) {
@@ -1626,6 +1633,24 @@ class acp_controller
             $svg .= '<circle cx="' . $cx . '" cy="' . $cy . '" r="15" fill="none" stroke="#d43d3d" stroke-width="0.8" opacity="0.3" />';
         }
 
+        $svg .= '</svg>';
+        return $svg;
+    }
+
+    private function build_cursor_empty_svg(array $row, $display_width = 220, $display_height = 140)
+    {
+        list($canvas_w, $canvas_h) = $this->resolve_cursor_canvas_size($row);
+        $render_w = max(96, min(1280, (int)$display_width));
+        $requested_h = (int)$display_height;
+        if ($requested_h <= 0) {
+            $requested_h = (int)round(($render_w * (float)$canvas_h) / max(1.0, (float)$canvas_w));
+        }
+        $render_h = max(64, min(960, $requested_h));
+        $label = htmlspecialchars((string)$this->user->lang('STATS_SESSION_CURSOR_NONE'), ENT_COMPAT, 'UTF-8');
+
+        $svg = '<svg class="behavior-cursor-svg" viewBox="0 0 ' . (int)$canvas_w . ' ' . (int)$canvas_h . '" width="' . $render_w . '" height="' . $render_h . '" preserveAspectRatio="xMidYMid meet">';
+        $svg .= '<rect x="0" y="0" width="' . (int)$canvas_w . '" height="' . (int)$canvas_h . '" fill="#f7fbff" stroke="#d8e4f2" />';
+        $svg .= '<text x="' . (int)round($canvas_w / 2) . '" y="' . (int)round($canvas_h / 2) . '" text-anchor="middle" dominant-baseline="middle" font-size="24" fill="#7a8ca2">' . $label . '</text>';
         $svg .= '</svg>';
         return $svg;
     }
