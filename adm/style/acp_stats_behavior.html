@@ -173,6 +173,7 @@
                 <tr>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_GROUP}">{L_STATS_BEHAVIOR_COL_GROUP}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SESSIONS}">{L_STATS_BEHAVIOR_COL_SESSIONS}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_USERS}">{L_STATS_BEHAVIOR_COL_USERS}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_CURSOR_OK}">{L_STATS_BEHAVIOR_COL_CURSOR_OK}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_CURSOR_FAIL}">{L_STATS_BEHAVIOR_COL_CURSOR_FAIL}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_CURSOR_FAIL_RATE}">{L_STATS_BEHAVIOR_COL_CURSOR_FAIL_RATE}</span></th>
@@ -183,12 +184,13 @@
                 <tr>
                     <td><span class="behavior-chip">{BEHAVIOR_CURSOR_CAPTURE.GROUP_LABEL}</span></td>
                     <td>{BEHAVIOR_CURSOR_CAPTURE.SESSIONS}</td>
+                    <td>{BEHAVIOR_CURSOR_CAPTURE.USERS}</td>
                     <td>{BEHAVIOR_CURSOR_CAPTURE.TRACE_OK} ({BEHAVIOR_CURSOR_CAPTURE.TRACE_OK_RATE}%)</td>
                     <td>{BEHAVIOR_CURSOR_CAPTURE.TRACE_FAIL}</td>
                     <td>{BEHAVIOR_CURSOR_CAPTURE.TRACE_FAIL_RATE}%</td>
                 </tr>
             <!-- BEGINELSE -->
-                <tr><td colspan="5" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+                <tr><td colspan="6" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
             <!-- END BEHAVIOR_CURSOR_CAPTURE -->
             </tbody>
         </table>
@@ -347,6 +349,22 @@ function getCursorZoomBase(svg) {
     return base;
 }
 
+function getCursorZoomFit(svg, base) {
+    if (!base) {
+        return null;
+    }
+    var fit = parseCursorZoomViewBox(svg.getAttribute('data-cursor-fit-viewbox'));
+    if (!fit) {
+        return { x: base.x, y: base.y, w: base.w, h: base.h };
+    }
+
+    var w = cursorZoomClamp(fit.w, 1, base.w);
+    var h = cursorZoomClamp(fit.h, 1, base.h);
+    var x = cursorZoomClamp(fit.x, base.x, base.x + base.w - w);
+    var y = cursorZoomClamp(fit.y, base.y, base.y + base.h - h);
+    return { x: x, y: y, w: w, h: h };
+}
+
 function setCursorZoomViewBox(svg, state, x, y, w, h) {
     state.x = x;
     state.y = y;
@@ -445,7 +463,7 @@ function resetCursorZoom(svg) {
     if (!state) {
         return;
     }
-    setCursorZoomViewBox(svg, state, state.baseX, state.baseY, state.baseW, state.baseH);
+    setCursorZoomViewBox(svg, state, state.fitX, state.fitY, state.fitW, state.fitH);
     state.dragMoved = false;
     updateCursorZoomCursor(svg, state);
 }
@@ -470,16 +488,24 @@ function initCursorSvgZoom(root) {
             if (!base) {
                 return;
             }
+            var fit = getCursorZoomFit(svg, base);
+            if (!fit) {
+                fit = { x: base.x, y: base.y, w: base.w, h: base.h };
+            }
 
             var state = {
                 baseX: base.x,
                 baseY: base.y,
                 baseW: base.w,
                 baseH: base.h,
-                x: base.x,
-                y: base.y,
-                w: base.w,
-                h: base.h,
+                fitX: fit.x,
+                fitY: fit.y,
+                fitW: fit.w,
+                fitH: fit.h,
+                x: fit.x,
+                y: fit.y,
+                w: fit.w,
+                h: fit.h,
                 maxZoom: 14,
                 dragging: false,
                 dragPointerId: null,
@@ -492,9 +518,10 @@ function initCursorSvgZoom(root) {
 
             svg.__cursorZoomState = state;
             svg.setAttribute('data-cursor-zoom-ready', '1');
+            setCursorZoomViewBox(svg, state, state.fitX, state.fitY, state.fitW, state.fitH);
             updateCursorZoomCursor(svg, state);
             if (!svg.getAttribute('title')) {
-                svg.setAttribute('title', 'Zoom: molette ou double-clic. Deplacement: glisser. Reset: Shift+double-clic.');
+                svg.setAttribute('title', 'Zoom: molette ou double-clic. Deplacement: glisser. Reset fit trace: Shift+double-clic.');
             }
 
             var onWheel = function(e) {

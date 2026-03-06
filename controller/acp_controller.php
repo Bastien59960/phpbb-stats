@@ -1514,32 +1514,52 @@ class acp_controller
             return;
         }
 
+        $guest_actor_expr = $this->has_visitor_cookie_column()
+            ? "COALESCE(NULLIF(CONCAT('g:', guest_cookie_hash), 'g:'), NULLIF(CONCAT('ip:', guest_ip), 'ip:'), CONCAT('sid:', session_id))"
+            : "COALESCE(NULLIF(CONCAT('ip:', guest_ip), 'ip:'), CONCAT('sid:', session_id))";
+        $guest_cookie_select = $this->has_visitor_cookie_column()
+            ? "MAX(CASE WHEN user_id <= 1 AND is_bot = 0 AND visitor_cookie_hash <> '' THEN LOWER(visitor_cookie_hash) ELSE '' END) AS guest_cookie_hash,"
+            : "'' AS guest_cookie_hash,";
+
         $sql = 'SELECT grp,
                        COUNT(*) AS sessions,
+                       COUNT(DISTINCT actor_key) AS users,
                        SUM(has_trace) AS trace_ok_sessions
                 FROM (
                     SELECT
                         session_id,
                         CASE
-                            WHEN MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 1
-                                 AND MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0
-                                 AND MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 0 THEN \'members\'
-                            WHEN MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 1
-                                 AND MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0
-                                 AND MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 0 THEN \'guests\'
+                            WHEN has_member_human = 1 AND has_guest_human = 0 AND has_bot_row = 0 THEN \'members\'
+                            WHEN has_guest_human = 1 AND has_member_human = 0 AND has_bot_row = 0 THEN \'guests\'
                             ELSE \'other\'
                         END AS grp,
-                        MAX(CASE WHEN cursor_track_points > 0 OR cursor_click_count > 0 THEN 1 ELSE 0 END) AS has_trace
-                    FROM ' . $this->table_prefix . 'bastien59_stats
-                    WHERE visit_time > ' . (int)$start_time . '
-                    GROUP BY session_id
+                        CASE
+                            WHEN has_member_human = 1 AND has_guest_human = 0 AND has_bot_row = 0 THEN CONCAT(\'m:\', CAST(member_user_id AS CHAR))
+                            WHEN has_guest_human = 1 AND has_member_human = 0 AND has_bot_row = 0 THEN ' . $guest_actor_expr . '
+                            ELSE \'\'
+                        END AS actor_key,
+                        has_trace
+                    FROM (
+                        SELECT
+                            session_id,
+                            MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) AS has_member_human,
+                            MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) AS has_guest_human,
+                            MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) AS has_bot_row,
+                            MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN user_id ELSE 0 END) AS member_user_id,
+                            ' . $guest_cookie_select . '
+                            MAX(CASE WHEN user_id <= 1 AND is_bot = 0 AND user_ip <> \'\' THEN user_ip ELSE \'\' END) AS guest_ip,
+                            MAX(CASE WHEN cursor_track_points > 0 OR cursor_click_count > 0 THEN 1 ELSE 0 END) AS has_trace
+                        FROM ' . $this->table_prefix . 'bastien59_stats
+                        WHERE visit_time > ' . (int)$start_time . '
+                        GROUP BY session_id
+                    ) AS raw
                 ) AS sess
                 WHERE grp IN (\'members\', \'guests\')
                 GROUP BY grp';
 
         $stats = [
-            'members' => ['sessions' => 0, 'ok' => 0],
-            'guests' => ['sessions' => 0, 'ok' => 0],
+            'members' => ['sessions' => 0, 'users' => 0, 'ok' => 0],
+            'guests' => ['sessions' => 0, 'users' => 0, 'ok' => 0],
         ];
 
         $result = $this->db->sql_query($sql);
@@ -1549,27 +1569,32 @@ class acp_controller
                 continue;
             }
             $stats[$grp]['sessions'] = (int)($row['sessions'] ?? 0);
+            $stats[$grp]['users'] = (int)($row['users'] ?? 0);
             $stats[$grp]['ok'] = (int)($row['trace_ok_sessions'] ?? 0);
         }
         $this->db->sql_freeresult($result);
 
         $total_sessions = $stats['members']['sessions'] + $stats['guests']['sessions'];
+        $total_users = $stats['members']['users'] + $stats['guests']['users'];
         $total_ok = $stats['members']['ok'] + $stats['guests']['ok'];
 
         $rows = [
             'members' => [
                 'label' => $this->user->lang('STATS_BEHAVIOR_GROUP_MEMBERS'),
                 'sessions' => $stats['members']['sessions'],
+                'users' => $stats['members']['users'],
                 'ok' => $stats['members']['ok'],
             ],
             'guests' => [
                 'label' => $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS'),
                 'sessions' => $stats['guests']['sessions'],
+                'users' => $stats['guests']['users'],
                 'ok' => $stats['guests']['ok'],
             ],
             'humans' => [
                 'label' => $this->user->lang('STATS_BEHAVIOR_GROUP_HUMANS_LEGIT'),
                 'sessions' => $total_sessions,
+                'users' => $total_users,
                 'ok' => $total_ok,
             ],
         ];
@@ -1585,6 +1610,7 @@ class acp_controller
             $this->template->assign_block_vars('BEHAVIOR_CURSOR_CAPTURE', [
                 'GROUP_LABEL' => htmlspecialchars((string)$row['label'], ENT_COMPAT, 'UTF-8'),
                 'SESSIONS' => number_format((int)$row['sessions'], 0, ',', ' '),
+                'USERS' => number_format((int)$row['users'], 0, ',', ' '),
                 'TRACE_OK' => number_format((int)$row['ok'], 0, ',', ' '),
                 'TRACE_OK_RATE' => number_format($ok_rate, 1, ',', ' '),
                 'TRACE_FAIL' => number_format($fail, 0, ',', ' '),
@@ -1854,7 +1880,11 @@ class acp_controller
             return '';
         }
 
-        $svg = '<svg class="behavior-cursor-svg" viewBox="0 0 ' . (int)$canvas_w . ' ' . (int)$canvas_h . '" width="' . $render_w . '" height="' . $render_h . '" preserveAspectRatio="xMidYMid meet">';
+        $base_viewbox = $this->format_cursor_viewbox(0, 0, $canvas_w, $canvas_h);
+        list($fit_x, $fit_y, $fit_w, $fit_h) = $this->compute_cursor_fit_viewbox($points, $clicks, $canvas_w, $canvas_h);
+        $fit_viewbox = $this->format_cursor_viewbox($fit_x, $fit_y, $fit_w, $fit_h);
+
+        $svg = '<svg class="behavior-cursor-svg" viewBox="' . $fit_viewbox . '" data-cursor-base-viewbox="' . $base_viewbox . '" data-cursor-fit-viewbox="' . $fit_viewbox . '" width="' . $render_w . '" height="' . $render_h . '" preserveAspectRatio="xMidYMid meet">';
         $svg .= '<rect x="0" y="0" width="' . (int)$canvas_w . '" height="' . (int)$canvas_h . '" fill="#f7fbff" stroke="#d8e4f2" />';
         $svg .= '<polyline points="' . implode(' ', $plot) . '" fill="none" stroke="#0b74c7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />';
 
@@ -1912,12 +1942,146 @@ class acp_controller
         }
         $render_h = max(64, min(960, $requested_h));
         $label = htmlspecialchars((string)$this->user->lang('STATS_SESSION_CURSOR_NONE'), ENT_COMPAT, 'UTF-8');
+        $base_viewbox = $this->format_cursor_viewbox(0, 0, $canvas_w, $canvas_h);
+        $pad = (int)max(12, min(180, round((float)min($canvas_w, $canvas_h) * 0.14)));
+        $stroke = (int)max(7, min(96, round((float)min($canvas_w, $canvas_h) * 0.10)));
+        $x1 = $pad;
+        $y1 = $pad;
+        $x2 = max($x1 + 1, $canvas_w - $pad);
+        $y2 = max($y1 + 1, $canvas_h - $pad);
+        $cx = (int)round($canvas_w / 2);
+        $cy = (int)round($canvas_h / 2);
+        $ring_r = (int)max(10, min(220, round((float)min($canvas_w, $canvas_h) * 0.22)));
 
-        $svg = '<svg class="behavior-cursor-svg" viewBox="0 0 ' . (int)$canvas_w . ' ' . (int)$canvas_h . '" width="' . $render_w . '" height="' . $render_h . '" preserveAspectRatio="xMidYMid meet">';
+        $svg = '<svg class="behavior-cursor-svg" viewBox="' . $base_viewbox . '" data-cursor-base-viewbox="' . $base_viewbox . '" width="' . $render_w . '" height="' . $render_h . '" preserveAspectRatio="xMidYMid meet">';
         $svg .= '<rect x="0" y="0" width="' . (int)$canvas_w . '" height="' . (int)$canvas_h . '" fill="#f7fbff" stroke="#d8e4f2" />';
-        $svg .= '<text x="' . (int)round($canvas_w / 2) . '" y="' . (int)round($canvas_h / 2) . '" text-anchor="middle" dominant-baseline="middle" font-size="24" fill="#7a8ca2">' . $label . '</text>';
+        $svg .= '<circle cx="' . $cx . '" cy="' . $cy . '" r="' . $ring_r . '" fill="none" stroke="#d43d3d" stroke-width="' . max(2, (int)round($stroke * 0.22)) . '" opacity="0.28" />';
+        $svg .= '<line x1="' . $x1 . '" y1="' . $y1 . '" x2="' . $x2 . '" y2="' . $y2 . '" stroke="#d43d3d" stroke-width="' . $stroke . '" stroke-linecap="round" opacity="0.92" />';
+        $svg .= '<line x1="' . $x2 . '" y1="' . $y1 . '" x2="' . $x1 . '" y2="' . $y2 . '" stroke="#d43d3d" stroke-width="' . $stroke . '" stroke-linecap="round" opacity="0.92" />';
+        $svg .= '<text x="' . $cx . '" y="' . (int)max(16, min($canvas_h - 10, $canvas_h - (int)round($canvas_h * 0.06))) . '" text-anchor="middle" dominant-baseline="middle" font-size="' . max(14, min(42, (int)round($canvas_h * 0.12))) . '" fill="#7a8ca2">' . $label . '</text>';
         $svg .= '</svg>';
         return $svg;
+    }
+
+    /**
+     * Calcule une viewBox "fit-to-trace" autour des points curseur/clics.
+     *
+     * @param array<int,array{0:int,1:int,2:int}> $points
+     * @param array<int,array{0:int,1:int,2:int}> $clicks
+     * @return array{0:int,1:int,2:int,3:int}
+     */
+    private function compute_cursor_fit_viewbox(array $points, array $clicks, $canvas_w, $canvas_h)
+    {
+        $cw = max(1, (int)$canvas_w);
+        $ch = max(1, (int)$canvas_h);
+        $min_x = $cw;
+        $min_y = $ch;
+        $max_x = 0;
+        $max_y = 0;
+        $has_any = false;
+
+        $collector = function (array $items) use (&$min_x, &$min_y, &$max_x, &$max_y, &$has_any, $cw, $ch) {
+            foreach ($items as $p) {
+                $x = max(0, min($cw, (int)($p[1] ?? 0)));
+                $y = max(0, min($ch, (int)($p[2] ?? 0)));
+                if (!$has_any) {
+                    $min_x = $x;
+                    $max_x = $x;
+                    $min_y = $y;
+                    $max_y = $y;
+                    $has_any = true;
+                    continue;
+                }
+                if ($x < $min_x) {
+                    $min_x = $x;
+                }
+                if ($x > $max_x) {
+                    $max_x = $x;
+                }
+                if ($y < $min_y) {
+                    $min_y = $y;
+                }
+                if ($y > $max_y) {
+                    $max_y = $y;
+                }
+            }
+        };
+
+        $collector($points);
+        $collector($clicks);
+
+        if (!$has_any) {
+            return [0, 0, $cw, $ch];
+        }
+
+        $pad = (int)max(14, min(220, round((float)max($cw, $ch) * 0.045)));
+        $x1 = max(0, $min_x - $pad);
+        $y1 = max(0, $min_y - $pad);
+        $x2 = min($cw, $max_x + $pad);
+        $y2 = min($ch, $max_y + $pad);
+
+        if ($x2 <= $x1) {
+            $x2 = min($cw, $x1 + 1);
+        }
+        if ($y2 <= $y1) {
+            $y2 = min($ch, $y1 + 1);
+        }
+
+        $box_w = max(1, $x2 - $x1);
+        $box_h = max(1, $y2 - $y1);
+
+        $target_ratio = (float)$cw / (float)$ch;
+        $box_ratio = (float)$box_w / (float)$box_h;
+
+        if ($box_ratio > $target_ratio) {
+            $wanted_h = (int)ceil((float)$box_w / max(0.0001, $target_ratio));
+            $wanted_h = max(1, min($ch, $wanted_h));
+            $cy = ((float)$y1 + (float)$y2) / 2.0;
+            $y1 = (int)floor($cy - ((float)$wanted_h / 2.0));
+            $y2 = $y1 + $wanted_h;
+            if ($y1 < 0) {
+                $y2 += -$y1;
+                $y1 = 0;
+            }
+            if ($y2 > $ch) {
+                $y1 -= ($y2 - $ch);
+                $y2 = $ch;
+                if ($y1 < 0) {
+                    $y1 = 0;
+                }
+            }
+        } else {
+            $wanted_w = (int)ceil((float)$box_h * $target_ratio);
+            $wanted_w = max(1, min($cw, $wanted_w));
+            $cx = ((float)$x1 + (float)$x2) / 2.0;
+            $x1 = (int)floor($cx - ((float)$wanted_w / 2.0));
+            $x2 = $x1 + $wanted_w;
+            if ($x1 < 0) {
+                $x2 += -$x1;
+                $x1 = 0;
+            }
+            if ($x2 > $cw) {
+                $x1 -= ($x2 - $cw);
+                $x2 = $cw;
+                if ($x1 < 0) {
+                    $x1 = 0;
+                }
+            }
+        }
+
+        $fit_w = max(1, $x2 - $x1);
+        $fit_h = max(1, $y2 - $y1);
+
+        if ($fit_w >= ($cw - 2) && $fit_h >= ($ch - 2)) {
+            return [0, 0, $cw, $ch];
+        }
+
+        return [(int)$x1, (int)$y1, (int)$fit_w, (int)$fit_h];
+    }
+
+    private function format_cursor_viewbox($x, $y, $w, $h)
+    {
+        return (int)$x . ' ' . (int)$y . ' ' . max(1, (int)$w) . ' ' . max(1, (int)$h);
     }
 
     /**

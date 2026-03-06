@@ -649,6 +649,22 @@ function getCursorZoomBase(svg) {
     return base;
 }
 
+function getCursorZoomFit(svg, base) {
+    if (!base) {
+        return null;
+    }
+    var fit = parseCursorZoomViewBox(svg.getAttribute('data-cursor-fit-viewbox'));
+    if (!fit) {
+        return { x: base.x, y: base.y, w: base.w, h: base.h };
+    }
+
+    var w = cursorZoomClamp(fit.w, 1, base.w);
+    var h = cursorZoomClamp(fit.h, 1, base.h);
+    var x = cursorZoomClamp(fit.x, base.x, base.x + base.w - w);
+    var y = cursorZoomClamp(fit.y, base.y, base.y + base.h - h);
+    return { x: x, y: y, w: w, h: h };
+}
+
 function setCursorZoomViewBox(svg, state, x, y, w, h) {
     state.x = x;
     state.y = y;
@@ -747,7 +763,7 @@ function resetCursorZoom(svg) {
     if (!state) {
         return;
     }
-    setCursorZoomViewBox(svg, state, state.baseX, state.baseY, state.baseW, state.baseH);
+    setCursorZoomViewBox(svg, state, state.fitX, state.fitY, state.fitW, state.fitH);
     state.dragMoved = false;
     updateCursorZoomCursor(svg, state);
 }
@@ -772,16 +788,24 @@ function initCursorSvgZoom(root) {
             if (!base) {
                 return;
             }
+            var fit = getCursorZoomFit(svg, base);
+            if (!fit) {
+                fit = { x: base.x, y: base.y, w: base.w, h: base.h };
+            }
 
             var state = {
                 baseX: base.x,
                 baseY: base.y,
                 baseW: base.w,
                 baseH: base.h,
-                x: base.x,
-                y: base.y,
-                w: base.w,
-                h: base.h,
+                fitX: fit.x,
+                fitY: fit.y,
+                fitW: fit.w,
+                fitH: fit.h,
+                x: fit.x,
+                y: fit.y,
+                w: fit.w,
+                h: fit.h,
                 maxZoom: 14,
                 dragging: false,
                 dragPointerId: null,
@@ -794,9 +818,10 @@ function initCursorSvgZoom(root) {
 
             svg.__cursorZoomState = state;
             svg.setAttribute('data-cursor-zoom-ready', '1');
+            setCursorZoomViewBox(svg, state, state.fitX, state.fitY, state.fitW, state.fitH);
             updateCursorZoomCursor(svg, state);
             if (!svg.getAttribute('title')) {
-                svg.setAttribute('title', 'Zoom: molette ou double-clic. Deplacement: glisser. Reset: Shift+double-clic.');
+                svg.setAttribute('title', 'Zoom: molette ou double-clic. Deplacement: glisser. Reset fit trace: Shift+double-clic.');
             }
 
             var onWheel = function(e) {
