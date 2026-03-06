@@ -84,7 +84,8 @@ class geo_async extends \phpbb\cron\task\base
         $start_ts = microtime(true);
         $batch_index = 0;
         $no_progress_loops = 0;
-        $max_loops = 1000;
+        $estimated_loops = (int)ceil(max(1, (int)$pending_probe_total) / max(1, (int)$batch));
+        $max_loops = max(1000, $estimated_loops * 8);
         $defer_live_until_next_run = false;
 
         if ($this->is_cli_runtime()) {
@@ -93,11 +94,12 @@ class geo_async extends \phpbb\cron\task\base
 
         if ($this->is_cli_runtime()) {
             $this->cli_log(sprintf(
-                '[geo_async] Debut: pending_total=%d, window=%d, batch=%d, ttl=%dj',
+                '[geo_async] Debut: pending_total=%d, window=%d, batch=%d, ttl=%dj, max_loops=%d',
                 (int)$pending_probe_total,
                 (int)$pending_probe_window,
                 (int)$batch,
-                (int)$ttl_days
+                (int)$ttl_days,
+                (int)$max_loops
             ));
         }
 
@@ -217,20 +219,25 @@ class geo_async extends \phpbb\cron\task\base
                 break;
             }
 
-            if ($processed_batch <= 0) {
+            $pending_after_batch = $this->get_pending_ip_count($ttl_days);
+            $pending_delta = max(0, (int)$pending_total_all - (int)$pending_after_batch);
+
+            if ($processed_batch <= 0 || $pending_delta <= 0) {
                 $no_progress_loops++;
                 if ($this->is_cli_runtime()) {
                     $this->cli_log(sprintf(
-                        '[geo_async] Batch %d sans progression (scan=%d, fail=%d, local_skip=%d)',
+                        '[geo_async] Batch %d sans progression utile (scan=%d, fail=%d, local_skip=%d, pending:%d->%d)',
                         (int)$batch_index,
                         (int)$scanned_batch,
                         (int)$fail_hits_batch,
-                        (int)$local_skips_batch
+                        (int)$local_skips_batch,
+                        (int)$pending_total_all,
+                        (int)$pending_after_batch
                     ));
                 }
-                if ($no_progress_loops >= 2) {
+                if ($no_progress_loops >= 3) {
                     if ($this->is_cli_runtime()) {
-                        $this->cli_log('[geo_async] Arret: aucun progres sur 2 batchs consecutifs.');
+                        $this->cli_log('[geo_async] Arret: aucun progres utile sur 3 batchs consecutifs (garde anti-boucle).');
                     }
                     break;
                 }
@@ -239,7 +246,7 @@ class geo_async extends \phpbb\cron\task\base
             }
 
             if (count($this->get_pending_ips(1, $ttl_days)) > 0) {
-                $this->maybe_pause_between_batches($batch_index, $pending_total_all, $live_hits_batch, $fail_hits_batch);
+                $this->maybe_pause_between_batches($batch_index, $pending_after_batch, $live_hits_batch, $fail_hits_batch);
             }
         }
 
@@ -371,7 +378,8 @@ class geo_async extends \phpbb\cron\task\base
         $sql = 'SELECT ip_address, country_code, country_name, city, hostname
                 FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
                 WHERE ip_address IN (' . implode(',', $escaped) . ')
-                AND cached_time > ' . (int)($now - $ttl_sec);
+                AND cached_time > ' . (int)($now - $ttl_sec) . '
+                AND country_code <> \'\'';
 
         $result = $this->db->sql_query($sql);
         $rows = [];
@@ -420,6 +428,7 @@ class geo_async extends \phpbb\cron\task\base
         $sql = 'SELECT ip_address, country_code, country_name, city, hostname
                 FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
                 WHERE cached_time > ' . (int)($now - max(3600, (int)$ttl_sec)) . '
+                AND country_code <> \'\'
                 AND (
                     ip_address = \'' . $this->db->sql_escape('v4:' . $subnet) . '\'
                     OR ip_address LIKE \'' . $this->db->sql_escape($subnet . '.%') . '\'
