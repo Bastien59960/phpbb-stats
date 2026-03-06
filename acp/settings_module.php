@@ -68,6 +68,11 @@ class settings_module
             $noscreenres_pages = max(2, min(20, (int)$noscreenres_pages));
             $config->set('bastien59_stats_noscreenres_pages', $noscreenres_pages);
 
+            // Préfixe IPv4 du cache géoloc (/16 à /32)
+            $geo_ipv4_prefix_len = $request->variable('stats_geo_ipv4_prefix_len', 24);
+            $geo_ipv4_prefix_len = max(16, min(32, (int)$geo_ipv4_prefix_len));
+            $config->set('bastien59_stats_geo_ipv4_prefix_len', $geo_ipv4_prefix_len);
+
             trigger_error($user->lang('CONFIG_UPDATED') . adm_back_link($this->u_action));
         }
 
@@ -80,6 +85,7 @@ class settings_module
             'STATS_CHROME_THRESHOLD' => $config['bastien59_stats_chrome_threshold'] ?? 130,
             'STATS_FIREFOX_THRESHOLD'=> $config['bastien59_stats_firefox_threshold'] ?? 30,
             'STATS_NOSCREENRES_PAGES'=> $config['bastien59_stats_noscreenres_pages'] ?? 3,
+            'STATS_GEO_IPV4_PREFIX_LEN' => $config['bastien59_stats_geo_ipv4_prefix_len'] ?? 24,
             'STATS_AUDIT_LOG_PATH'   => $config['bastien59_stats_audit_log_path'] ?? '/var/log/security_audit.log',
             'STATS_AUDIT_LOG_STATUS' => $this->check_log_status($config['bastien59_stats_audit_log_path'] ?? '/var/log/security_audit.log'),
         ]);

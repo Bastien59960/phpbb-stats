@@ -45,7 +45,7 @@ Signaux stricts ou d'observation selon contexte géographique:
 ### Géolocalisation asynchrone robuste (cron `geo_async`)
 
 - Résolution IP via `ip-api.com` avec cache DB.
-- Cache IPv4 par IP **et par préfixe `/16`** (`v4:a.b`) pour éviter les appels redondants.
+- Cache IPv4 par IP **et par préfixe configurable** (défaut `/24`, format de clé `v4:a.b.c.n/24`) pour limiter les appels redondants tout en gardant une bonne précision pays.
 - TTL cache configurable (défaut 45 jours). Le cron supprime automatiquement les entrées expirées.
 - Code `ZZ` pour les IPs résolues sans pays (non géolocalisables) : évite les retentatives infinies.
 - Throttling avec marge de sécurité: cible 40 requêtes/min, limite service 45/min, pause inter-batch fixe 5s, pauses quota selon headers.
@@ -166,7 +166,7 @@ php ext/bastien59960/stats/bin/backfill_reactions_assets.php --apply --window=12
 Tables principales:
 
 - `bastien59_stats`: sessions/pages, signaux, AJAX, cookie hash, curseur, diagnostics.
-- `bastien59_stats_geo_cache`: cache géolocalisation IP + clé `/16` IPv4.
+- `bastien59_stats_geo_cache`: cache géolocalisation IP + clé de sous-réseau IPv4 (`/24` par défaut, configurable en ACP).
 - `bastien59_stats_behavior_profile`: profils appris (membres).
 - `bastien59_stats_behavior_seen`: sessions déjà intégrées à l'apprentissage.
 

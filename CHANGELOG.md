@@ -16,7 +16,7 @@ Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/)
 ### Changed
 - Zoom/pan des SVG de traces curseur (molette, double-clic, glisser) dans les vues ACP concernées
 - Libellés ACP/FR/EN clarifiés pour distinguer **cookie de résolution écran** et **cookie visiteur signé**
-- Traitement géolocalisation asynchrone renforcé: cache IPv4 étendu au préfixe `/16` (`v4:a.b`), throttling avec marge de sécurité, pause inter-batch fixe et progression CLI globale plus lisible
+- Traitement géolocalisation asynchrone renforcé: cache IPv4 sur préfixe configurable (défaut `/24`, format `v4:a.b.c.n/24`), throttling avec marge de sécurité, pause inter-batch fixe et progression CLI globale plus lisible
 
 ### Fixed
 - En cas de retour HTTP 429 du service géoloc, reprise au prochain run sans marquer l'IP comme traitée

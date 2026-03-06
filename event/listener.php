@@ -2788,7 +2788,7 @@ HTML;
             return ['country_code' => 'LO', 'country_name' => 'Local', 'hostname' => 'localhost'];
         }
 
-        // Vérifier le cache (clé IP + fallback /16)
+        // Vérifier le cache (clé IP + fallback IPv4 configurable)
         $cached = $this->get_geo_cache($ip);
         if ($cached !== false) {
             return $cached;
@@ -2962,8 +2962,8 @@ HTML;
         // Priorité: IP exacte
         $keys[] = $clean_ip;
 
-        // Fallback /16 pour IPv4: réduit massivement le nombre d'appels externes.
-        $subnet = $this->get_ipv4_subnet16_prefix($clean_ip);
+        // Fallback IPv4 configurable (ACP): compromis coût API / précision géoloc.
+        $subnet = $this->get_ipv4_subnet_key($clean_ip);
         if ($subnet !== '') {
             $keys[] = 'v4:' . $subnet;
         }
@@ -2971,19 +2971,50 @@ HTML;
         return $keys;
     }
 
-    private function get_ipv4_subnet16_prefix($ip)
+    private function get_ipv4_subnet_key($ip)
     {
         $clean_ip = trim((string)$ip);
-        if (!preg_match('/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/', $clean_ip, $m)) {
+        if (!preg_match('/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/', $clean_ip, $m)) {
             return '';
         }
 
         $a = (int)$m[1];
         $b = (int)$m[2];
-        if ($a < 0 || $a > 255 || $b < 0 || $b > 255) {
+        $c = (int)$m[3];
+        $d = (int)$m[4];
+        if (
+            $a < 0 || $a > 255 ||
+            $b < 0 || $b > 255 ||
+            $c < 0 || $c > 255 ||
+            $d < 0 || $d > 255
+        ) {
             return '';
         }
 
-        return $a . '.' . $b;
+        $ip_num = ip2long($clean_ip);
+        if ($ip_num === false) {
+            return '';
+        }
+        $ip_num = (int)sprintf('%u', $ip_num);
+
+        $prefix_len = $this->get_geo_ipv4_prefix_len();
+        $host_bits = 32 - (int)$prefix_len;
+        $mask = ($host_bits <= 0)
+            ? 0xFFFFFFFF
+            : ((0xFFFFFFFF << $host_bits) & 0xFFFFFFFF);
+        $start = (int)($ip_num & $mask);
+
+        $o1 = (int)(($start >> 24) & 0xFF);
+        $o2 = (int)(($start >> 16) & 0xFF);
+        $o3 = (int)(($start >> 8) & 0xFF);
+        $o4 = (int)($start & 0xFF);
+
+        return $o1 . '.' . $o2 . '.' . $o3 . '.' . $o4 . '/' . (int)$prefix_len;
+    }
+
+    private function get_geo_ipv4_prefix_len()
+    {
+        $bits = (int)($this->config['bastien59_stats_geo_ipv4_prefix_len'] ?? 24);
+        return max(16, min(32, $bits));
     }
 }

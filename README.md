@@ -45,7 +45,7 @@ Strict and observation signals depending on geo context:
 ### Robust async geolocation (`geo_async` cron task)
 
 - IP resolution via `ip-api.com` with DB caching.
-- IPv4 cache by full IP and by `/16` prefix (`v4:a.b`) to avoid redundant live lookups.
+- IPv4 cache by full IP and by configurable prefix (default `/24`, key format `v4:a.b.c.n/24`) to avoid redundant live lookups while keeping good country precision.
 - Configurable cache TTL (default 45 days).
 - Safe throttling policy: 40 req/min target, 45 req/min service limit, fixed 5s inter-batch pause, additional quota-aware pauses.
 - On HTTP 429: live lookup loop stops early and remaining IPs are retried on next run.
@@ -149,7 +149,7 @@ php ext/bastien59960/stats/bin/backfill_reactions_assets.php --apply --window=12
 Main tables:
 
 - `bastien59_stats`: sessions/pages, signals, AJAX, cookie hash, cursor metrics, diagnostics.
-- `bastien59_stats_geo_cache`: geolocation cache + IPv4 `/16` keys.
+- `bastien59_stats_geo_cache`: geolocation cache + IPv4 subnet keys (`/24` by default, configurable in ACP).
 - `bastien59_stats_behavior_profile`: learned behavior profiles.
 - `bastien59_stats_behavior_seen`: dedup table for learned sessions.
 

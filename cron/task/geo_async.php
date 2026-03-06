@@ -45,6 +45,9 @@ class geo_async extends \phpbb\cron\task\base
     /** @var float */
     protected $last_live_lookup_ts = 0.0;
 
+    /** @var int|null */
+    protected $geo_ipv4_prefix_len = null;
+
     public function __construct(\phpbb\db\driver\driver_interface $db, \phpbb\config\config $config, $table_prefix)
     {
         $this->db = $db;
@@ -71,6 +74,7 @@ class geo_async extends \phpbb\cron\task\base
 
         $batch = max(5, min(120, (int)($this->config['bastien59_stats_geo_async_batch'] ?? 30)));
         $ttl_days = max(1, min(365, (int)($this->config['bastien59_stats_geo_cache_ttl_days'] ?? 45)));
+        $ipv4_prefix_len = $this->get_geo_ipv4_prefix_len();
 
         $processed_total = 0;
         $scanned_total = 0;
@@ -94,11 +98,12 @@ class geo_async extends \phpbb\cron\task\base
 
         if ($this->is_cli_runtime()) {
             $this->cli_log(sprintf(
-                '[geo_async] Debut: pending_total=%d, window=%d, batch=%d, ttl=%dj, max_loops=%d',
+                '[geo_async] Debut: pending_total=%d, window=%d, batch=%d, ttl=%dj, ipv4_prefix=/%d, max_loops=%d',
                 (int)$pending_probe_total,
                 (int)$pending_probe_window,
                 (int)$batch,
                 (int)$ttl_days,
+                (int)$ipv4_prefix_len,
                 (int)$max_loops
             ));
         }
@@ -161,7 +166,9 @@ class geo_async extends \phpbb\cron\task\base
                     $cached_hits_batch++;
                     $cached_hits_total++;
                     $cache_key = strtolower(trim((string)($cached['__cache_key'] ?? '')));
-                    $cache_kind = (strpos($cache_key, 'v4:') === 0) ? 'cache16' : 'cache';
+                    $cache_kind = (strpos($cache_key, 'v4:') === 0)
+                        ? ('cachev4/' . (int)$ipv4_prefix_len)
+                        : 'cache';
                     list($global_done, $global_left) = $this->resolve_global_progress($pending_probe_total, $ttl_days, $pending_total_all);
                     $this->cli_progress($processed_batch, $batch, $scanned_batch, $pending_window, $cached_hits_batch, $live_hits_batch, $fail_hits_batch, (string)$ip . ' ' . $cache_kind, $global_done, $pending_probe_total, $global_left);
                     continue;
@@ -407,14 +414,13 @@ class geo_async extends \phpbb\cron\task\base
             ];
         }
 
-        // Compat historique: si seul un cache IPv4 par IP existe (sans cle v4:/16),
-        // reutiliser quand meme le /16 avant tout appel live, puis promouvoir la cle /16.
-        $subnet = $this->get_ipv4_subnet16_prefix($ip);
-        if ($subnet !== '') {
-            $geo = $this->get_geo_cache_from_subnet($subnet, $ttl_sec);
+        // Fallback IPv4 paramétrable (ACP): compromis coût API / précision géoloc.
+        $subnet_key = $this->get_ipv4_subnet_key($ip);
+        if ($subnet_key !== '') {
+            $geo = $this->get_geo_cache_from_subnet($subnet_key, $ttl_sec);
             if ($geo !== false) {
                 $this->set_geo_cache($ip, $geo);
-                $geo['__cache_key'] = 'v4:' . $subnet;
+                $geo['__cache_key'] = 'v4:' . $subnet_key;
                 return $geo;
             }
         }
@@ -422,10 +428,10 @@ class geo_async extends \phpbb\cron\task\base
         return false;
     }
 
-    private function get_geo_cache_from_subnet($subnet, $ttl_sec)
+    private function get_geo_cache_from_subnet($subnet_key, $ttl_sec)
     {
-        $subnet = trim((string)$subnet);
-        if ($subnet === '') {
+        $subnet_key = trim((string)$subnet_key);
+        if ($subnet_key === '') {
             return false;
         }
 
@@ -434,10 +440,7 @@ class geo_async extends \phpbb\cron\task\base
                 FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
                 WHERE cached_time > ' . (int)($now - max(3600, (int)$ttl_sec)) . '
                 AND country_code <> \'\'
-                AND (
-                    ip_address = \'' . $this->db->sql_escape('v4:' . $subnet) . '\'
-                    OR ip_address LIKE \'' . $this->db->sql_escape($subnet . '.%') . '\'
-                )
+                AND ip_address = \'' . $this->db->sql_escape('v4:' . $subnet_key) . '\'
                 ORDER BY cached_time DESC';
         $result = $this->db->sql_query_limit($sql, 1);
         $row = $this->db->sql_fetchrow($result);
@@ -513,15 +516,17 @@ class geo_async extends \phpbb\cron\task\base
         }
 
         $cutoff = time() - (max(1, (int)$ttl_days) * 86400);
-        $subnet = $this->get_ipv4_subnet16_prefix($ip);
+        $subnet_meta = $this->get_ipv4_subnet_meta($ip);
 
-        if ($subnet !== '') {
+        if ($subnet_meta !== false) {
             $sql = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
                     SET ' . implode(', ', $set_parts) . '
                     WHERE country_code = \'\'
                     AND is_first_visit = 1
                     AND visit_time > ' . (int)$cutoff . '
-                    AND user_ip LIKE \'' . $this->db->sql_escape($subnet . '.%') . '\'';
+                    AND user_ip LIKE \'' . $this->db->sql_escape((string)$subnet_meta['prefix_hint']) . '%\'
+                    AND user_ip NOT LIKE \'%:%\'
+                    AND INET_ATON(user_ip) BETWEEN ' . (int)$subnet_meta['start'] . ' AND ' . (int)$subnet_meta['end'];
             $this->db->sql_query($sql);
             return;
         }
@@ -564,9 +569,11 @@ class geo_async extends \phpbb\cron\task\base
         }
 
         $cutoff = time() - (max(1, (int)$ttl_days) * 86400);
-        $subnet = $this->get_ipv4_subnet16_prefix($ip);
-        $scope_sql = ($subnet !== '')
-            ? 'AND user_ip LIKE \'' . $this->db->sql_escape($subnet . '.%') . '\''
+        $subnet_meta = $this->get_ipv4_subnet_meta($ip);
+        $scope_sql = ($subnet_meta !== false)
+            ? 'AND user_ip LIKE \'' . $this->db->sql_escape((string)$subnet_meta['prefix_hint']) . '%\'
+               AND user_ip NOT LIKE \'%:%\'
+               AND INET_ATON(user_ip) BETWEEN ' . (int)$subnet_meta['start'] . ' AND ' . (int)$subnet_meta['end']
             : 'AND user_ip = \'' . $this->db->sql_escape((string)$ip) . '\'';
 
         $sql = 'SELECT log_id, session_id, user_id, user_ip, user_agent, page_url, screen_res, signals, bot_source
@@ -1112,28 +1119,99 @@ class geo_async extends \phpbb\cron\task\base
         }
 
         $keys[] = $ip;
-        $subnet = $this->get_ipv4_subnet16_prefix($ip);
-        if ($subnet !== '') {
-            $keys[] = 'v4:' . $subnet;
+        $subnet_key = $this->get_ipv4_subnet_key($ip);
+        if ($subnet_key !== '') {
+            $keys[] = 'v4:' . $subnet_key;
         }
 
         return $keys;
     }
 
-    private function get_ipv4_subnet16_prefix($ip)
+    private function get_ipv4_subnet_key($ip)
+    {
+        $meta = $this->get_ipv4_subnet_meta($ip);
+        if ($meta === false) {
+            return '';
+        }
+        return (string)$meta['key'];
+    }
+
+    private function get_ipv4_subnet_meta($ip)
     {
         $ip = trim((string)$ip);
-        if (!preg_match('/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/', $ip, $m)) {
-            return '';
+        if (!preg_match('/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/', $ip, $m)) {
+            return false;
         }
 
         $a = (int)$m[1];
         $b = (int)$m[2];
-        if ($a < 0 || $a > 255 || $b < 0 || $b > 255) {
-            return '';
+        $c = (int)$m[3];
+        $d = (int)$m[4];
+        if (
+            $a < 0 || $a > 255 ||
+            $b < 0 || $b > 255 ||
+            $c < 0 || $c > 255 ||
+            $d < 0 || $d > 255
+        ) {
+            return false;
         }
 
-        return $a . '.' . $b;
+        $ip_num = ip2long($ip);
+        if ($ip_num === false) {
+            return false;
+        }
+        $ip_num = (int)sprintf('%u', $ip_num);
+
+        $prefix_len = $this->get_geo_ipv4_prefix_len();
+        $host_bits = 32 - (int)$prefix_len;
+        $mask = ($host_bits <= 0)
+            ? 0xFFFFFFFF
+            : ((0xFFFFFFFF << $host_bits) & 0xFFFFFFFF);
+        $start = (int)($ip_num & $mask);
+        $end = (int)($start + ((1 << $host_bits) - 1));
+
+        $o1 = (int)(($start >> 24) & 0xFF);
+        $o2 = (int)(($start >> 16) & 0xFF);
+        $o3 = (int)(($start >> 8) & 0xFF);
+        $o4 = (int)($start & 0xFF);
+        $start_ip = $o1 . '.' . $o2 . '.' . $o3 . '.' . $o4;
+
+        $fixed_octets = (int)floor(((int)$prefix_len) / 8);
+        if ($fixed_octets >= 3) {
+            $prefix_hint = $o1 . '.' . $o2 . '.' . $o3 . '.';
+        } elseif ($fixed_octets === 2) {
+            $prefix_hint = $o1 . '.' . $o2 . '.';
+        } else {
+            $prefix_hint = $o1 . '.';
+        }
+
+        $start_check = ip2long($start_ip);
+        if ($start_check === false) {
+            return false;
+        }
+        $start_check = (int)sprintf('%u', $start_check);
+        if ($start_check !== $start || $end < $start) {
+            return false;
+        }
+
+        return [
+            'key' => $start_ip . '/' . (int)$prefix_len,
+            'prefix_hint' => $prefix_hint,
+            'start' => $start,
+            'end' => $end,
+        ];
+    }
+
+    private function get_geo_ipv4_prefix_len()
+    {
+        if ($this->geo_ipv4_prefix_len !== null) {
+            return (int)$this->geo_ipv4_prefix_len;
+        }
+
+        $bits = (int)($this->config['bastien59_stats_geo_ipv4_prefix_len'] ?? 24);
+        $bits = max(16, min(32, $bits));
+        $this->geo_ipv4_prefix_len = $bits;
+        return (int)$this->geo_ipv4_prefix_len;
     }
 
     private function is_local_ip($ip)

@@ -35,6 +35,14 @@
 	</fieldset>
 
 	<fieldset>
+		<legend>Geolocalisation IPv4</legend>
+		<dl>
+			<dt><label for="stats_geo_ipv4_prefix_len">Prefixe cache IPv4 :</label><br /><span>Taille du sous-reseau utilise pour la cle de cache geoloc IPv4. Plus petit = plus precis, plus de lookups live.<br />Exemples: /16 = 65 536 IP (5.34.0.0 a 5.34.255.255), /24 = 256 IP (5.34.129.0 a 5.34.129.255), /28 = 16 IP (5.34.129.176 a 5.34.129.191).</span></dt>
+			<dd>/<input type="number" id="stats_geo_ipv4_prefix_len" name="stats_geo_ipv4_prefix_len" value="{STATS_GEO_IPV4_PREFIX_LEN}" min="16" max="32" style="width:80px;" /></dd>
+		</dl>
+	</fieldset>
+
+	<fieldset>
 		<legend>Journal de securite</legend>
 		<dl>
 			<dt><label for="stats_audit_log_path">Chemin du fichier de log :</label><br /><span>Fichier ou les detections de bots sont ecrites (lu par fail2ban). Le fichier doit etre accessible en ecriture par www-data.</span></dt>
