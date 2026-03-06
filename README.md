@@ -68,7 +68,7 @@ Le script CLI `bin/cross_ip_audit.php` génère des lignes dédiées dans `secur
 Exemple de ligne :
 
 ```text
-2026-03-05 17:43:37 PHPBB-XIP ip=188.61.125.156 cc=CH method=xip_dl_soft_v1 severity=soft score=65 downloads=13 ...
+2026-03-05 17:43:37 PHPBB-XIP ip=203.0.113.42 cc=CH method=xip_dl_soft_v1 severity=soft score=65 downloads=13 ...
 ```
 
 Règles clés anti faux-positifs :
