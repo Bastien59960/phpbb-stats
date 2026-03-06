@@ -118,9 +118,20 @@ class acp_controller
         $min_samples = max(5, min(5000, (int)$this->request->variable('min_samples', (int)($this->config['bastien59_stats_learning_min_samples'] ?? 25))));
         $start_time = time() - ($hours * 3600);
         $learning_enabled = !empty($this->config['bastien59_stats_learning_enabled']);
+        $filter_action = trim((string)$this->request->server('SCRIPT_NAME', 'index.php'));
+        if ($filter_action === '') {
+            $filter_action = 'index.php';
+        }
+        $current_i = trim((string)$this->request->variable('i', '', true));
+        $current_mode = trim((string)$this->request->variable('mode', 'behavior', true));
+        if ($current_mode === '') {
+            $current_mode = 'behavior';
+        }
+        $current_sid = trim((string)$this->request->variable('sid', '', true));
 
         $this->template->assign_vars([
             'U_ACTION' => $u_action,
+            'U_BEHAVIOR_FILTER_ACTION' => htmlspecialchars($filter_action, ENT_COMPAT, 'UTF-8'),
             'FILTER_HOURS' => $hours,
             'PROFILE_LIMIT' => $profile_limit,
             'MIN_SAMPLES' => $min_samples,
@@ -129,6 +140,9 @@ class acp_controller
             'BEHAVIOR_GROUP_SESSIONS_TOTAL_PURE' => 0,
             'BEHAVIOR_GROUP_SESSIONS_TOTAL_ALL' => 0,
             'BEHAVIOR_GROUP_SESSIONS_MIXED' => 0,
+            'ACP_I' => htmlspecialchars($current_i, ENT_COMPAT, 'UTF-8'),
+            'ACP_MODE' => htmlspecialchars($current_mode, ENT_COMPAT, 'UTF-8'),
+            'ACP_SID' => htmlspecialchars($current_sid, ENT_COMPAT, 'UTF-8'),
         ]);
 
         if (!$this->has_behavior_learning_tables()) {

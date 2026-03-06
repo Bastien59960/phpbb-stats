@@ -46,7 +46,10 @@
 </style>
 
 <div class="behavior-wrap">
-    <form method="get" action="{U_ACTION}" class="behavior-filters">
+    <form method="get" action="{U_BEHAVIOR_FILTER_ACTION}" class="behavior-filters">
+        <input type="hidden" name="i" value="{ACP_I}" />
+        <input type="hidden" name="mode" value="{ACP_MODE}" />
+        <!-- IF ACP_SID --><input type="hidden" name="sid" value="{ACP_SID}" /><!-- ENDIF -->
         <div>
             <label>{L_STATS_PERIOD}</label>
             <select name="hours">
