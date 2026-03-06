@@ -1266,10 +1266,12 @@ class acp_controller
     {
         $has_cursor_columns = $this->has_cursor_columns();
         $cursor_select = '';
+        $interesting_condition = "signals <> ''";
         if ($has_cursor_columns) {
             $cursor_select = ', cursor_track_points, cursor_track_duration_ms, cursor_track_path, cursor_click_points,
                                cursor_device_class, cursor_viewport, cursor_total_distance, cursor_avg_speed,
                                cursor_max_speed, cursor_direction_changes, cursor_linearity, cursor_click_count';
+            $interesting_condition = "(signals <> '' OR cursor_track_points > 0)";
         }
 
         $sql = 'SELECT visit_time, user_ip, country_code, country_name, page_title, page_url, signals, user_agent,
@@ -1278,8 +1280,11 @@ class acp_controller
                 WHERE visit_time > ' . (int)$start_time . '
                 AND is_first_visit = 1
                 AND user_id <= 1
+                AND ' . $interesting_condition . '
                 ORDER BY visit_time DESC';
         $result = $this->db->sql_query_limit($sql, $limit);
+        $case_count = 0;
+        $svg_count = 0;
 
         while ($row = $this->db->sql_fetchrow($result)) {
             $country_display = '';
@@ -1294,7 +1299,11 @@ class acp_controller
                 $cursor_svg = $this->build_cursor_trace_svg($row);
                 $cursor_device = $this->format_cursor_device_label((string)($row['cursor_device_class'] ?? ''));
                 $cursor_summary = $this->format_cursor_summary($row);
+                if ($cursor_svg !== '') {
+                    $svg_count++;
+                }
             }
+            $case_count++;
 
             $this->template->assign_block_vars('BEHAVIOR_CASES', [
                 'TIME' => $this->user->format_date((int)$row['visit_time']),
@@ -1311,6 +1320,16 @@ class acp_controller
             ]);
         }
         $this->db->sql_freeresult($result);
+
+        $this->template->assign_vars([
+            'BEHAVIOR_RECENT_CASES_COUNT' => $case_count,
+            'BEHAVIOR_RECENT_CASES_SVG_COUNT' => $svg_count,
+            'BEHAVIOR_RECENT_CURSOR_SVG_STATUS' => sprintf(
+                $this->user->lang('STATS_BEHAVIOR_CURSOR_SVG_STATUS'),
+                (int)$svg_count,
+                (int)$case_count
+            ),
+        ]);
     }
 
     private function format_cursor_device_label($device_class)

@@ -23,6 +23,7 @@
 .behavior-bot { background:#fce8e6; color:#b3261e; }
 .behavior-help { cursor:help; text-decoration:underline dotted; text-underline-offset:2px; }
 .behavior-cursor-svg { display:block; width:220px; height:140px; border:1px solid #d8e4f2; border-radius:6px; background:#fff; }
+.behavior-note { padding:10px 12px; margin:0; border-bottom:1px solid #eee; }
 .behavior-help::after {
     content:" ?";
     display:inline-block;
@@ -225,6 +226,7 @@
 
     <div class="behavior-box">
         <h3>{L_STATS_BEHAVIOR_RECENT_CASES}</h3>
+        <p class="behavior-muted behavior-note">{BEHAVIOR_RECENT_CURSOR_SVG_STATUS}</p>
         <table class="behavior-table">
             <thead>
                 <tr>
@@ -246,7 +248,11 @@
                     <td>
                         <span class="behavior-muted">{BEHAVIOR_CASES.CURSOR_DEVICE}</span><br>
                         <span class="behavior-muted">{BEHAVIOR_CASES.CURSOR_SUMMARY}</span><br>
-                        {BEHAVIOR_CASES.CURSOR_SVG}
+                        <!-- IF BEHAVIOR_CASES.CURSOR_SVG -->
+                            {BEHAVIOR_CASES.CURSOR_SVG}
+                        <!-- ELSE -->
+                            <span class="behavior-muted">{L_STATS_BEHAVIOR_CURSOR_SVG_NONE}</span>
+                        <!-- ENDIF -->
                     </td>
                     <td><span class="behavior-muted">{BEHAVIOR_CASES.USER_AGENT}</span></td>
                 </tr>

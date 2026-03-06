@@ -111,7 +111,7 @@ $lang = array_merge($lang, [
 	'STATS_BEHAVIOR_COL_JUMP'		=> '% jump scroll',
 	'STATS_BEHAVIOR_COL_UPDATED'	=> 'Updated',
 	'STATS_BEHAVIOR_COL_SIGNAL'		=> 'Signal',
-	'STATS_BEHAVIOR_COL_CURSOR'		=> 'Cursor trace',
+	'STATS_BEHAVIOR_COL_CURSOR'		=> 'Cursor trace (SVG)',
 	'STATS_BEHAVIOR_COL_RATE'		=> 'Rate',
 	'STATS_BEHAVIOR_COL_ZERO_INTERACT' => '% no-interact scroll',
 			'STATS_BEHAVIOR_HELP_COL_GROUP' => 'Compared session type (strict classification): members, guests, or bots. Mixed sessions are excluded.',
@@ -162,6 +162,8 @@ $lang = array_merge($lang, [
 		'STATS_BEHAVIOR_CURSOR_DEVICE_TABLET' => 'Tablet',
 		'STATS_BEHAVIOR_CURSOR_DEVICE_UNKNOWN' => 'Unknown device',
 		'STATS_BEHAVIOR_CURSOR_NONE' => 'No cursor trace',
+		'STATS_BEHAVIOR_CURSOR_SVG_NONE' => 'SVG unavailable (no recorded path)',
+		'STATS_BEHAVIOR_CURSOR_SVG_STATUS' => 'Visible SVGs: %1$d / %2$d displayed recent cases',
 		'STATS_BEHAVIOR_CURSOR_SUMMARY' => 'pts:%d, dur:%dms, dist:%dpx, avg:%dpx/s, max:%dpx/s, dir:%d, lin:%d%%, clicks:%d',
 
 	// Overview

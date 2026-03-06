@@ -650,7 +650,8 @@ class listener implements EventSubscriberInterface
         return visible&&focused;
     }
     function captureElapsed(nowTs){
-        var now=clamp(nowTs||Date.now(),0,2147483647);
+        var now=parseInt(nowTs||Date.now(),10);
+        if(isNaN(now)||now<0){ now=Date.now(); }
         var total=activeAccumMs;
         if(captureStarted && activeStartTs>0){
             total+=Math.max(0,now-activeStartTs);
