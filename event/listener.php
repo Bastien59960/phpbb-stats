@@ -2882,7 +2882,8 @@ HTML;
         $sql = 'SELECT ip_address, country_code, country_name, city, hostname
                 FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
                 WHERE ip_address IN (' . implode(',', $escaped) . ')
-                AND cached_time > ' . (time() - $this->get_geo_cache_ttl_sec());
+                AND cached_time > ' . (time() - $this->get_geo_cache_ttl_sec()) . '
+                AND country_code <> \'\'';
 
         $result = $this->db->sql_query($sql);
         $rows = [];

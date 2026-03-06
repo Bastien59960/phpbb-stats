@@ -191,6 +191,11 @@ class geo_async extends \phpbb\cron\task\base
                     continue;
                 }
 
+                // Si ip-api répond success mais sans pays (IP réservée, non attribuée),
+                // stocker 'ZZ' pour éviter les retentatives infinies à chaque run.
+                if (($geo['country_code'] ?? '') === '') {
+                    $geo['country_code'] = 'ZZ';
+                }
                 $this->set_geo_cache($ip, $geo);
                 $this->backfill_stats_for_ip($ip, $geo, $ttl_days);
                 $this->process_deferred_country_signals_for_ip($ip, $geo, $ttl_days);
