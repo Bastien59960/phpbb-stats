@@ -74,6 +74,8 @@ Exemple de ligne :
 Règles clés anti faux-positifs :
 
 - scoring multi-critères (download-only, ratio cross-IP distribué, burst, etc.)
+- si l'extension `bastien59960/reactions` est active: contrôle du chargement par IP de
+  `reactions.css` (pour les invités, le `reactions.js` peut être absent sans anomalie)
 - vérification inverse/forward DNS des crawlers légitimes connus avant signal
 - exclusion stricte des IP `FR`
 - déduplication temporelle par IP + méthode

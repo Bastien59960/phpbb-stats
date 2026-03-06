@@ -19,6 +19,7 @@ class acp_controller
     protected $has_ajax_telemetry_columns = null;
     protected $has_ajax_advanced_columns = null;
     protected $has_cursor_columns = null;
+    protected $has_reactions_probe_columns = null;
     protected $has_visitor_cookie_column = null;
     protected $has_visitor_cookie_debug_columns = null;
     protected $has_behavior_learning_tables = null;
@@ -137,6 +138,7 @@ class acp_controller
         $this->assign_behavior_profiles($min_samples, $profile_limit);
         $this->assign_behavior_group_comparison($start_time);
         $this->assign_behavior_telemetry_focus_comparison($start_time);
+        $this->assign_behavior_cursor_capture_health($start_time);
         $this->assign_behavior_outlier_signals($start_time);
         $this->assign_recent_behavior_cases($start_time, 200);
     }
@@ -226,21 +228,49 @@ class acp_controller
             : '0 = 1';
 
         // Requête 1 : sessions uniques triées par dernière activité.
-        // On garde la ligne is_first_visit=1 comme "landing", mais l'ordre et le filtre
-        // temporel se basent sur MAX(visit_time) de la session.
-        $sql = 'SELECT s.*, sess.page_count, sess.last_visit_time, sess.has_interaction, sess.last_interaction_time
+        // Sélectionne une seule ligne "landing" par session_id (fallback robuste si plusieurs
+        // is_first_visit=1 existent pour la même clé session).
+        $sql = 'SELECT s.*, sess.page_count, sess.last_visit_time, sess.has_interaction, sess.last_interaction_time,
+                       sess.session_country_code, sess.session_country_name, sess.session_hostname
                 FROM ' . $this->table_prefix . 'bastien59_stats s
                 INNER JOIN (
                     SELECT session_id,
                            COUNT(*) AS page_count,
                            MAX(visit_time) AS last_visit_time,
+                           COALESCE(
+                               MIN(CASE
+                                       WHEN is_first_visit = 1
+                                            AND page_url NOT LIKE \'%search_id=active_topics%\'
+                                           THEN log_id
+                                       ELSE NULL
+                                   END),
+                               MIN(CASE
+                                       WHEN page_url NOT LIKE \'%search_id=active_topics%\'
+                                           THEN log_id
+                                       ELSE NULL
+                                   END),
+                               MIN(CASE WHEN is_first_visit = 1 THEN log_id ELSE NULL END),
+                               MIN(log_id)
+                           ) AS landing_log_id,
+                           COALESCE(
+                               NULLIF(MAX(CASE WHEN is_first_visit = 1 AND country_code <> \'\' THEN UPPER(country_code) ELSE \'\' END), \'\'),
+                               NULLIF(MAX(CASE WHEN country_code <> \'\' THEN UPPER(country_code) ELSE \'\' END), \'\')
+                           ) AS session_country_code,
+                           COALESCE(
+                               NULLIF(MAX(CASE WHEN is_first_visit = 1 AND country_name <> \'\' THEN country_name ELSE \'\' END), \'\'),
+                               NULLIF(MAX(CASE WHEN country_name <> \'\' THEN country_name ELSE \'\' END), \'\')
+                           ) AS session_country_name,
+                           COALESCE(
+                               NULLIF(MAX(CASE WHEN is_first_visit = 1 AND hostname <> \'\' THEN hostname ELSE \'\' END), \'\'),
+                               NULLIF(MAX(CASE WHEN hostname <> \'\' THEN hostname ELSE \'\' END), \'\')
+                           ) AS session_hostname,
                            MAX(CASE WHEN ' . $interaction_condition . ' THEN 1 ELSE 0 END) AS has_interaction,
                            MAX(CASE WHEN ' . $interaction_condition . ' THEN visit_time ELSE 0 END) AS last_interaction_time
                     FROM ' . $this->table_prefix . 'bastien59_stats
                     GROUP BY session_id
                 ) sess ON sess.session_id = s.session_id
+                       AND s.log_id = sess.landing_log_id
                 WHERE sess.last_visit_time > ' . (int)$start_time . $bot_filter . '
-                AND s.is_first_visit = 1
                 ORDER BY sess.has_interaction DESC,
                          CASE
                              WHEN sess.has_interaction = 1 THEN sess.last_interaction_time
@@ -266,6 +296,7 @@ class acp_controller
         $pages_by_session = [];
         $has_cookie_column = $this->has_visitor_cookie_column();
         $has_cookie_debug_columns = $this->has_visitor_cookie_debug_columns();
+        $has_reactions_probe_columns = $this->has_reactions_probe_columns();
         $extra_ajax_columns = $this->has_ajax_telemetry_columns()
             ? ', screen_res_ajax, scroll_down_ajax, ajax_seen_time'
             : '';
@@ -280,7 +311,7 @@ class acp_controller
                cursor_device_class, cursor_viewport, cursor_total_distance, cursor_avg_speed,
                cursor_max_speed, cursor_direction_changes, cursor_linearity, cursor_click_count'
             : '';
-        $sql_pages = 'SELECT session_id, page_url, page_title, visit_time, duration, referer, screen_res'
+        $sql_pages = 'SELECT log_id, session_id, page_url, page_title, visit_time, duration, referer, screen_res'
                     . $extra_ajax_columns
                     . $extra_cookie_columns
                     . $extra_cookie_debug_columns
@@ -322,15 +353,27 @@ class acp_controller
             $bot_source = $row['bot_source'] ?? '';
             $is_phpbb_bot = ($bot_source === 'phpbb') ? 1 : 0;
 
+            $country_code_value = strtoupper(trim((string)($row['session_country_code'] ?? '')));
+            if ($country_code_value === '') {
+                $country_code_value = strtoupper(trim((string)($row['country_code'] ?? '')));
+            }
+            $country_name_value = trim((string)($row['session_country_name'] ?? ''));
+            if ($country_name_value === '') {
+                $country_name_value = trim((string)($row['country_name'] ?? ''));
+            }
+
             // Formatage pays avec drapeau emoji
             $country_display = '';
-            if (!empty($row['country_code'])) {
-                $flag = $this->country_code_to_flag($row['country_code']);
-                $country_display = $flag . ' ' . htmlspecialchars($row['country_name'] ?? $row['country_code'], ENT_COMPAT, 'UTF-8');
+            if ($country_code_value !== '') {
+                $flag = $this->country_code_to_flag($country_code_value);
+                $country_display = $flag . ' ' . htmlspecialchars($country_name_value !== '' ? $country_name_value : $country_code_value, ENT_COMPAT, 'UTF-8');
             }
 
             // Hostname depuis le cache (pas de DNS lookup temps réel)
-            $hostname = $row['hostname'] ?? '';
+            $hostname = trim((string)($row['session_hostname'] ?? ''));
+            if ($hostname === '') {
+                $hostname = trim((string)($row['hostname'] ?? ''));
+            }
 
             // Forward DNS : résoudre le hostname vers IP(s) pour vérification
             $forward_dns_status = '';
@@ -378,6 +421,44 @@ class acp_controller
             }
 
             $pages = $pages_by_session[$session_id] ?? [];
+            $landing_log_id = (int)($row['log_id'] ?? 0);
+            if ($landing_log_id > 0 && count($pages) > 1) {
+                $landing_page = null;
+                foreach ($pages as $page_row) {
+                    if ($landing_page === null && (int)($page_row['log_id'] ?? 0) === $landing_log_id) {
+                        $landing_page = $page_row;
+                    }
+                }
+                if ($landing_page !== null) {
+                    $landing_visit_time = (int)($landing_page['visit_time'] ?? 0);
+                    $other_pages = [];
+                    foreach ($pages as $page_row) {
+                        if ((int)($page_row['log_id'] ?? 0) === $landing_log_id) {
+                            continue;
+                        }
+                        $page_visit_time = (int)($page_row['visit_time'] ?? 0);
+                        $page_url_lc = strtolower((string)($page_row['page_url'] ?? ''));
+                        if (
+                            $landing_visit_time > 0
+                            && $page_visit_time > 0
+                            && $page_visit_time < $landing_visit_time
+                            && strpos($page_url_lc, 'search_id=active_topics') !== false
+                        ) {
+                            continue;
+                        }
+                        $other_pages[] = $page_row;
+                    }
+                    $pages = array_merge([$landing_page], $other_pages);
+                }
+            }
+            $landing_title = trim((string)($row['page_title'] ?? ''));
+            $landing_url = trim((string)($row['page_url'] ?? ''));
+            if ($landing_title === '') {
+                $landing_title = '-';
+            }
+            if ($landing_url === '') {
+                $landing_url = '-';
+            }
 
             // Agrégation session complète:
             // - scroll = vrai si au moins une page de la session a un signal
@@ -481,8 +562,11 @@ class acp_controller
                     $res_compare_label = $this->user->lang('STATS_RES_COMPARE_MISMATCH');
                     $res_compare_class = 'res-compare-bad';
                 }
-            } elseif ($res_cookie !== '' || $res_ajax !== '') {
-                $res_compare_label = $this->user->lang('STATS_RES_COMPARE_PARTIAL');
+            } elseif ($res_cookie !== '') {
+                $res_compare_label = $this->user->lang('STATS_RES_COMPARE_PARTIAL_COOKIE_ONLY');
+                $res_compare_class = 'res-compare-mid';
+            } elseif ($res_ajax !== '') {
+                $res_compare_label = $this->user->lang('STATS_RES_COMPARE_PARTIAL_AJAX_ONLY');
                 $res_compare_class = 'res-compare-mid';
             }
 
@@ -576,7 +660,7 @@ class acp_controller
                 $cookie_risk_class = 'diag-cookie-bad';
             }
 
-            $country_code_upper = strtoupper(trim((string)($row['country_code'] ?? '')));
+            $country_code_upper = $country_code_value;
             $cookie_fail2ban_label = $this->user->lang('STATS_VISITOR_COOKIE_FAIL2BAN_NONE');
             $cookie_fail2ban_class = 'diag-cookie-na';
             $country_unknown = ($country_code_upper === '' || $country_code_upper === '-' || $country_code_upper === 'ZZ');
@@ -589,6 +673,43 @@ class acp_controller
             } elseif ($cookie_ajax_fail || $cookie_ajax_mismatch) {
                 $cookie_fail2ban_label = $this->user->lang('STATS_VISITOR_COOKIE_FAIL2BAN_ACTIVE');
                 $cookie_fail2ban_class = 'diag-cookie-bad';
+            }
+
+            if (!$has_reactions_probe_columns) {
+                $reactions_assets_label = $this->user->lang('STATS_REACTIONS_ASSETS_UNAVAILABLE');
+                $reactions_assets_class = 'diag-cookie-na';
+            } else {
+                $reactions_expected = (int)($row['reactions_extension_expected'] ?? 0);
+                $reactions_css_seen = (int)($row['reactions_css_seen'] ?? 0);
+                $reactions_js_seen = (int)($row['reactions_js_seen'] ?? 0);
+                $is_member_session = ((int)($row['user_id'] ?? 0) > 1);
+
+                if ($reactions_expected !== 1) {
+                    $reactions_assets_label = $this->user->lang('STATS_REACTIONS_ASSETS_NOT_EXPECTED');
+                    $reactions_assets_class = 'diag-cookie-na';
+                } elseif ($is_member_session) {
+                    if ($reactions_css_seen === 1 && $reactions_js_seen === 1) {
+                        $reactions_assets_label = $this->user->lang('STATS_REACTIONS_ASSETS_OK_MEMBER');
+                        $reactions_assets_class = 'diag-cookie-ok';
+                    } elseif ($reactions_css_seen === 1) {
+                        $reactions_assets_label = $this->user->lang('STATS_REACTIONS_ASSETS_PARTIAL_MEMBER_NO_JS');
+                        $reactions_assets_class = 'diag-cookie-mid';
+                    } elseif ($reactions_js_seen === 1) {
+                        $reactions_assets_label = $this->user->lang('STATS_REACTIONS_ASSETS_PARTIAL_MEMBER_NO_CSS');
+                        $reactions_assets_class = 'diag-cookie-bad';
+                    } else {
+                        $reactions_assets_label = $this->user->lang('STATS_REACTIONS_ASSETS_MISSING_MEMBER');
+                        $reactions_assets_class = 'diag-cookie-bad';
+                    }
+                } else {
+                    if ($reactions_css_seen === 1) {
+                        $reactions_assets_label = $this->user->lang('STATS_REACTIONS_ASSETS_OK_GUEST');
+                        $reactions_assets_class = 'diag-cookie-ok';
+                    } else {
+                        $reactions_assets_label = $this->user->lang('STATS_REACTIONS_ASSETS_MISSING_GUEST');
+                        $reactions_assets_class = 'diag-cookie-bad';
+                    }
+                }
             }
 
             $scroll_label = $scroll_done ? $this->user->lang('STATS_SCROLL_DONE') : $this->user->lang('STATS_SCROLL_NONE');
@@ -688,7 +809,7 @@ class acp_controller
                 'FORWARD_DNS_STATUS'=> $forward_dns_status,
                 'FORWARD_DNS_IPS'   => htmlspecialchars($forward_dns_ips, ENT_COMPAT, 'UTF-8'),
                 'COUNTRY'           => $country_display,
-                'COUNTRY_CODE'  => htmlspecialchars($row['country_code'] ?? '', ENT_COMPAT, 'UTF-8'),
+                'COUNTRY_CODE'  => htmlspecialchars($country_code_value, ENT_COMPAT, 'UTF-8'),
                 'OS'            => htmlspecialchars($row['user_os'], ENT_COMPAT, 'UTF-8'),
                 'DEVICE'        => htmlspecialchars($row['user_device'], ENT_COMPAT, 'UTF-8'),
                 'RES'           => htmlspecialchars($res_display, ENT_COMPAT, 'UTF-8'),
@@ -714,6 +835,8 @@ class acp_controller
                 'VISITOR_COOKIE_RISK_CLASS' => $cookie_risk_class,
                 'VISITOR_COOKIE_FAIL2BAN_LABEL' => htmlspecialchars($cookie_fail2ban_label, ENT_COMPAT, 'UTF-8'),
                 'VISITOR_COOKIE_FAIL2BAN_CLASS' => $cookie_fail2ban_class,
+                'REACTIONS_ASSETS_STATUS_LABEL' => htmlspecialchars($reactions_assets_label, ENT_COMPAT, 'UTF-8'),
+                'REACTIONS_ASSETS_STATUS_CLASS' => $reactions_assets_class,
                 'SCROLL_DONE'   => $scroll_done,
                 'SCROLL_LABEL'  => htmlspecialchars($scroll_label, ENT_COMPAT, 'UTF-8'),
                 'SCROLL_CLASS'  => $scroll_class,
@@ -727,13 +850,14 @@ class acp_controller
                 'BOT_SOURCE'    => htmlspecialchars($bot_source, ENT_COMPAT, 'UTF-8'),
                 'SIGNALS'       => htmlspecialchars($row['signals'] ?? '', ENT_COMPAT, 'UTF-8'),
                 'SIGNALS_DESC'  => $this->format_signals_description($row['signals'] ?? ''),
-                'START_TIME'    => $this->user->format_date((int)($row['last_visit_time'] ?? $row['visit_time'])),
-                'LANDING_PAGE'  => htmlspecialchars($row['page_title'], ENT_COMPAT, 'UTF-8'),
-                'LANDING_URL'   => htmlspecialchars($row['page_url'], ENT_COMPAT, 'UTF-8'),
+                'START_TIME'    => $this->user->format_date((int)($row['visit_time'] ?? 0)),
+                'LANDING_PAGE'  => htmlspecialchars($landing_title, ENT_COMPAT, 'UTF-8'),
+                'LANDING_URL'   => htmlspecialchars($landing_url, ENT_COMPAT, 'UTF-8'),
                 'REFERER'       => $this->format_referer($row['referer']),
                 'REFERER_TYPE'  => htmlspecialchars($row['referer_type'] ?? 'Direct', ENT_COMPAT, 'UTF-8'),
                 'PAGE_COUNT'    => (int)$row['page_count'],
                 'PAGES_COUNT_LABEL' => sprintf($this->user->lang('STATS_PAGES_COUNT'), (int)$row['page_count']),
+                'LANDING_PAGE_INDEX' => 1,
                 'CURSOR_HAS_DATA' => $cursor_has_data,
                 'CURSOR_MODAL_ID' => htmlspecialchars($cursor_modal_id, ENT_COMPAT, 'UTF-8'),
                 'CURSOR_GRAPH_COUNT' => $cursor_graph_count,
@@ -766,17 +890,21 @@ class acp_controller
 
             // Assigner les pages de la session (à partir de la 2ème)
             $first = true;
+            $page_index = 1;
             foreach ($pages as $page) {
                 if ($first) {
                     $first = false;
+                    $page_index = 2;
                     continue; // Skip first page (already shown as landing)
                 }
                 $this->template->assign_block_vars('SESSIONS.PAGES', [
+                    'PAGE_INDEX' => $page_index,
                     'TITLE'     => htmlspecialchars($page['page_title'], ENT_COMPAT, 'UTF-8'),
                     'URL'       => htmlspecialchars($page['page_url'], ENT_COMPAT, 'UTF-8'),
                     'TIME'      => $this->user->format_date($page['visit_time'], 'H:i:s'),
                     'DURATION'  => $this->format_duration($page['duration']),
                 ]);
+                $page_index++;
             }
         }
     }
@@ -961,6 +1089,31 @@ class acp_controller
 
         $this->has_cursor_columns = !$has_error;
         return $this->has_cursor_columns;
+    }
+
+    /**
+     * Détecte si les colonnes de métrique "assets reactions" sont disponibles.
+     */
+    private function has_reactions_probe_columns()
+    {
+        if ($this->has_reactions_probe_columns !== null) {
+            return $this->has_reactions_probe_columns;
+        }
+
+        $sql = 'SELECT reactions_extension_expected, reactions_css_seen, reactions_js_seen
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_reactions_probe_columns = !$has_error;
+        return $this->has_reactions_probe_columns;
     }
 
     /**
@@ -1352,6 +1505,94 @@ class acp_controller
         $this->db->sql_freeresult($result);
     }
 
+    /**
+     * Qualité de capture de trace curseur pour humains légitimes (membres + invités).
+     */
+    private function assign_behavior_cursor_capture_health($start_time)
+    {
+        if (!$this->has_cursor_columns()) {
+            return;
+        }
+
+        $sql = 'SELECT grp,
+                       COUNT(*) AS sessions,
+                       SUM(has_trace) AS trace_ok_sessions
+                FROM (
+                    SELECT
+                        session_id,
+                        CASE
+                            WHEN MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 1
+                                 AND MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0
+                                 AND MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 0 THEN \'members\'
+                            WHEN MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 1
+                                 AND MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0
+                                 AND MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 0 THEN \'guests\'
+                            ELSE \'other\'
+                        END AS grp,
+                        MAX(CASE WHEN cursor_track_points > 0 OR cursor_click_count > 0 THEN 1 ELSE 0 END) AS has_trace
+                    FROM ' . $this->table_prefix . 'bastien59_stats
+                    WHERE visit_time > ' . (int)$start_time . '
+                    GROUP BY session_id
+                ) AS sess
+                WHERE grp IN (\'members\', \'guests\')
+                GROUP BY grp';
+
+        $stats = [
+            'members' => ['sessions' => 0, 'ok' => 0],
+            'guests' => ['sessions' => 0, 'ok' => 0],
+        ];
+
+        $result = $this->db->sql_query($sql);
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $grp = (string)($row['grp'] ?? '');
+            if (!isset($stats[$grp])) {
+                continue;
+            }
+            $stats[$grp]['sessions'] = (int)($row['sessions'] ?? 0);
+            $stats[$grp]['ok'] = (int)($row['trace_ok_sessions'] ?? 0);
+        }
+        $this->db->sql_freeresult($result);
+
+        $total_sessions = $stats['members']['sessions'] + $stats['guests']['sessions'];
+        $total_ok = $stats['members']['ok'] + $stats['guests']['ok'];
+
+        $rows = [
+            'members' => [
+                'label' => $this->user->lang('STATS_BEHAVIOR_GROUP_MEMBERS'),
+                'sessions' => $stats['members']['sessions'],
+                'ok' => $stats['members']['ok'],
+            ],
+            'guests' => [
+                'label' => $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS'),
+                'sessions' => $stats['guests']['sessions'],
+                'ok' => $stats['guests']['ok'],
+            ],
+            'humans' => [
+                'label' => $this->user->lang('STATS_BEHAVIOR_GROUP_HUMANS_LEGIT'),
+                'sessions' => $total_sessions,
+                'ok' => $total_ok,
+            ],
+        ];
+
+        foreach ($rows as $row) {
+            if ((int)$row['sessions'] <= 0) {
+                continue;
+            }
+            $fail = max(0, (int)$row['sessions'] - (int)$row['ok']);
+            $fail_rate = round(($fail * 100) / max(1, (int)$row['sessions']), 1);
+            $ok_rate = round((((int)$row['sessions'] - $fail) * 100) / max(1, (int)$row['sessions']), 1);
+
+            $this->template->assign_block_vars('BEHAVIOR_CURSOR_CAPTURE', [
+                'GROUP_LABEL' => htmlspecialchars((string)$row['label'], ENT_COMPAT, 'UTF-8'),
+                'SESSIONS' => number_format((int)$row['sessions'], 0, ',', ' '),
+                'TRACE_OK' => number_format((int)$row['ok'], 0, ',', ' '),
+                'TRACE_OK_RATE' => number_format($ok_rate, 1, ',', ' '),
+                'TRACE_FAIL' => number_format($fail, 0, ',', ' '),
+                'TRACE_FAIL_RATE' => number_format($fail_rate, 1, ',', ' '),
+            ]);
+        }
+    }
+
     private function assign_behavior_outlier_signals($start_time)
     {
         $signal_defs = [
@@ -1360,6 +1601,7 @@ class acp_controller
             'learn_no_interact_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_NO_INTERACT'),
             'learn_sparse_scroll_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_SPARSE'),
             'learn_jump_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_JUMP'),
+            'learn_reactions_assets_missing_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_REACTIONS_ASSETS'),
             'ajax_webdriver' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_WEBDRIVER'),
             'ajax_scroll_profile' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_AJAX_PROFILE'),
             'guest_fp_clone_multi_ip' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_FP_CLONE'),
@@ -1742,6 +1984,7 @@ class acp_controller
             'learn_speed_outlier'   => 'Écart au profil appris: scroll initial anormalement rapide (25 pts)',
             'learn_sparse_scroll_outlier' => 'Écart au profil appris: trop peu d\'événements de scroll (20 pts)',
             'learn_jump_outlier'    => 'Écart au profil appris: saut de scroll atypique (20 pts)',
+            'learn_reactions_assets_missing_outlier' => 'Écart au profil appris: assets réactions absents malgré extension active (25 pts)',
             'learn_behavior_outlier'=> 'Écart global au profil appris des membres connectés (20 pts)',
         ];
 

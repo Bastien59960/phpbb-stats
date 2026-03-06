@@ -95,19 +95,25 @@
 .session-cursor-thumb .behavior-cursor-svg { display: block; border: 1px solid #d8e4f2; border-radius: 5px; background: #fff; max-width: 160px; height: auto; }
 .session-cursor-meta { display: block; margin-top: 4px; color: #667; font-size: 11px; }
 .session-cursor-none { color: #999; font-size: 11px; }
+.session-page-index { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 10px; background: #eef5ff; border: 1px solid #c9dff4; color: #105289; font-size: 11px; font-weight: bold; text-align: center; margin-right: 6px; }
 .cursor-modal-overlay { position: fixed; z-index: 2000; top: 0; right: 0; bottom: 0; left: 0; background: rgba(8, 18, 32, 0.72); display: none; align-items: center; justify-content: center; padding: 20px; }
-.cursor-modal-dialog { width: min(900px, 95vw); max-height: 92vh; overflow: auto; background: #fff; border-radius: 8px; box-shadow: 0 18px 60px rgba(0,0,0,0.35); padding: 16px 18px; position: relative; }
+.cursor-modal-dialog { width: min(560px, 95vw); max-height: 92vh; overflow: auto; background: #fff; border-radius: 8px; box-shadow: 0 18px 60px rgba(0,0,0,0.35); padding: 12px 14px; position: relative; }
 .cursor-modal-close { position: absolute; top: 8px; right: 10px; border: 1px solid #c8d6e5; background: #fff; color: #334; border-radius: 4px; font-size: 20px; line-height: 18px; width: 30px; height: 30px; cursor: pointer; }
 .cursor-modal-close:hover { background: #f3f7fc; }
-.cursor-modal-title { margin: 0 36px 10px 0; font-size: 18px; color: #105289; }
-.cursor-modal-hint { margin: 0 0 10px 0; color: #556; font-size: 12px; }
+.cursor-modal-title { margin: 0 36px 8px 0; font-size: 15px; color: #105289; }
+.cursor-modal-hint { margin: 0 0 8px 0; color: #556; font-size: 11px; }
 .cursor-modal-page { margin-top: 10px; padding-top: 10px; border-top: 1px solid #e6eef8; }
-.cursor-modal-page-head { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; color: #334; margin-bottom: 6px; }
-.cursor-modal-page-url { margin: 0 0 8px 0; font-size: 12px; color: #556; word-break: break-all; }
-.cursor-modal-svg-box .behavior-cursor-svg { display: block; width: 100%; max-width: 820px; height: auto; border: 1px solid #d8e4f2; border-radius: 6px; background: #fff; }
-.cursor-modal-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px 14px; font-size: 12px; color: #334; }
-.cursor-modal-summary { margin-top: 10px; padding: 8px 10px; border: 1px solid #e1eaf5; border-radius: 6px; background: #f8fbff; font-size: 12px; color: #2a3b4f; }
+.cursor-modal-page-head { display: flex; justify-content: space-between; gap: 10px; font-size: 11px; color: #334; margin-bottom: 6px; }
+.cursor-modal-page-url { margin: 0 0 8px 0; font-size: 11px; color: #556; word-break: break-all; }
+.cursor-modal-svg-box { width: min(420px, 100%); height: 240px; margin: 0 auto; }
+.cursor-modal-svg-box .behavior-cursor-svg { display: block; width: 100%; height: 100%; border: 1px solid #d8e4f2; border-radius: 6px; background: #fff; }
+.cursor-modal-grid { margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 6px 10px; font-size: 11px; color: #334; }
+.cursor-modal-summary { margin-top: 8px; padding: 7px 9px; border: 1px solid #e1eaf5; border-radius: 6px; background: #f8fbff; font-size: 11px; color: #2a3b4f; }
 body.cursor-modal-open { overflow: hidden; }
+.behavior-cursor-svg[data-cursor-zoom-ready="1"] { touch-action: none; user-select: none; -webkit-user-select: none; }
+.behavior-cursor-svg.cursor-zoom-in { cursor: zoom-in !important; }
+.behavior-cursor-svg.cursor-zoom-grab { cursor: grab !important; }
+.behavior-cursor-svg.cursor-zoom-grabbing { cursor: grabbing !important; }
 </style>
 
 <!-- Filtres -->
@@ -385,7 +391,7 @@ body.cursor-modal-open { overflow: hidden; }
                         </div>
                     </td>
                     <td>
-                        <strong>{SESSIONS.LANDING_PAGE}</strong><br>
+                        <span class="session-page-index">{SESSIONS.LANDING_PAGE_INDEX}</span><strong>{SESSIONS.LANDING_PAGE}</strong><br>
                         <a href="{SESSIONS.LANDING_URL}" target="_blank" style="font-size:11px; color:#666; word-break:break-all;">{SESSIONS.LANDING_URL}</a>
                     </td>
                     <td class="referer-cell">
@@ -416,7 +422,8 @@ body.cursor-modal-open { overflow: hidden; }
                             <strong>{L_STATS_VISITOR_COOKIE_CROSSIP_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_CROSSIP_CLASS}">{SESSIONS.VISITOR_COOKIE_CROSSIP_LABEL}</span>
                             <!-- IF SESSIONS.VISITOR_COOKIE_CROSSIP_IPS --><br><small style="color:#666;">{SESSIONS.VISITOR_COOKIE_CROSSIP_IPS}</small><!-- ENDIF --><br>
                             <strong>{L_STATS_VISITOR_COOKIE_RISK_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_RISK_CLASS}">{SESSIONS.VISITOR_COOKIE_RISK_LABEL}</span><br>
-                            <strong>{L_STATS_VISITOR_COOKIE_FAIL2BAN_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_FAIL2BAN_CLASS}">{SESSIONS.VISITOR_COOKIE_FAIL2BAN_LABEL}</span>
+                            <strong>{L_STATS_VISITOR_COOKIE_FAIL2BAN_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_FAIL2BAN_CLASS}">{SESSIONS.VISITOR_COOKIE_FAIL2BAN_LABEL}</span><br>
+                            <strong>{L_STATS_REACTIONS_ASSETS_LABEL}</strong> <span class="{SESSIONS.REACTIONS_ASSETS_STATUS_CLASS}">{SESSIONS.REACTIONS_ASSETS_STATUS_LABEL}</span>
 
                             <!-- IF SESSIONS.IS_BOT -->
                                 <br><br>
@@ -446,7 +453,7 @@ body.cursor-modal-open { overflow: hidden; }
                 <!-- BEGIN PAGES -->
                 <tr class="page-row session-{SESSIONS.BOT_CLASS}" data-type="{SESSIONS.BOT_CLASS}">
                     <td style="text-align:right; color:#888;">
-                        &#8627; {SESSIONS.PAGES.TIME}
+                        <span class="session-page-index">{SESSIONS.PAGES.PAGE_INDEX}</span>&#8627; {SESSIONS.PAGES.TIME}
                     </td>
                     <td style="color:#888; font-size:11px;">{SESSIONS.PAGES.DURATION}</td>
                     <td colspan="3">
@@ -593,6 +600,315 @@ body.cursor-modal-open { overflow: hidden; }
 <!-- INCLUDE overall_footer.html -->
 
 <script>
+function cursorZoomClamp(value, min, max) {
+    if (value < min) {
+        return min;
+    }
+    if (value > max) {
+        return max;
+    }
+    return value;
+}
+
+function parseCursorZoomViewBox(raw) {
+    if (!raw) {
+        return null;
+    }
+    var parts = String(raw).trim().split(/\s+/);
+    if (parts.length !== 4) {
+        return null;
+    }
+    var x = parseFloat(parts[0]);
+    var y = parseFloat(parts[1]);
+    var w = parseFloat(parts[2]);
+    var h = parseFloat(parts[3]);
+    if (!isFinite(x) || !isFinite(y) || !isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) {
+        return null;
+    }
+    return { x: x, y: y, w: w, h: h };
+}
+
+function getCursorZoomBase(svg) {
+    var base = parseCursorZoomViewBox(svg.getAttribute('data-cursor-base-viewbox'));
+    if (base) {
+        return base;
+    }
+
+    base = parseCursorZoomViewBox(svg.getAttribute('viewBox'));
+    if (!base) {
+        var w = parseFloat(svg.getAttribute('width'));
+        var h = parseFloat(svg.getAttribute('height'));
+        if (isFinite(w) && isFinite(h) && w > 0 && h > 0) {
+            base = { x: 0, y: 0, w: w, h: h };
+        }
+    }
+    if (!base) {
+        return null;
+    }
+    svg.setAttribute('data-cursor-base-viewbox', base.x + ' ' + base.y + ' ' + base.w + ' ' + base.h);
+    return base;
+}
+
+function setCursorZoomViewBox(svg, state, x, y, w, h) {
+    state.x = x;
+    state.y = y;
+    state.w = w;
+    state.h = h;
+    svg.setAttribute('viewBox', x + ' ' + y + ' ' + w + ' ' + h);
+}
+
+function isCursorZoomed(state) {
+    return state.w < (state.baseW - 0.0001);
+}
+
+function applyCursorZoomAt(svg, state, factor, clientX, clientY) {
+    if (!svg || !state || !isFinite(factor) || factor <= 0) {
+        return false;
+    }
+    var rect = svg.getBoundingClientRect();
+    if (!rect || rect.width <= 0 || rect.height <= 0) {
+        return false;
+    }
+
+    var minW = state.baseW / state.maxZoom;
+    var nextW = cursorZoomClamp(state.w * factor, minW, state.baseW);
+    if (Math.abs(nextW - state.w) < 0.0001) {
+        return false;
+    }
+    var nextScale = nextW / state.baseW;
+    var nextH = state.baseH * nextScale;
+
+    var px = rect.width / 2;
+    var py = rect.height / 2;
+    if (typeof clientX === 'number' && isFinite(clientX)) {
+        px = cursorZoomClamp(clientX - rect.left, 0, rect.width);
+    }
+    if (typeof clientY === 'number' && isFinite(clientY)) {
+        py = cursorZoomClamp(clientY - rect.top, 0, rect.height);
+    }
+
+    var anchorX = state.x + (px / rect.width) * state.w;
+    var anchorY = state.y + (py / rect.height) * state.h;
+    var nextX = anchorX - (px / rect.width) * nextW;
+    var nextY = anchorY - (py / rect.height) * nextH;
+    var maxX = state.baseX + state.baseW - nextW;
+    var maxY = state.baseY + state.baseH - nextH;
+
+    nextX = cursorZoomClamp(nextX, state.baseX, maxX);
+    nextY = cursorZoomClamp(nextY, state.baseY, maxY);
+    setCursorZoomViewBox(svg, state, nextX, nextY, nextW, nextH);
+    return true;
+}
+
+function handleCursorWheel(svg, state, e) {
+    if (!svg || !state || !e) {
+        return false;
+    }
+    var delta = 0;
+    if (typeof e.deltaY === 'number' && e.deltaY !== 0) {
+        delta = e.deltaY;
+    } else if (typeof e.wheelDelta === 'number' && e.wheelDelta !== 0) {
+        delta = -e.wheelDelta;
+    } else if (typeof e.detail === 'number' && e.detail !== 0) {
+        delta = e.detail;
+    }
+    if (delta === 0) {
+        return false;
+    }
+
+    e.preventDefault();
+    e.stopPropagation();
+    var factor = (delta < 0) ? 0.72 : 1.38;
+    var changed = applyCursorZoomAt(svg, state, factor, e.clientX, e.clientY);
+    if (changed) {
+        updateCursorZoomCursor(svg, state);
+    }
+    return changed;
+}
+
+function updateCursorZoomCursor(svg, state) {
+    svg.classList.remove('cursor-zoom-in');
+    svg.classList.remove('cursor-zoom-grab');
+    svg.classList.remove('cursor-zoom-grabbing');
+
+    if (state.dragging) {
+        svg.classList.add('cursor-zoom-grabbing');
+        return;
+    }
+    if (isCursorZoomed(state)) {
+        svg.classList.add('cursor-zoom-grab');
+    } else {
+        svg.classList.add('cursor-zoom-in');
+    }
+}
+
+function resetCursorZoom(svg) {
+    var state = svg && svg.__cursorZoomState;
+    if (!state) {
+        return;
+    }
+    setCursorZoomViewBox(svg, state, state.baseX, state.baseY, state.baseW, state.baseH);
+    state.dragMoved = false;
+    updateCursorZoomCursor(svg, state);
+}
+
+function initCursorSvgZoom(root) {
+    var scope = (root && root.querySelectorAll) ? root : document;
+    var svgs = scope.querySelectorAll('svg.behavior-cursor-svg');
+    for (var i = 0; i < svgs.length; i++) {
+        (function(svg) {
+            if (!svg) {
+                return;
+            }
+            if (svg.__cursorZoomState && svg.getAttribute('data-cursor-zoom-ready') === '1') {
+                return;
+            }
+            if (svg.getAttribute('data-cursor-zoom-ready') === '1' && !svg.__cursorZoomState) {
+                // Les SVG clones (injectes via innerHTML) conservent les attributs, mais pas les listeners JS.
+                svg.removeAttribute('data-cursor-zoom-ready');
+            }
+
+            var base = getCursorZoomBase(svg);
+            if (!base) {
+                return;
+            }
+
+            var state = {
+                baseX: base.x,
+                baseY: base.y,
+                baseW: base.w,
+                baseH: base.h,
+                x: base.x,
+                y: base.y,
+                w: base.w,
+                h: base.h,
+                maxZoom: 14,
+                dragging: false,
+                dragPointerId: null,
+                dragStartClientX: 0,
+                dragStartClientY: 0,
+                dragStartX: 0,
+                dragStartY: 0,
+                dragMoved: false
+            };
+
+            svg.__cursorZoomState = state;
+            svg.setAttribute('data-cursor-zoom-ready', '1');
+            updateCursorZoomCursor(svg, state);
+            if (!svg.getAttribute('title')) {
+                svg.setAttribute('title', 'Zoom: molette ou double-clic. Deplacement: glisser. Reset: Shift+double-clic.');
+            }
+
+            var onWheel = function(e) {
+                handleCursorWheel(svg, state, e);
+            };
+            svg.addEventListener('wheel', onWheel, { passive: false });
+            svg.addEventListener('mousewheel', onWheel, { passive: false });
+            if (svg.parentElement) {
+                svg.parentElement.addEventListener('wheel', onWheel, { passive: false });
+                svg.parentElement.addEventListener('mousewheel', onWheel, { passive: false });
+            }
+
+            svg.addEventListener('pointerdown', function(e) {
+                var s = svg.__cursorZoomState;
+                if (!s) {
+                    return;
+                }
+                if (e.pointerType === 'mouse' && e.button !== 0) {
+                    return;
+                }
+                if (!isCursorZoomed(s)) {
+                    return;
+                }
+
+                s.dragging = true;
+                s.dragPointerId = e.pointerId;
+                s.dragStartClientX = e.clientX;
+                s.dragStartClientY = e.clientY;
+                s.dragStartX = s.x;
+                s.dragStartY = s.y;
+                s.dragMoved = false;
+
+                if (svg.setPointerCapture) {
+                    svg.setPointerCapture(e.pointerId);
+                }
+                updateCursorZoomCursor(svg, s);
+                e.preventDefault();
+                e.stopPropagation();
+            });
+
+            svg.addEventListener('pointermove', function(e) {
+                var s = svg.__cursorZoomState;
+                if (!s || !s.dragging || s.dragPointerId !== e.pointerId) {
+                    return;
+                }
+
+                var rect = svg.getBoundingClientRect();
+                if (!rect || rect.width <= 0 || rect.height <= 0) {
+                    return;
+                }
+
+                var dxPx = e.clientX - s.dragStartClientX;
+                var dyPx = e.clientY - s.dragStartClientY;
+                if (Math.abs(dxPx) + Math.abs(dyPx) > 3) {
+                    s.dragMoved = true;
+                }
+
+                var nextX = s.dragStartX - (dxPx / rect.width) * s.w;
+                var nextY = s.dragStartY - (dyPx / rect.height) * s.h;
+                var maxX = s.baseX + s.baseW - s.w;
+                var maxY = s.baseY + s.baseH - s.h;
+
+                nextX = cursorZoomClamp(nextX, s.baseX, maxX);
+                nextY = cursorZoomClamp(nextY, s.baseY, maxY);
+
+                setCursorZoomViewBox(svg, s, nextX, nextY, s.w, s.h);
+                e.preventDefault();
+                e.stopPropagation();
+            });
+
+            var stopDrag = function(e) {
+                var s = svg.__cursorZoomState;
+                if (!s || !s.dragging || s.dragPointerId !== e.pointerId) {
+                    return;
+                }
+                s.dragging = false;
+                s.dragPointerId = null;
+                if (svg.releasePointerCapture) {
+                    svg.releasePointerCapture(e.pointerId);
+                }
+                updateCursorZoomCursor(svg, s);
+                e.preventDefault();
+                e.stopPropagation();
+            };
+
+            svg.addEventListener('pointerup', stopDrag);
+            svg.addEventListener('pointercancel', stopDrag);
+            svg.addEventListener('dblclick', function(e) {
+                var s = svg.__cursorZoomState;
+                if (!s) {
+                    return;
+                }
+                if (e.shiftKey || e.altKey) {
+                    resetCursorZoom(svg);
+                } else if (applyCursorZoomAt(svg, s, 0.58, e.clientX, e.clientY)) {
+                    updateCursorZoomCursor(svg, s);
+                }
+                e.preventDefault();
+                e.stopPropagation();
+            });
+            svg.addEventListener('click', function(e) {
+                var s = svg.__cursorZoomState;
+                if (s && s.dragMoved) {
+                    s.dragMoved = false;
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            });
+        })(svgs[i]);
+    }
+}
+
 function openCursorModal(evt, payloadId) {
     if (evt) {
         evt.preventDefault();
@@ -606,6 +922,7 @@ function openCursorModal(evt, payloadId) {
     }
     content.innerHTML = payload.innerHTML;
     overlay.style.display = 'flex';
+    initCursorSvgZoom(content);
     if (document.body) {
         document.body.classList.add('cursor-modal-open');
     }
@@ -634,6 +951,14 @@ document.addEventListener('keydown', function(e) {
         closeCursorModal();
     }
 });
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', function() {
+        initCursorSvgZoom(document);
+    });
+} else {
+    initCursorSvgZoom(document);
+}
 
 function toggleDetails(row) {
     var nextRow = row.nextElementSibling;

@@ -50,6 +50,7 @@ if ($db->connect_error) {
     exit(1);
 }
 $db->set_charset('utf8mb4');
+$reactionsExtensionActive = isExtensionEnabled($db, (string)$table_prefix, 'bastien59960/reactions');
 
 $now = time();
 $targetStart = $now - $targetWindow;
@@ -129,6 +130,13 @@ foreach ($apacheLogs as $logFile) {
             }
             if ($path === '/index.php') {
                 $ipStats[$ip]['index']++;
+            }
+            if ($reactionsExtensionActive) {
+                if (isReactionsCssPath($path)) {
+                    $ipStats[$ip]['reactions_css']++;
+                } elseif (isReactionsJsPath($path)) {
+                    $ipStats[$ip]['reactions_js']++;
+                }
             }
         }
 
@@ -318,6 +326,7 @@ $summary = [
     'target_window_sec' => $targetWindow,
     'context_window_sec' => $contextWindow,
     'emit' => $emit ? 1 : 0,
+    'reactions_extension_active' => $reactionsExtensionActive ? 1 : 0,
     'parse' => $parse,
     'mapped' => [
         'views' => count($viewEvents),
@@ -336,6 +345,9 @@ $summary = [
     'signals_skipped_country' => 0,
     'signals_skipped_trusted_bot' => 0,
     'signals_skipped_dedup' => 0,
+    'ips_reactions_css_missing' => 0,
+    'ips_reactions_missing_both' => 0,
+    'ips_reactions_missing_one' => 0,
 ];
 
 foreach ($ipStats as $ip => $s) {
@@ -369,9 +381,13 @@ foreach ($ipStats as $ip => $s) {
     $fastRatio = $gaps > 0 ? ($fast / $gaps) : 0.0;
     $topicsDl = count($s['topics_downloaded']);
     $topicsView = count($s['topics_viewed']);
+    $forumUiRequests = (int)$s['index'] + (int)$s['viewforum'] + (int)$s['viewtopic'];
+    $reactionsCssHits = (int)$s['reactions_css'];
+    $reactionsJsHits = (int)$s['reactions_js'];
 
     $score = 0;
     $rules = [];
+    $reactionsCssMissing = false;
 
     if ($dl >= 8 && (int)$s['viewtopic'] === 0) {
         $score += 30;
@@ -407,6 +423,14 @@ foreach ($ipStats as $ip => $s) {
         $score += 10;
         $rules[] = 'only_download_requests';
     }
+    if ($reactionsExtensionActive && $dl >= 8 && $forumUiRequests >= 1) {
+        // Reactions statiques pour invités: le CSS est attendu, le JS peut être absent sans anomalie.
+        if ($reactionsCssHits <= 0) {
+            $score += 12;
+            $rules[] = 'reactions_css_missing';
+            $reactionsCssMissing = true;
+        }
+    }
 
     $severity = '';
     if ($score >= $hardScoreThreshold && $dl >= 10 && $distributedRatio >= 0.90 && $priorSameRatio <= 0.15) {
@@ -420,6 +444,9 @@ foreach ($ipStats as $ip => $s) {
     }
 
     $summary['ips_scored']++;
+    if ($reactionsCssMissing) {
+        $summary['ips_reactions_css_missing']++;
+    }
     if ($severity === 'hard') {
         $summary['ips_hard']++;
     } else {
@@ -446,7 +473,7 @@ foreach ($ipStats as $ip => $s) {
     }
 
     $line = sprintf(
-        '%s PHPBB-XIP ip=%s cc=%s method=%s severity=%s score=%d downloads=%d viewtopic=%d main_requests=%d prior_other24=%d prior_same24=%d distributed24=%d dist_ratio=%.2f same_ratio=%.2f miss_ref_ratio=%.2f fast_ratio=%.2f topics_dl=%d topics_view=%d rules="%s"',
+        '%s PHPBB-XIP ip=%s cc=%s method=%s severity=%s score=%d downloads=%d viewtopic=%d main_requests=%d prior_other24=%d prior_same24=%d distributed24=%d dist_ratio=%.2f same_ratio=%.2f miss_ref_ratio=%.2f fast_ratio=%.2f topics_dl=%d topics_view=%d forum_ui_req=%d reactions_css=%d reactions_js=%d rules="%s"',
         date('Y-m-d H:i:s', $now),
         $ip,
         $countryCode,
@@ -465,6 +492,9 @@ foreach ($ipStats as $ip => $s) {
         round($fastRatio * 100, 2),
         $topicsDl,
         $topicsView,
+        $forumUiRequests,
+        $reactionsCssHits,
+        $reactionsJsHits,
         implode(',', $rules)
     );
 
@@ -529,10 +559,47 @@ function ensureIpStats(array &$ipStats, string $ip): void
         'distributed24' => 0,
         'missing_or_unrelated_referer' => 0,
         'related_referer' => 0,
+        'reactions_css' => 0,
+        'reactions_js' => 0,
         'download_ts' => [],
         'topics_downloaded' => [],
         'topics_viewed' => [],
     ];
+}
+
+function isExtensionEnabled(mysqli $db, string $tablePrefix, string $extName): bool
+{
+    $nameEsc = $db->real_escape_string($extName);
+    $sql = "SELECT ext_active FROM {$tablePrefix}ext WHERE ext_name = '{$nameEsc}' LIMIT 1";
+    $res = $db->query($sql);
+    if (!$res) {
+        return false;
+    }
+    $row = $res->fetch_assoc();
+    $res->free();
+    return ((int)($row['ext_active'] ?? 0) === 1);
+}
+
+function pathEndsWith(string $path, string $suffix): bool
+{
+    $len = strlen($suffix);
+    if ($len === 0) {
+        return true;
+    }
+    if (strlen($path) < $len) {
+        return false;
+    }
+    return substr($path, -$len) === $suffix;
+}
+
+function isReactionsCssPath(string $path): bool
+{
+    return pathEndsWith($path, '/ext/bastien59960/reactions/styles/prosilver/theme/reactions.css');
+}
+
+function isReactionsJsPath(string $path): bool
+{
+    return pathEndsWith($path, '/ext/bastien59960/reactions/styles/prosilver/template/js/reactions.js');
 }
 
 function parseApacheTs(string $raw): int

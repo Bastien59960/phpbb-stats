@@ -20,6 +20,7 @@ class collect_controller
     protected $has_ajax_telemetry_columns = null;
     protected $has_ajax_advanced_columns = null;
     protected $has_cursor_columns = null;
+    protected $has_reactions_probe_columns = null;
     protected $has_visitor_cookie_column = null;
     protected $has_visitor_cookie_debug_columns = null;
 
@@ -46,7 +47,8 @@ class collect_controller
      * k(token), s(session), i(log_id), a(mode), r(resolution),
      * b(interact_mask), d(first_scroll_ms), n(scroll_events), y(scroll_max_y),
      * w(webdriver_flag), v(telemetry_version),
-     * m(cursor path), q(click path), z(device class), l(viewport)
+     * m(cursor path), q(click path), z(device class), l(viewport),
+     * re(reactions ext expected), rc(reactions css seen), rj(reactions js seen)
      */
     public function collect()
     {
@@ -118,6 +120,17 @@ class collect_controller
 
         $telemetry_ver = (int)$this->request->variable('v', 0);
         if ($telemetry_ver < 0 || $telemetry_ver > 9) {
+            return new JsonResponse(['ok' => 0], 400);
+        }
+
+        $reactions_expected = (int)$this->request->variable('re', 0);
+        $reactions_css_seen = (int)$this->request->variable('rc', 0);
+        $reactions_js_seen = (int)$this->request->variable('rj', 0);
+        if (
+            ($reactions_expected !== 0 && $reactions_expected !== 1)
+            || ($reactions_css_seen !== 0 && $reactions_css_seen !== 1)
+            || ($reactions_js_seen !== 0 && $reactions_js_seen !== 1)
+        ) {
             return new JsonResponse(['ok' => 0], 400);
         }
 
@@ -207,6 +220,16 @@ class collect_controller
             }
             if ($telemetry_ver > 0) {
                 $update['ajax_telemetry_ver'] = $telemetry_ver;
+            }
+        }
+
+        if ($this->has_reactions_probe_columns() && $reactions_expected === 1) {
+            $update['reactions_extension_expected'] = 1;
+            if ($reactions_css_seen === 1) {
+                $update['reactions_css_seen'] = 1;
+            }
+            if ($reactions_js_seen === 1) {
+                $update['reactions_js_seen'] = 1;
             }
         }
 
@@ -485,6 +508,31 @@ class collect_controller
 
         $this->has_cursor_columns = !$has_error;
         return $this->has_cursor_columns;
+    }
+
+    /**
+     * Détecte si les colonnes de métrique "assets reactions" sont disponibles.
+     */
+    private function has_reactions_probe_columns()
+    {
+        if ($this->has_reactions_probe_columns !== null) {
+            return $this->has_reactions_probe_columns;
+        }
+
+        $sql = 'SELECT reactions_extension_expected, reactions_css_seen, reactions_js_seen
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_reactions_probe_columns = !$has_error;
+        return $this->has_reactions_probe_columns;
     }
 
     /**

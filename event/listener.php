@@ -23,9 +23,12 @@ class listener implements EventSubscriberInterface
     protected $has_ajax_telemetry_columns = null;
     protected $has_ajax_advanced_columns = null;
     protected $has_cursor_columns = null;
+    protected $has_reactions_probe_columns = null;
     protected $has_visitor_cookie_column = null;
     protected $has_visitor_cookie_debug_columns = null;
     protected $has_behavior_learning_tables = null;
+    protected $has_reactions_learning_columns = null;
+    protected $reactions_extension_active = null;
     protected $behavior_profile_cache = [];
     protected $visitor_cookie_preexisting = false;
 
@@ -390,6 +393,11 @@ class listener implements EventSubscriberInterface
             $sql_ary['cursor_linearity'] = 0;
             $sql_ary['cursor_click_count'] = 0;
         }
+        if ($this->has_reactions_probe_columns()) {
+            $sql_ary['reactions_extension_expected'] = $this->is_reactions_extension_active() ? 1 : 0;
+            $sql_ary['reactions_css_seen'] = 0;
+            $sql_ary['reactions_js_seen'] = 0;
+        }
 
         $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats ' . $this->db->sql_build_array('INSERT', $sql_ary);
         $this->db->sql_query($sql);
@@ -476,6 +484,7 @@ class listener implements EventSubscriberInterface
             'i' => (int)$this->current_log_id,
             'x' => (int)($this->config['bastien59_stats_session_timeout'] ?? 900),
             'cm' => max(800, min(6000, (int)($this->config['bastien59_stats_cursor_capture_ms'] ?? 3500))),
+            're' => ($this->is_reactions_extension_active() ? 1 : 0),
         ];
 
         if ($ajax_payload['i'] > 0 && $ajax_payload['s'] !== '') {
@@ -490,7 +499,7 @@ class listener implements EventSubscriberInterface
 
         $ajax_json = json_encode($ajax_payload, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
         if ($ajax_json === false) {
-            $ajax_json = '{"u":"","t":"","s":"","i":0,"x":900,"cm":3500}';
+            $ajax_json = '{"u":"","t":"","s":"","i":0,"x":900,"cm":3500,"re":0}';
         }
 
         // Script client:
@@ -636,6 +645,34 @@ class listener implements EventSubscriberInterface
         }
         return 'desktop';
     }
+    function isReactionsCssUrl(u){
+        var s=String(u||'').toLowerCase();
+        if(!s){return false;}
+        if(s.indexOf('/ext/bastien59960/reactions/')===-1){return false;}
+        return (s.indexOf('/reactions.css')!==-1);
+    }
+    function isReactionsJsUrl(u){
+        var s=String(u||'').toLowerCase();
+        if(!s){return false;}
+        if(s.indexOf('/ext/bastien59960/reactions/')===-1){return false;}
+        return (s.indexOf('/reactions.js')!==-1);
+    }
+    function detectReactionsAssets(){
+        var out={c:0,j:0};
+        try{
+            var links=d.getElementsByTagName('link');
+            for(var i=0;i<links.length;i++){
+                var href=String((links[i]&&links[i].getAttribute&&links[i].getAttribute('href'))||'');
+                if(isReactionsCssUrl(href)){ out.c=1; break; }
+            }
+            var scripts=d.getElementsByTagName('script');
+            for(var k=0;k<scripts.length;k++){
+                var src=String((scripts[k]&&scripts[k].getAttribute&&scripts[k].getAttribute('src'))||'');
+                if(isReactionsJsUrl(src)){ out.j=1; break; }
+            }
+        }catch(e){}
+        return out;
+    }
     function hasActiveTab(){
         var visible=true;
         if(d&&typeof d.visibilityState==='string'){
@@ -749,6 +786,12 @@ class listener implements EventSubscriberInterface
         f.append('a',String(clamp(mode,0,2)));
         var r=g();
         if(r){f.append('r',r);}
+        if(parseInt(c.re||0,10)===1){
+            var ra=detectReactionsAssets();
+            f.append('re','1');
+            f.append('rc',String((ra&&ra.c)?1:0));
+            f.append('rj',String((ra&&ra.j)?1:0));
+        }
         f.append('v','3');
         return f;
     }
@@ -1444,6 +1487,7 @@ HTML;
                 }
 
                 // Signal 6 : comparaison avec profils appris des membres connectés.
+                $has_reactions_learning = $this->has_reactions_learning_columns();
                 $profile_row = $learning_enabled ? $this->get_behavior_profile_row($profile_key) : [];
                 if (!empty($profile_row) && (int)$profile_row['sample_count'] >= $learning_min_samples) {
                     $sample_count = (int)$profile_row['sample_count'];
@@ -1453,6 +1497,9 @@ HTML;
                     $no_interact_rate = ((int)$profile_row['no_interact_hits'] / max(1, $sample_count));
                     $fast_rate = ((int)$profile_row['fast_scroll_hits'] / max(1, $sample_count));
                     $jump_rate = ((int)$profile_row['jump_scroll_hits'] / max(1, $sample_count));
+                    $reactions_missing_rate = $has_reactions_learning
+                        ? ((int)($profile_row['reactions_missing_hits'] ?? 0) / max(1, $sample_count))
+                        : 1.0;
 
                     if ($interact_mask === 0 && $no_interact_rate <= 0.10) {
                         $learning_hits++;
@@ -1485,6 +1532,24 @@ HTML;
                     if ($scroll_max_y > 0 && $avg_max_y > 0 && $scroll_max_y >= $jump_threshold && $scroll_events > 0 && $scroll_events <= 2 && $jump_rate <= 0.20) {
                         $learning_hits++;
                         $add_score_signal('learn_jump_outlier', 20);
+                    }
+
+                    $reactions_expected = (int)($snapshot['reactions_extension_expected'] ?? 0);
+                    $reactions_css_seen = (int)($snapshot['reactions_css_seen'] ?? 0);
+                    $reactions_js_seen = (int)($snapshot['reactions_js_seen'] ?? 0);
+                    // L'extension Reactions charge le CSS pour tous, mais le JS uniquement pour les membres connectés.
+                    // Ici (détection comportementale invités), on ne considère donc "manquant" que le CSS.
+                    $reactions_missing = ($reactions_css_seen === 0);
+                    if (
+                        $has_reactions_learning
+                        && $has_res_ajax
+                        && $reactions_expected === 1
+                        && $reactions_missing
+                        && $reactions_missing_rate <= 0.05
+                        && $page_count >= 2
+                    ) {
+                        $learning_hits++;
+                        $add_score_signal('learn_reactions_assets_missing_outlier', 25);
                     }
 
                     if ($learning_hits >= 2) {
@@ -1631,6 +1696,31 @@ HTML;
     }
 
     /**
+     * Détecte si les colonnes de métrique "assets reactions" sont disponibles.
+     */
+    private function has_reactions_probe_columns()
+    {
+        if ($this->has_reactions_probe_columns !== null) {
+            return $this->has_reactions_probe_columns;
+        }
+
+        $sql = 'SELECT reactions_extension_expected, reactions_css_seen, reactions_js_seen
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_reactions_probe_columns = !$has_error;
+        return $this->has_reactions_probe_columns;
+    }
+
+    /**
      * Détecte si la colonne visitor_cookie_hash est disponible (migration 1.7.0).
      */
     private function has_visitor_cookie_column()
@@ -1700,6 +1790,9 @@ HTML;
             'ajax_scroll_max_y' => 0,
             'ajax_webdriver' => 0,
             'ajax_telemetry_ver' => 0,
+            'reactions_extension_expected' => 0,
+            'reactions_css_seen' => 0,
+            'reactions_js_seen' => 0,
             'visitor_cookie_preexisting' => 0,
             'visitor_cookie_ajax_state' => 0,
             'visitor_cookie_ajax_hash_any' => '',
@@ -1731,6 +1824,11 @@ HTML;
             $fields[] = 'MAX(ajax_scroll_max_y) AS ajax_scroll_max_y';
             $fields[] = 'MAX(ajax_webdriver) AS ajax_webdriver';
             $fields[] = 'MAX(ajax_telemetry_ver) AS ajax_telemetry_ver';
+        }
+        if ($this->has_reactions_probe_columns()) {
+            $fields[] = 'MAX(reactions_extension_expected) AS reactions_extension_expected';
+            $fields[] = 'MAX(reactions_css_seen) AS reactions_css_seen';
+            $fields[] = 'MAX(reactions_js_seen) AS reactions_js_seen';
         }
         if ($this->has_visitor_cookie_debug_columns()) {
             $fields[] = 'MAX(visitor_cookie_preexisting) AS visitor_cookie_preexisting';
@@ -1771,6 +1869,9 @@ HTML;
         $snapshot['ajax_scroll_max_y'] = (int)($row['ajax_scroll_max_y'] ?? 0);
         $snapshot['ajax_webdriver'] = (int)($row['ajax_webdriver'] ?? 0);
         $snapshot['ajax_telemetry_ver'] = (int)($row['ajax_telemetry_ver'] ?? 0);
+        $snapshot['reactions_extension_expected'] = (int)($row['reactions_extension_expected'] ?? 0);
+        $snapshot['reactions_css_seen'] = (int)($row['reactions_css_seen'] ?? 0);
+        $snapshot['reactions_js_seen'] = (int)($row['reactions_js_seen'] ?? 0);
         $snapshot['visitor_cookie_preexisting'] = (int)($row['visitor_cookie_preexisting'] ?? 0);
         $snapshot['visitor_cookie_ajax_state'] = (int)($row['visitor_cookie_ajax_state'] ?? 0);
         $snapshot['visitor_cookie_ajax_hash_any'] = (string)($row['visitor_cookie_ajax_hash_any'] ?? '');
@@ -2038,6 +2139,69 @@ HTML;
     }
 
     /**
+     * Détecte si les colonnes "reactions" des tables d'apprentissage sont disponibles.
+     */
+    private function has_reactions_learning_columns()
+    {
+        if ($this->has_reactions_learning_columns !== null) {
+            return $this->has_reactions_learning_columns;
+        }
+
+        $profile_sql = 'SELECT reactions_missing_hits
+                        FROM ' . $this->table_prefix . 'bastien59_stats_behavior_profile
+                        WHERE 1 = 0';
+        $seen_sql = 'SELECT reactions_extension_expected, reactions_css_seen, reactions_js_seen
+                     FROM ' . $this->table_prefix . 'bastien59_stats_behavior_seen
+                     WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result_profile = $this->db->sql_query_limit($profile_sql, 1);
+        $profile_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result_profile !== false) {
+            $this->db->sql_freeresult($result_profile);
+        }
+
+        $result_seen = $this->db->sql_query_limit($seen_sql, 1);
+        $seen_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result_seen !== false) {
+            $this->db->sql_freeresult($result_seen);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_reactions_learning_columns = !$profile_error && !$seen_error;
+        return $this->has_reactions_learning_columns;
+    }
+
+    /**
+     * Vérifie si l'extension reactions est active.
+     */
+    private function is_reactions_extension_active()
+    {
+        if ($this->reactions_extension_active !== null) {
+            return $this->reactions_extension_active;
+        }
+
+        $sql = 'SELECT ext_active
+                FROM ' . $this->table_prefix . 'ext
+                WHERE ext_name = \'bastien59960/reactions\'';
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        $active = false;
+        if (!$has_error && $result !== false) {
+            $row = $this->db->sql_fetchrow($result);
+            $active = ((int)($row['ext_active'] ?? 0) === 1);
+        }
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->reactions_extension_active = $active;
+        return $this->reactions_extension_active;
+    }
+
+    /**
      * Catégorie navigateur simplifiée pour profils d'apprentissage.
      */
     private function get_browser_family($user_agent)
@@ -2116,6 +2280,8 @@ HTML;
         if ($user_id <= 1) {
             return;
         }
+        $has_reactions_learning_columns = $this->has_reactions_learning_columns();
+        $has_reactions_probe_columns = $this->has_reactions_probe_columns();
 
         $sql = 'SELECT session_id
                 FROM ' . $this->table_prefix . 'bastien59_stats_behavior_seen
@@ -2127,16 +2293,25 @@ HTML;
             return;
         }
 
-        $sql = 'SELECT MAX(user_os) AS user_os,
-                       MAX(user_device) AS user_device,
-                       MAX(screen_res) AS screen_res,
-                       MAX(screen_res_ajax) AS screen_res_ajax,
-                       MAX(ajax_seen_time) AS ajax_seen_time,
-                       MAX(ajax_first_scroll_ms) AS ajax_first_scroll_ms,
-                       MAX(ajax_scroll_events) AS ajax_scroll_events,
-                       MAX(ajax_scroll_max_y) AS ajax_scroll_max_y,
-                       MAX(ajax_interact_mask) AS ajax_interact_mask,
-                       MAX(ajax_webdriver) AS ajax_webdriver
+        $fields = [
+            'MAX(user_os) AS user_os',
+            'MAX(user_device) AS user_device',
+            'MAX(screen_res) AS screen_res',
+            'MAX(screen_res_ajax) AS screen_res_ajax',
+            'MAX(ajax_seen_time) AS ajax_seen_time',
+            'MAX(ajax_first_scroll_ms) AS ajax_first_scroll_ms',
+            'MAX(ajax_scroll_events) AS ajax_scroll_events',
+            'MAX(ajax_scroll_max_y) AS ajax_scroll_max_y',
+            'MAX(ajax_interact_mask) AS ajax_interact_mask',
+            'MAX(ajax_webdriver) AS ajax_webdriver',
+        ];
+        if ($has_reactions_probe_columns) {
+            $fields[] = 'MAX(reactions_extension_expected) AS reactions_extension_expected';
+            $fields[] = 'MAX(reactions_css_seen) AS reactions_css_seen';
+            $fields[] = 'MAX(reactions_js_seen) AS reactions_js_seen';
+        }
+
+        $sql = 'SELECT ' . implode(', ', $fields) . '
                 FROM ' . $this->table_prefix . 'bastien59_stats
                 WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
                 AND user_id = ' . (int)$user_id . '
@@ -2196,6 +2371,10 @@ HTML;
         $browser_family = $this->get_browser_family($user_agent);
         $profile_key = $this->build_behavior_profile_key($user_os, $user_device, $browser_family);
         $profile_label = substr($user_os . ' | ' . $user_device . ' | ' . $browser_family, 0, 120);
+        $reactions_expected = (int)($row['reactions_extension_expected'] ?? 0);
+        $reactions_css_seen = (int)($row['reactions_css_seen'] ?? 0);
+        $reactions_js_seen = (int)($row['reactions_js_seen'] ?? 0);
+        $reactions_missing_hit = ($reactions_expected === 1 && ($reactions_css_seen === 0 || $reactions_js_seen === 0)) ? 1 : 0;
 
         // Dédup: une seule contribution par session.
         $seen_insert = [
@@ -2203,6 +2382,11 @@ HTML;
             'profile_key' => $profile_key,
             'learned_time' => time(),
         ];
+        if ($has_reactions_learning_columns) {
+            $seen_insert['reactions_extension_expected'] = $reactions_expected;
+            $seen_insert['reactions_css_seen'] = $reactions_css_seen;
+            $seen_insert['reactions_js_seen'] = $reactions_js_seen;
+        }
         $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_behavior_seen ' . $this->db->sql_build_array('INSERT', $seen_insert);
 
         $this->db->sql_return_on_error(true);
@@ -2218,8 +2402,20 @@ HTML;
         $fast_scroll_hit = ($first_scroll_ms <= 350) ? 1 : 0;
         $jump_scroll_hit = ($scroll_max_y >= 1400 && $scroll_events <= 2) ? 1 : 0;
 
-        $sql = 'SELECT sample_count, avg_first_scroll_ms, avg_scroll_events, avg_scroll_max_y,
-                       avg_interact_score, no_interact_hits, fast_scroll_hits, jump_scroll_hits
+        $profile_fields = [
+            'sample_count',
+            'avg_first_scroll_ms',
+            'avg_scroll_events',
+            'avg_scroll_max_y',
+            'avg_interact_score',
+            'no_interact_hits',
+            'fast_scroll_hits',
+            'jump_scroll_hits',
+        ];
+        if ($has_reactions_learning_columns) {
+            $profile_fields[] = 'reactions_missing_hits';
+        }
+        $sql = 'SELECT ' . implode(', ', $profile_fields) . '
                 FROM ' . $this->table_prefix . 'bastien59_stats_behavior_profile
                 WHERE profile_key = \'' . $this->db->sql_escape($profile_key) . '\'';
         $result = $this->db->sql_query_limit($sql, 1);
@@ -2242,6 +2438,9 @@ HTML;
                 'updated_time' => time(),
                 'profile_label' => $profile_label,
             ];
+            if ($has_reactions_learning_columns) {
+                $update['reactions_missing_hits'] = (int)($profile_row['reactions_missing_hits'] ?? 0) + $reactions_missing_hit;
+            }
 
             $sql = 'UPDATE ' . $this->table_prefix . 'bastien59_stats_behavior_profile
                     SET ' . $this->db->sql_build_array('UPDATE', $update) . '
@@ -2263,6 +2462,9 @@ HTML;
                 'updated_time' => time(),
                 'created_time' => time(),
             ];
+            if ($has_reactions_learning_columns) {
+                $insert['reactions_missing_hits'] = $reactions_missing_hit;
+            }
 
             $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_behavior_profile ' . $this->db->sql_build_array('INSERT', $insert);
             $this->db->sql_query($sql);
@@ -2284,8 +2486,23 @@ HTML;
             return $this->behavior_profile_cache[$key];
         }
 
-        $sql = 'SELECT profile_key, sample_count, avg_first_scroll_ms, avg_scroll_events, avg_scroll_max_y,
-                       avg_interact_score, no_interact_hits, fast_scroll_hits, jump_scroll_hits, updated_time
+        $fields = [
+            'profile_key',
+            'sample_count',
+            'avg_first_scroll_ms',
+            'avg_scroll_events',
+            'avg_scroll_max_y',
+            'avg_interact_score',
+            'no_interact_hits',
+            'fast_scroll_hits',
+            'jump_scroll_hits',
+            'updated_time',
+        ];
+        if ($this->has_reactions_learning_columns()) {
+            $fields[] = 'reactions_missing_hits';
+        }
+
+        $sql = 'SELECT ' . implode(', ', $fields) . '
                 FROM ' . $this->table_prefix . 'bastien59_stats_behavior_profile
                 WHERE profile_key = \'' . $this->db->sql_escape($key) . '\'
                 AND updated_time > ' . (time() - 90 * 86400);
