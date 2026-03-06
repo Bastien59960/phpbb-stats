@@ -210,19 +210,43 @@ class acp_controller
      */
     private function assign_sessions($start_time, $bot_filter, $limit = 5000)
     {
+        $has_ajax_telemetry_columns = $this->has_ajax_telemetry_columns();
+        $has_cursor_columns = $this->has_cursor_columns();
+        $interaction_predicates = [];
+        if ($has_ajax_telemetry_columns) {
+            $interaction_predicates[] = 'ajax_seen_time > 0';
+            $interaction_predicates[] = 'scroll_down_ajax = 1';
+        }
+        if ($has_cursor_columns) {
+            $interaction_predicates[] = 'cursor_track_points > 0';
+            $interaction_predicates[] = 'cursor_click_count > 0';
+        }
+        $interaction_condition = !empty($interaction_predicates)
+            ? '(' . implode(' OR ', $interaction_predicates) . ')'
+            : '0 = 1';
+
         // Requête 1 : sessions uniques triées par dernière activité.
         // On garde la ligne is_first_visit=1 comme "landing", mais l'ordre et le filtre
         // temporel se basent sur MAX(visit_time) de la session.
-        $sql = 'SELECT s.*, sess.page_count, sess.last_visit_time
+        $sql = 'SELECT s.*, sess.page_count, sess.last_visit_time, sess.has_interaction, sess.last_interaction_time
                 FROM ' . $this->table_prefix . 'bastien59_stats s
                 INNER JOIN (
-                    SELECT session_id, COUNT(*) AS page_count, MAX(visit_time) AS last_visit_time
+                    SELECT session_id,
+                           COUNT(*) AS page_count,
+                           MAX(visit_time) AS last_visit_time,
+                           MAX(CASE WHEN ' . $interaction_condition . ' THEN 1 ELSE 0 END) AS has_interaction,
+                           MAX(CASE WHEN ' . $interaction_condition . ' THEN visit_time ELSE 0 END) AS last_interaction_time
                     FROM ' . $this->table_prefix . 'bastien59_stats
                     GROUP BY session_id
                 ) sess ON sess.session_id = s.session_id
                 WHERE sess.last_visit_time > ' . (int)$start_time . $bot_filter . '
                 AND s.is_first_visit = 1
-                ORDER BY sess.last_visit_time DESC';
+                ORDER BY sess.has_interaction DESC,
+                         CASE
+                             WHEN sess.has_interaction = 1 THEN sess.last_interaction_time
+                             ELSE sess.last_visit_time
+                         END DESC,
+                         sess.last_visit_time DESC';
 
         $result = $this->db->sql_query_limit($sql, $limit);
 
@@ -242,7 +266,6 @@ class acp_controller
         $pages_by_session = [];
         $has_cookie_column = $this->has_visitor_cookie_column();
         $has_cookie_debug_columns = $this->has_visitor_cookie_debug_columns();
-        $has_cursor_columns = $this->has_cursor_columns();
         $extra_ajax_columns = $this->has_ajax_telemetry_columns()
             ? ', screen_res_ajax, scroll_down_ajax, ajax_seen_time'
             : '';
