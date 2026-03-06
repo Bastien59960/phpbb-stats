@@ -88,6 +88,22 @@
 .referer-cell { max-width: 250px; word-wrap: break-word; font-size: 12px; }
 .referer-cell a { color: #105289; }
 .direct { color: #999; font-style: italic; }
+.session-cursor-block { margin-top: 8px; padding-top: 7px; border-top: 1px dashed #d9e2ef; }
+.session-cursor-open { display: inline-block; margin-bottom: 4px; background: #eef5ff; border: 1px solid #bcd2eb; color: #0b4e8a; border-radius: 4px; padding: 2px 7px; font-size: 11px; cursor: pointer; }
+.session-cursor-open:hover { background: #dfeeff; }
+.session-cursor-thumb { display: inline-block; cursor: pointer; }
+.session-cursor-thumb .behavior-cursor-svg { display: block; border: 1px solid #d8e4f2; border-radius: 5px; background: #fff; max-width: 160px; height: auto; }
+.session-cursor-meta { display: block; margin-top: 4px; color: #667; font-size: 11px; }
+.session-cursor-none { color: #999; font-size: 11px; }
+.cursor-modal-overlay { position: fixed; z-index: 2000; top: 0; right: 0; bottom: 0; left: 0; background: rgba(8, 18, 32, 0.72); display: none; align-items: center; justify-content: center; padding: 20px; }
+.cursor-modal-dialog { width: min(900px, 95vw); max-height: 92vh; overflow: auto; background: #fff; border-radius: 8px; box-shadow: 0 18px 60px rgba(0,0,0,0.35); padding: 16px 18px; position: relative; }
+.cursor-modal-close { position: absolute; top: 8px; right: 10px; border: 1px solid #c8d6e5; background: #fff; color: #334; border-radius: 4px; font-size: 20px; line-height: 18px; width: 30px; height: 30px; cursor: pointer; }
+.cursor-modal-close:hover { background: #f3f7fc; }
+.cursor-modal-title { margin: 0 36px 10px 0; font-size: 18px; color: #105289; }
+.cursor-modal-svg-box .behavior-cursor-svg { display: block; width: 100%; max-width: 820px; height: auto; border: 1px solid #d8e4f2; border-radius: 6px; background: #fff; }
+.cursor-modal-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 6px 14px; font-size: 12px; color: #334; }
+.cursor-modal-summary { margin-top: 10px; padding: 8px 10px; border: 1px solid #e1eaf5; border-radius: 6px; background: #f8fbff; font-size: 12px; color: #2a3b4f; }
+body.cursor-modal-open { overflow: hidden; }
 </style>
 
 <!-- Filtres -->
@@ -321,6 +337,36 @@
                         <br><span class="badge {SESSIONS.SCROLL_CLASS}">{SESSIONS.SCROLL_LABEL}</span>
                         <br><small style="color:#777;">{L_STATS_RES_SOURCE_LABEL} {SESSIONS.RES_SOURCE_LABEL}</small>
                         <!-- ENDIF -->
+                        <div class="session-cursor-block">
+                            <!-- IF SESSIONS.CURSOR_HAS_DATA -->
+                                <button type="button" class="session-cursor-open" onclick="openCursorModal(event, '{SESSIONS.CURSOR_MODAL_ID}')">{L_STATS_SESSION_CURSOR_OPEN}</button>
+                                <div class="session-cursor-thumb" onclick="openCursorModal(event, '{SESSIONS.CURSOR_MODAL_ID}')">
+                                    {SESSIONS.CURSOR_SVG_THUMB}
+                                </div>
+                                <small class="session-cursor-meta">{SESSIONS.CURSOR_DEVICE_LABEL} | {SESSIONS.CURSOR_VIEWPORT_LABEL}</small>
+                                <div id="{SESSIONS.CURSOR_MODAL_ID}" style="display:none;">
+                                    <h3 class="cursor-modal-title">{L_STATS_SESSION_CURSOR_MODAL_TITLE}</h3>
+                                    <div class="cursor-modal-svg-box">{SESSIONS.CURSOR_SVG_LARGE}</div>
+                                    <div class="cursor-modal-grid">
+                                        <div><strong>{L_STATS_SESSION_CURSOR_CAPTURED_AT}</strong> {SESSIONS.CURSOR_CAPTURE_LABEL}</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_DEVICE}</strong> {SESSIONS.CURSOR_DEVICE_LABEL}</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_VIEWPORT}</strong> {SESSIONS.CURSOR_VIEWPORT_LABEL}</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_CANVAS}</strong> {SESSIONS.CURSOR_CANVAS_LABEL}</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_POINTS}</strong> {SESSIONS.CURSOR_POINTS}</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_DURATION}</strong> {SESSIONS.CURSOR_DURATION_MS} ms</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_DISTANCE}</strong> {SESSIONS.CURSOR_TOTAL_DISTANCE} px</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_AVG_SPEED}</strong> {SESSIONS.CURSOR_AVG_SPEED} px/s</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_MAX_SPEED}</strong> {SESSIONS.CURSOR_MAX_SPEED} px/s</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_DIR_CHANGES}</strong> {SESSIONS.CURSOR_DIRECTION_CHANGES}</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_LINEARITY}</strong> {SESSIONS.CURSOR_LINEARITY}%</div>
+                                        <div><strong>{L_STATS_SESSION_CURSOR_CLICKS}</strong> {SESSIONS.CURSOR_CLICK_COUNT}</div>
+                                    </div>
+                                    <div class="cursor-modal-summary">{SESSIONS.CURSOR_SUMMARY}</div>
+                                </div>
+                            <!-- ELSE -->
+                                <small class="session-cursor-none">{L_STATS_SESSION_CURSOR_NONE}</small>
+                            <!-- ENDIF -->
+                        </div>
                     </td>
                     <td>
                         <strong>{SESSIONS.LANDING_PAGE}</strong><br>
@@ -520,10 +566,59 @@
     </div>
 </div>
 
+<div id="cursor-modal-overlay" class="cursor-modal-overlay" onclick="closeCursorModal(event)">
+    <div class="cursor-modal-dialog" onclick="event.stopPropagation();" role="dialog" aria-modal="true" aria-label="{L_STATS_SESSION_CURSOR_MODAL_TITLE}">
+        <button type="button" class="cursor-modal-close" onclick="closeCursorModal(event)" aria-label="Close">&times;</button>
+        <div id="cursor-modal-content"></div>
+    </div>
+</div>
+
 <!-- Scripts (chargés APRES overall_footer.html qui inclut jQuery) -->
 <!-- INCLUDE overall_footer.html -->
 
 <script>
+function openCursorModal(evt, payloadId) {
+    if (evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+    }
+    var payload = document.getElementById(payloadId);
+    var overlay = document.getElementById('cursor-modal-overlay');
+    var content = document.getElementById('cursor-modal-content');
+    if (!payload || !overlay || !content) {
+        return;
+    }
+    content.innerHTML = payload.innerHTML;
+    overlay.style.display = 'flex';
+    if (document.body) {
+        document.body.classList.add('cursor-modal-open');
+    }
+}
+
+function closeCursorModal(evt) {
+    if (evt) {
+        evt.preventDefault();
+        evt.stopPropagation();
+    }
+    var overlay = document.getElementById('cursor-modal-overlay');
+    var content = document.getElementById('cursor-modal-content');
+    if (content) {
+        content.innerHTML = '';
+    }
+    if (overlay) {
+        overlay.style.display = 'none';
+    }
+    if (document.body) {
+        document.body.classList.remove('cursor-modal-open');
+    }
+}
+
+document.addEventListener('keydown', function(e) {
+    if (e && e.key === 'Escape') {
+        closeCursorModal();
+    }
+});
+
 function toggleDetails(row) {
     var nextRow = row.nextElementSibling;
     if (nextRow && nextRow.classList.contains('session-details-row')) {

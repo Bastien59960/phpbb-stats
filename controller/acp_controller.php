@@ -242,6 +242,7 @@ class acp_controller
         $pages_by_session = [];
         $has_cookie_column = $this->has_visitor_cookie_column();
         $has_cookie_debug_columns = $this->has_visitor_cookie_debug_columns();
+        $has_cursor_columns = $this->has_cursor_columns();
         $extra_ajax_columns = $this->has_ajax_telemetry_columns()
             ? ', screen_res_ajax, scroll_down_ajax, ajax_seen_time'
             : '';
@@ -251,10 +252,16 @@ class acp_controller
         $extra_cookie_debug_columns = $has_cookie_debug_columns
             ? ', visitor_cookie_preexisting, visitor_cookie_ajax_state, visitor_cookie_ajax_hash'
             : '';
+        $extra_cursor_columns = $has_cursor_columns
+            ? ', cursor_track_points, cursor_track_duration_ms, cursor_track_path, cursor_click_points,
+               cursor_device_class, cursor_viewport, cursor_total_distance, cursor_avg_speed,
+               cursor_max_speed, cursor_direction_changes, cursor_linearity, cursor_click_count'
+            : '';
         $sql_pages = 'SELECT session_id, page_url, page_title, visit_time, duration, referer, screen_res'
                     . $extra_ajax_columns
                     . $extra_cookie_columns
-                    . $extra_cookie_debug_columns . '
+                    . $extra_cookie_debug_columns
+                    . $extra_cursor_columns . '
                       FROM ' . $this->table_prefix . 'bastien59_stats
                       WHERE session_id IN (' . implode(',', $session_ids) . ')
                       ORDER BY visit_time ASC';
@@ -368,6 +375,31 @@ class acp_controller
                 $visitor_cookie_ajax_hash_time = 0;
             }
 
+            $cursor_capture = [];
+            $cursor_best_points = 0;
+            $cursor_best_time = 0;
+            if ($has_cursor_columns) {
+                $cursor_capture = [
+                    'cursor_track_points' => (int)($row['cursor_track_points'] ?? 0),
+                    'cursor_track_duration_ms' => (int)($row['cursor_track_duration_ms'] ?? 0),
+                    'cursor_track_path' => (string)($row['cursor_track_path'] ?? ''),
+                    'cursor_click_points' => (string)($row['cursor_click_points'] ?? ''),
+                    'cursor_device_class' => (string)($row['cursor_device_class'] ?? ''),
+                    'cursor_viewport' => (string)($row['cursor_viewport'] ?? ''),
+                    'cursor_total_distance' => (int)($row['cursor_total_distance'] ?? 0),
+                    'cursor_avg_speed' => (int)($row['cursor_avg_speed'] ?? 0),
+                    'cursor_max_speed' => (int)($row['cursor_max_speed'] ?? 0),
+                    'cursor_direction_changes' => (int)($row['cursor_direction_changes'] ?? 0),
+                    'cursor_linearity' => (int)($row['cursor_linearity'] ?? 0),
+                    'cursor_click_count' => (int)($row['cursor_click_count'] ?? 0),
+                    'screen_res' => (string)($row['screen_res'] ?? ''),
+                    'screen_res_ajax' => (string)($row['screen_res_ajax'] ?? ''),
+                    'visit_time' => (int)($row['visit_time'] ?? 0),
+                ];
+                $cursor_best_points = (int)$cursor_capture['cursor_track_points'];
+                $cursor_best_time = (int)$cursor_capture['visit_time'];
+            }
+
             foreach ($pages as $page_row) {
                 if (!$scroll_done && !empty($page_row['scroll_down_ajax'])) {
                     $scroll_done = 1;
@@ -421,6 +453,35 @@ class acp_controller
                     ) {
                         $visitor_cookie_ajax_hash = $ajax_hash_candidate;
                         $visitor_cookie_ajax_hash_time = $ajax_state_candidate_time;
+                    }
+                }
+
+                if ($has_cursor_columns) {
+                    $page_cursor_points = (int)($page_row['cursor_track_points'] ?? 0);
+                    $page_cursor_time = (int)($page_row['visit_time'] ?? 0);
+                    if (
+                        $page_cursor_points > 0
+                        && ($page_cursor_points > $cursor_best_points || ($page_cursor_points === $cursor_best_points && $page_cursor_time >= $cursor_best_time))
+                    ) {
+                        $cursor_capture = [
+                            'cursor_track_points' => $page_cursor_points,
+                            'cursor_track_duration_ms' => (int)($page_row['cursor_track_duration_ms'] ?? 0),
+                            'cursor_track_path' => (string)($page_row['cursor_track_path'] ?? ''),
+                            'cursor_click_points' => (string)($page_row['cursor_click_points'] ?? ''),
+                            'cursor_device_class' => (string)($page_row['cursor_device_class'] ?? ''),
+                            'cursor_viewport' => (string)($page_row['cursor_viewport'] ?? ''),
+                            'cursor_total_distance' => (int)($page_row['cursor_total_distance'] ?? 0),
+                            'cursor_avg_speed' => (int)($page_row['cursor_avg_speed'] ?? 0),
+                            'cursor_max_speed' => (int)($page_row['cursor_max_speed'] ?? 0),
+                            'cursor_direction_changes' => (int)($page_row['cursor_direction_changes'] ?? 0),
+                            'cursor_linearity' => (int)($page_row['cursor_linearity'] ?? 0),
+                            'cursor_click_count' => (int)($page_row['cursor_click_count'] ?? 0),
+                            'screen_res' => (string)($page_row['screen_res'] ?? ''),
+                            'screen_res_ajax' => (string)($page_row['screen_res_ajax'] ?? ''),
+                            'visit_time' => $page_cursor_time,
+                        ];
+                        $cursor_best_points = $page_cursor_points;
+                        $cursor_best_time = $page_cursor_time;
                     }
                 }
             }
@@ -563,6 +624,48 @@ class acp_controller
             $scroll_label = $scroll_done ? $this->user->lang('STATS_SCROLL_DONE') : $this->user->lang('STATS_SCROLL_NONE');
             $scroll_class = $scroll_done ? 'badge-scroll-yes' : 'badge-scroll-no';
 
+            $cursor_modal_id = 'cursor_' . (int)($row['log_id'] ?? 0) . '_' . substr((string)$session_id, 0, 8);
+            $cursor_has_data = 0;
+            $cursor_svg_thumb = '';
+            $cursor_svg_large = '';
+            $cursor_device_label = $this->user->lang('STATS_BEHAVIOR_CURSOR_DEVICE_UNKNOWN');
+            $cursor_summary_label = $this->user->lang('STATS_BEHAVIOR_CURSOR_NONE');
+            $cursor_viewport_label = '-';
+            $cursor_canvas_label = '-';
+            $cursor_capture_label = '-';
+            $cursor_points = 0;
+            $cursor_duration = 0;
+            $cursor_distance = 0;
+            $cursor_avg_speed = 0;
+            $cursor_max_speed = 0;
+            $cursor_direction_changes = 0;
+            $cursor_linearity = 0;
+            $cursor_click_count = 0;
+            if ($has_cursor_columns && !empty($cursor_capture) && (int)($cursor_capture['cursor_track_points'] ?? 0) > 0) {
+                $cursor_svg_thumb = $this->build_cursor_trace_svg($cursor_capture, 160, 96);
+                $cursor_svg_large = $this->build_cursor_trace_svg($cursor_capture, 560, 320);
+                if ($cursor_svg_thumb !== '' && $cursor_svg_large !== '') {
+                    $cursor_has_data = 1;
+                }
+                $cursor_device_label = $this->format_cursor_device_label((string)($cursor_capture['cursor_device_class'] ?? ''));
+                $cursor_summary_label = $this->format_cursor_summary($cursor_capture);
+                $cursor_viewport_label = $this->format_resolution_px((string)($cursor_capture['cursor_viewport'] ?? ''));
+                list($canvas_w, $canvas_h) = $this->resolve_cursor_canvas_size($cursor_capture);
+                $cursor_canvas_label = $canvas_w . 'x' . $canvas_h . ' px';
+                $cursor_capture_time = (int)($cursor_capture['visit_time'] ?? 0);
+                if ($cursor_capture_time > 0) {
+                    $cursor_capture_label = $this->user->format_date($cursor_capture_time, 'd M Y H:i:s');
+                }
+                $cursor_points = max(0, (int)($cursor_capture['cursor_track_points'] ?? 0));
+                $cursor_duration = max(0, (int)($cursor_capture['cursor_track_duration_ms'] ?? 0));
+                $cursor_distance = max(0, (int)($cursor_capture['cursor_total_distance'] ?? 0));
+                $cursor_avg_speed = max(0, (int)($cursor_capture['cursor_avg_speed'] ?? 0));
+                $cursor_max_speed = max(0, (int)($cursor_capture['cursor_max_speed'] ?? 0));
+                $cursor_direction_changes = max(0, (int)($cursor_capture['cursor_direction_changes'] ?? 0));
+                $cursor_linearity = max(0, min(100, (int)($cursor_capture['cursor_linearity'] ?? 0)));
+                $cursor_click_count = max(0, (int)($cursor_capture['cursor_click_count'] ?? 0));
+            }
+
             $this->template->assign_block_vars('SESSIONS', [
                 'SESSION_ID'        => substr($session_id, 0, 8) . '...',
                 'IP'                => $row['user_ip'],
@@ -616,6 +719,23 @@ class acp_controller
                 'REFERER_TYPE'  => htmlspecialchars($row['referer_type'] ?? 'Direct', ENT_COMPAT, 'UTF-8'),
                 'PAGE_COUNT'    => (int)$row['page_count'],
                 'PAGES_COUNT_LABEL' => sprintf($this->user->lang('STATS_PAGES_COUNT'), (int)$row['page_count']),
+                'CURSOR_HAS_DATA' => $cursor_has_data,
+                'CURSOR_MODAL_ID' => htmlspecialchars($cursor_modal_id, ENT_COMPAT, 'UTF-8'),
+                'CURSOR_SVG_THUMB' => $cursor_svg_thumb,
+                'CURSOR_SVG_LARGE' => $cursor_svg_large,
+                'CURSOR_DEVICE_LABEL' => htmlspecialchars($cursor_device_label, ENT_COMPAT, 'UTF-8'),
+                'CURSOR_SUMMARY' => htmlspecialchars($cursor_summary_label, ENT_COMPAT, 'UTF-8'),
+                'CURSOR_VIEWPORT_LABEL' => htmlspecialchars($cursor_viewport_label, ENT_COMPAT, 'UTF-8'),
+                'CURSOR_CANVAS_LABEL' => htmlspecialchars($cursor_canvas_label, ENT_COMPAT, 'UTF-8'),
+                'CURSOR_CAPTURE_LABEL' => htmlspecialchars($cursor_capture_label, ENT_COMPAT, 'UTF-8'),
+                'CURSOR_POINTS' => $cursor_points,
+                'CURSOR_DURATION_MS' => $cursor_duration,
+                'CURSOR_TOTAL_DISTANCE' => $cursor_distance,
+                'CURSOR_AVG_SPEED' => $cursor_avg_speed,
+                'CURSOR_MAX_SPEED' => $cursor_max_speed,
+                'CURSOR_DIRECTION_CHANGES' => $cursor_direction_changes,
+                'CURSOR_LINEARITY' => $cursor_linearity,
+                'CURSOR_CLICK_COUNT' => $cursor_click_count,
             ]);
 
             // Assigner les pages de la session (à partir de la 2ème)
@@ -1440,7 +1560,7 @@ class acp_controller
         return [1366, 768];
     }
 
-    private function build_cursor_trace_svg(array $row)
+    private function build_cursor_trace_svg(array $row, $display_width = 220, $display_height = 140)
     {
         $points = $this->decode_cursor_points_json((string)($row['cursor_track_path'] ?? ''), 300);
         if (count($points) <= 0) {
@@ -1449,6 +1569,8 @@ class acp_controller
 
         $clicks = $this->decode_cursor_points_json((string)($row['cursor_click_points'] ?? ''), 120);
         list($canvas_w, $canvas_h) = $this->resolve_cursor_canvas_size($row);
+        $render_w = max(96, min(1280, (int)$display_width));
+        $render_h = max(64, min(960, (int)$display_height));
 
         $plot = [];
         foreach ($points as $p) {
@@ -1460,7 +1582,7 @@ class acp_controller
             return '';
         }
 
-        $svg = '<svg class="behavior-cursor-svg" viewBox="0 0 ' . (int)$canvas_w . ' ' . (int)$canvas_h . '" width="220" height="140" preserveAspectRatio="xMidYMid meet">';
+        $svg = '<svg class="behavior-cursor-svg" viewBox="0 0 ' . (int)$canvas_w . ' ' . (int)$canvas_h . '" width="' . $render_w . '" height="' . $render_h . '" preserveAspectRatio="xMidYMid meet">';
         $svg .= '<rect x="0" y="0" width="' . (int)$canvas_w . '" height="' . (int)$canvas_h . '" fill="#f7fbff" stroke="#d8e4f2" />';
         $svg .= '<polyline points="' . implode(' ', $plot) . '" fill="none" stroke="#0b74c7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />';
 
