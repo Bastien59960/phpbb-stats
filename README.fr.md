@@ -46,10 +46,27 @@ Signaux stricts ou d'observation selon contexte géographique:
 
 - Résolution IP via `ip-api.com` avec cache DB.
 - Cache IPv4 par IP **et par préfixe `/16`** (`v4:a.b`) pour éviter les appels redondants.
-- TTL cache configurable (défaut 45 jours).
+- TTL cache configurable (défaut 45 jours). Le cron supprime automatiquement les entrées expirées.
+- Code `ZZ` pour les IPs résolues sans pays (non géolocalisables) : évite les retentatives infinies.
 - Throttling avec marge de sécurité: cible 40 requêtes/min, limite service 45/min, pause inter-batch fixe 5s, pauses quota selon headers.
 - En cas de HTTP 429: arrêt anticipé du run live, IP laissées non traitées pour le prochain lancement.
 - Progression CLI batch + globale.
+
+### Aucun DNS synchrone sur le thread web
+
+**Contrainte critique (2026-03-06)** : `shell_exec()`/`popen()` acquiert un PI mutex glibc
+(`popen_list_mutex`). En mod_php, si deux workers Apache appellent `popen()` simultanément
+et que l'un est bloqué, ils se bloquent mutuellement en cascade pendant 13+ minutes.
+Le `cron_lock` phpBB reste orphelin pendant toute cette durée.
+
+**Solution déployée** :
+- `get_cached_hostname()` : ne résout **jamais** le hostname en temps réel sur le thread web.
+  Retourne le hostname du cache géo (`bastien59_stats_geo_cache.hostname`) ou `null` si absent.
+- `verify_bot_rdns()` : si hostname `null` (non encore résolu), retourne `true` provisoirement
+  (le bot n'est pas marqué imposteur). La vérification est différée à la prochaine visite
+  une fois le cron `geo_async` ayant rempli le cache.
+- Le cron `geo_async` résout le hostname via `resolve_hostname()` lors du live lookup
+  (contexte CLI, hors chemin web) et le stocke dans le cache.
 
 ### Bridge sécurité / Fail2ban
 
@@ -165,6 +182,8 @@ Tables principales:
 - La carte géographique dépend des assets jVectorMap chargés depuis CDN.
 - La géolocalisation dépend de la disponibilité de `ip-api.com`.
 - Le blocage réseau n'est pas fait par l'extension elle-même: il est délégué à Fail2ban.
+- La vérification rDNS des bots légitimes est différée si le hostname n'est pas encore en cache (premier passage du cron `geo_async` nécessaire). Un bot imposteur peut donc passer lors de sa toute première visite.
+- `gethostbynamel()` et `dns_get_record()` dans `verify_bot_rdns()` peuvent bloquer quelques secondes si le DNS est lent (pas de timeout PHP natif), mais sans PI mutex → pas de blocage en cascade.
 
 ## Licence
 

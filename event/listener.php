@@ -2564,6 +2564,11 @@ HTML;
      */
     private function verify_bot_rdns($claimed_bot, $hostname, &$fail_reason = '')
     {
+        // null = hostname non résolu (cron async en attente) : ne pas marquer comme imposteur.
+        // La vérification sera effectuée lors d'une prochaine visite une fois le cache rempli.
+        if ($hostname === null) {
+            return true;
+        }
         if (empty($hostname) || $hostname === '-') {
             $fail_reason = 'no_rdns';
             return false;
@@ -2613,22 +2618,16 @@ HTML;
      */
     private function get_cached_hostname($ip)
     {
-        // Essayer le cache géo en premier (rapide, pas de réseau)
+        // Cache géo uniquement — pas de résolution DNS en temps réel.
+        // shell_exec/popen acquiert un PI mutex (popen_list_mutex glibc) qui peut bloquer
+        // tous les workers Apache en cascade pendant 13+ minutes. La résolution rDNS
+        // est effectuée de façon asynchrone par le cron geo_async (CLI uniquement).
         $geo = $this->get_geo_cache($ip);
         if ($geo && !empty($geo['hostname'])) {
             return $geo['hostname'];
         }
-        // Résolution DNS avec timeout court (gethostbyaddr natif peut bloquer 30s)
-        $hostname = '';
-        $rdns_raw = @shell_exec('timeout 0.25 getent hosts ' . escapeshellarg($ip) . ' 2>/dev/null');
-        if ($rdns_raw) {
-            $parts = preg_split('/\s+/', trim($rdns_raw));
-            $candidate = end($parts);
-            if ($candidate && $candidate !== $ip) {
-                $hostname = $candidate;
-            }
-        }
-        return $hostname ?: '-';
+        // null = hostname non encore résolu, vérification rDNS reportée au cron.
+        return null;
     }
 
     /**
