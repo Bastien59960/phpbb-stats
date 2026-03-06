@@ -22,6 +22,7 @@
 .behavior-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; background:#e8edf4; color:#334; }
 .behavior-bot { background:#fce8e6; color:#b3261e; }
 .behavior-help { cursor:help; text-decoration:underline dotted; text-underline-offset:2px; }
+.behavior-cursor-svg { display:block; width:220px; height:140px; border:1px solid #d8e4f2; border-radius:6px; background:#fff; }
 .behavior-help::after {
     content:" ?";
     display:inline-block;
@@ -137,7 +138,6 @@
                 <tr>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_GROUP}">{L_STATS_BEHAVIOR_COL_GROUP}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SESSIONS}">{L_STATS_BEHAVIOR_COL_SESSIONS}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RES_ANY_RATE}">{L_STATS_BEHAVIOR_COL_RES_ANY_RATE}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RES_COOKIE_RATE}">{L_STATS_BEHAVIOR_COL_RES_COOKIE_RATE}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RES_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_RES_AJAX_RATE}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_AJAX_RATE}</span></th>
@@ -149,14 +149,13 @@
                 <tr>
                     <td><span class="behavior-chip">{BEHAVIOR_TELEMETRY_SEGMENTS.GROUP_LABEL}</span></td>
                     <td>{BEHAVIOR_TELEMETRY_SEGMENTS.SESSIONS}</td>
-                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.RES_ANY_RATE}%</td>
                     <td>{BEHAVIOR_TELEMETRY_SEGMENTS.RES_COOKIE_RATE}%</td>
                     <td>{BEHAVIOR_TELEMETRY_SEGMENTS.RES_AJAX_RATE}%</td>
                     <td>{BEHAVIOR_TELEMETRY_SEGMENTS.AJAX_RATE}%</td>
                     <td>{BEHAVIOR_TELEMETRY_SEGMENTS.SCROLL_RATE}%</td>
                 </tr>
             <!-- BEGINELSE -->
-                <tr><td colspan="7" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+                <tr><td colspan="6" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
             <!-- END BEHAVIOR_TELEMETRY_SEGMENTS -->
             </tbody>
         </table>
@@ -233,6 +232,7 @@
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_VISITOR}">{L_STATS_COL_VISITOR}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_LANDING_PAGE}">{L_STATS_COL_LANDING_PAGE}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SIGNAL}">{L_STATS_BEHAVIOR_COL_SIGNAL}</span></th>
+                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_CURSOR}">{L_STATS_BEHAVIOR_COL_CURSOR}</span></th>
                     <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_USER_AGENT}">User-Agent</span></th>
                 </tr>
             </thead>
@@ -243,10 +243,15 @@
                     <td><code>{BEHAVIOR_CASES.IP}</code><br>{BEHAVIOR_CASES.COUNTRY}</td>
                     <td><strong>{BEHAVIOR_CASES.PAGE_TITLE}</strong><br><span class="behavior-muted">{BEHAVIOR_CASES.PAGE_URL}</span></td>
                     <td><code>{BEHAVIOR_CASES.SIGNALS}</code>{BEHAVIOR_CASES.SIGNALS_DESC}</td>
+                    <td>
+                        <span class="behavior-muted">{BEHAVIOR_CASES.CURSOR_DEVICE}</span><br>
+                        <span class="behavior-muted">{BEHAVIOR_CASES.CURSOR_SUMMARY}</span><br>
+                        {BEHAVIOR_CASES.CURSOR_SVG}
+                    </td>
                     <td><span class="behavior-muted">{BEHAVIOR_CASES.USER_AGENT}</span></td>
                 </tr>
             <!-- BEGINELSE -->
-                <tr><td colspan="5" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+                <tr><td colspan="6" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
             <!-- END BEHAVIOR_CASES -->
             </tbody>
         </table>

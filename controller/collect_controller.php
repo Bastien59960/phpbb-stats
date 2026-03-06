@@ -19,6 +19,7 @@ class collect_controller
     protected $table_prefix;
     protected $has_ajax_telemetry_columns = null;
     protected $has_ajax_advanced_columns = null;
+    protected $has_cursor_columns = null;
     protected $has_visitor_cookie_column = null;
     protected $has_visitor_cookie_debug_columns = null;
 
@@ -42,9 +43,10 @@ class collect_controller
     /**
      * POST /stats/px
      * Expected payload keys:
-     * k(token), s(session), i(log_id), a(scroll_flag), r(resolution),
+     * k(token), s(session), i(log_id), a(mode), r(resolution),
      * b(interact_mask), d(first_scroll_ms), n(scroll_events), y(scroll_max_y),
-     * w(webdriver_flag), v(telemetry_version)
+     * w(webdriver_flag), v(telemetry_version),
+     * m(cursor path), q(click path), z(device class), l(viewport)
      */
     public function collect()
     {
@@ -79,8 +81,8 @@ class collect_controller
             return new JsonResponse(['ok' => 0], 400);
         }
 
-        $scroll_flag = (int)$this->request->variable('a', -1);
-        if ($scroll_flag !== 0 && $scroll_flag !== 1) {
+        $telemetry_mode = (int)$this->request->variable('a', -1);
+        if ($telemetry_mode !== 0 && $telemetry_mode !== 1 && $telemetry_mode !== 2) {
             return new JsonResponse(['ok' => 0], 400);
         }
 
@@ -118,6 +120,17 @@ class collect_controller
         if ($telemetry_ver < 0 || $telemetry_ver > 9) {
             return new JsonResponse(['ok' => 0], 400);
         }
+
+        $cursor_path_raw = trim((string)$this->request->variable('m', '', true));
+        if (strlen($cursor_path_raw) > 16000) {
+            $cursor_path_raw = substr($cursor_path_raw, 0, 16000);
+        }
+        $cursor_clicks_raw = trim((string)$this->request->variable('q', '', true));
+        if (strlen($cursor_clicks_raw) > 8000) {
+            $cursor_clicks_raw = substr($cursor_clicks_raw, 0, 8000);
+        }
+        $cursor_device_raw = strtolower(trim((string)$this->request->variable('z', '', true)));
+        $viewport_raw = trim((string)$this->request->variable('l', '', true));
 
         // Migration 1.2.0 absente -> endpoint noop (évite les erreurs SQL, client marqué OK)
         if (!$this->has_ajax_telemetry_columns()) {
@@ -171,7 +184,7 @@ class collect_controller
         if ($resolution !== '') {
             $update['screen_res_ajax'] = substr($resolution, 0, 20);
         }
-        if ($scroll_flag === 1) {
+        if ($telemetry_mode === 1) {
             $update['scroll_down_ajax'] = 1;
         }
 
@@ -197,6 +210,32 @@ class collect_controller
             }
         }
 
+        $cursor_features = null;
+        $cursor_points = [];
+        $cursor_clicks = [];
+        if ($telemetry_mode === 2 && $this->has_cursor_columns()) {
+            $cursor_points = $this->decode_cursor_triplets($cursor_path_raw, 260);
+            $cursor_clicks = $this->decode_cursor_triplets($cursor_clicks_raw, 80);
+            $cursor_features = $this->compute_cursor_metrics($cursor_points, $cursor_clicks, $first_scroll_ms);
+            $cursor_device = $this->sanitize_cursor_device($cursor_device_raw);
+            $cursor_viewport = $this->sanitize_viewport($viewport_raw);
+
+            $update['cursor_track_points'] = (int)$cursor_features['points_count'];
+            $update['cursor_track_duration_ms'] = (int)$cursor_features['duration_ms'];
+            $encoded_path = json_encode($cursor_points);
+            $encoded_clicks = json_encode($cursor_clicks);
+            $update['cursor_track_path'] = ($encoded_path === false) ? '[]' : substr((string)$encoded_path, 0, 64000);
+            $update['cursor_click_points'] = ($encoded_clicks === false) ? '[]' : substr((string)$encoded_clicks, 0, 64000);
+            $update['cursor_device_class'] = $cursor_device;
+            $update['cursor_viewport'] = $cursor_viewport;
+            $update['cursor_total_distance'] = (int)$cursor_features['total_distance'];
+            $update['cursor_avg_speed'] = (int)$cursor_features['avg_speed'];
+            $update['cursor_max_speed'] = (int)$cursor_features['max_speed'];
+            $update['cursor_direction_changes'] = (int)$cursor_features['direction_changes'];
+            $update['cursor_linearity'] = (int)$cursor_features['linearity'];
+            $update['cursor_click_count'] = (int)$cursor_features['click_count'];
+        }
+
         if ($this->has_visitor_cookie_debug_columns()) {
             if ($ajax_cookie_hash !== '') {
                 $update['visitor_cookie_ajax_state'] = $ajax_cookie_state;
@@ -210,7 +249,29 @@ class collect_controller
             $update['visitor_cookie_hash'] = substr(strtolower($ajax_cookie_hash), 0, 64);
         }
 
+        $signals_list = array_filter(array_map('trim', explode(',', (string)($row['signals'] ?? ''))));
         $emit_cookie_fail_signal = false;
+        $emit_cursor_strict_signal = false;
+        $has_signal_updates = false;
+        $is_guest = ((int)($this->user->data['user_id'] ?? 1) <= 1);
+
+        if ($telemetry_mode === 2 && is_array($cursor_features) && $is_guest) {
+            $cursor_eval = $this->evaluate_cursor_signals($cursor_features, $this->sanitize_cursor_device($cursor_device_raw), $is_guest);
+            foreach ($cursor_eval['signals'] as $cursor_signal) {
+                if (!in_array($cursor_signal, $signals_list, true)) {
+                    $signals_list[] = $cursor_signal;
+                    $has_signal_updates = true;
+                }
+            }
+            if (!empty($cursor_eval['strict_bot'])) {
+                $emit_cursor_strict_signal = true;
+                $update['is_bot'] = 1;
+                if (empty($row['bot_source'])) {
+                    $update['bot_source'] = 'behavior';
+                }
+            }
+        }
+
         if ($this->has_visitor_cookie_debug_columns()) {
             $country_code = strtoupper(trim((string)($row['country_code'] ?? '')));
             $country_excluded = $this->is_guest_clone_country_excluded($country_code);
@@ -224,17 +285,15 @@ class collect_controller
             }
             $cookie_absent = ($ajax_cookie_state === 2);
             $cookie_invalid = ($ajax_cookie_state === 3);
-            $is_guest = ((int)($this->user->data['user_id'] ?? 1) <= 1);
-            $js_active = ($resolution !== '' || $scroll_flag === 1);
+            $js_active = ($resolution !== '' || $telemetry_mode === 1 || $telemetry_mode === 2);
 
             // Signal strict: JS actif mais cookie signé absent/invalide/incohérent en AJAX.
             if ($is_guest && $js_active && ($cookie_absent || $cookie_invalid || $cookie_mismatch)) {
-                $signals_list = array_filter(array_map('trim', explode(',', (string)($row['signals'] ?? ''))));
                 $cookie_signal = $country_excluded ? 'guest_cookie_ajax_fail_shadow' : 'guest_cookie_ajax_fail';
                 if (!in_array($cookie_signal, $signals_list, true)) {
                     $signals_list[] = $cookie_signal;
+                    $has_signal_updates = true;
                 }
-                $update['signals'] = substr(implode(',', $signals_list), 0, 255);
                 if (!$country_excluded) {
                     $update['is_bot'] = 1;
                     if (empty($row['bot_source'])) {
@@ -245,12 +304,16 @@ class collect_controller
             }
         }
 
+        if ($has_signal_updates) {
+            $update['signals'] = substr(implode(',', array_values(array_unique($signals_list))), 0, 255);
+        }
+
         if (!empty($update)) {
             $update['ajax_seen_time'] = time();
 
             $sql = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
                     SET ' . $this->db->sql_build_array('UPDATE', $update) . '
-                    WHERE session_id = \'' . $this->db->sql_escape($tracked_session) . '\'
+                    WHERE log_id = ' . (int)$log_id . '
                     AND user_ip = \'' . $this->db->sql_escape((string)$this->user->ip) . '\'';
             $this->db->sql_return_on_error(true);
             $this->db->sql_query($sql);
@@ -261,12 +324,12 @@ class collect_controller
                 return new JsonResponse(['ok' => 0], 500);
             }
 
-            if ($emit_cookie_fail_signal) {
+            if ($emit_cookie_fail_signal || $emit_cursor_strict_signal) {
                 $this->write_security_audit_signal(
                     (string)$this->user->ip,
                     $tracked_session,
                     (int)($this->user->data['user_id'] ?? 1),
-                    (string)($update['signals'] ?? 'guest_cookie_ajax_fail'),
+                    (string)($update['signals'] ?? ($emit_cursor_strict_signal ? 'cursor_script_path' : 'guest_cookie_ajax_fail')),
                     (string)($row['page_url'] ?? ''),
                     (string)($row['user_agent'] ?? ''),
                     ($resolution !== '' ? $resolution : (string)($row['screen_res'] ?? '')),
@@ -398,6 +461,211 @@ class collect_controller
     }
 
     /**
+     * Détecte si les colonnes cursor (migration 1.9.0) sont disponibles.
+     */
+    private function has_cursor_columns()
+    {
+        if ($this->has_cursor_columns !== null) {
+            return $this->has_cursor_columns;
+        }
+
+        $sql = 'SELECT cursor_track_points, cursor_track_duration_ms, cursor_track_path, cursor_click_points,
+                       cursor_device_class, cursor_viewport, cursor_total_distance, cursor_avg_speed,
+                       cursor_max_speed, cursor_direction_changes, cursor_linearity, cursor_click_count
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_cursor_columns = !$has_error;
+        return $this->has_cursor_columns;
+    }
+
+    /**
+     * Convertit le format compact "t:x:y;t:x:y" en tableau borné.
+     *
+     * @return array<int,array{0:int,1:int,2:int}>
+     */
+    private function decode_cursor_triplets($raw, $limit)
+    {
+        $items = [];
+        $text = trim((string)$raw);
+        if ($text === '') {
+            return $items;
+        }
+
+        $max = max(1, min(400, (int)$limit));
+        $last_t = -1;
+        $parts = explode(';', $text);
+        foreach ($parts as $part) {
+            if (count($items) >= $max) {
+                break;
+            }
+            if (!preg_match('/^(\d{1,6}):(\d{1,5}):(\d{1,5})$/', trim((string)$part), $m)) {
+                continue;
+            }
+
+            $t = max(0, min(120000, (int)$m[1]));
+            $x = max(0, min(16384, (int)$m[2]));
+            $y = max(0, min(16384, (int)$m[3]));
+            if ($t < $last_t) {
+                continue;
+            }
+            $last_t = $t;
+            $items[] = [$t, $x, $y];
+        }
+
+        return $items;
+    }
+
+    /**
+     * @param array<int,array{0:int,1:int,2:int}> $points
+     * @param array<int,array{0:int,1:int,2:int}> $clicks
+     * @return array<string,int>
+     */
+    private function compute_cursor_metrics(array $points, array $clicks, $duration_hint_ms = 0)
+    {
+        $points_count = count($points);
+        $click_count = count($clicks);
+        $duration_ms = max(0, min(120000, (int)$duration_hint_ms));
+        if ($points_count >= 2) {
+            $duration_ms = max($duration_ms, (int)$points[$points_count - 1][0] - (int)$points[0][0]);
+        }
+
+        $total_distance = 0.0;
+        $max_speed = 0.0;
+        $direction_changes = 0;
+        $prev_dx = null;
+        $prev_dy = null;
+
+        for ($i = 1; $i < $points_count; $i++) {
+            $dx = (float)$points[$i][1] - (float)$points[$i - 1][1];
+            $dy = (float)$points[$i][2] - (float)$points[$i - 1][2];
+            $dt = max(1, (int)$points[$i][0] - (int)$points[$i - 1][0]);
+            $segment_dist = sqrt(($dx * $dx) + ($dy * $dy));
+            $total_distance += $segment_dist;
+
+            $speed = ($segment_dist * 1000.0) / (float)$dt;
+            if ($speed > $max_speed) {
+                $max_speed = $speed;
+            }
+
+            if ($segment_dist >= 2.0 && $prev_dx !== null && $prev_dy !== null) {
+                $dot = ($prev_dx * $dx) + ($prev_dy * $dy);
+                $n1 = sqrt(($prev_dx * $prev_dx) + ($prev_dy * $prev_dy));
+                $n2 = sqrt(($dx * $dx) + ($dy * $dy));
+                if ($n1 > 0.0 && $n2 > 0.0) {
+                    $cos = max(-1.0, min(1.0, $dot / ($n1 * $n2)));
+                    $angle = acos($cos) * 180.0 / 3.141592653589793;
+                    if ($angle >= 40.0) {
+                        $direction_changes++;
+                    }
+                }
+            }
+
+            if ($segment_dist >= 2.0) {
+                $prev_dx = $dx;
+                $prev_dy = $dy;
+            }
+        }
+
+        $linearity = 0;
+        if ($points_count >= 2 && $total_distance > 0.0) {
+            $sx = (float)$points[0][1];
+            $sy = (float)$points[0][2];
+            $ex = (float)$points[$points_count - 1][1];
+            $ey = (float)$points[$points_count - 1][2];
+            $straight_dist = sqrt((($ex - $sx) * ($ex - $sx)) + (($ey - $sy) * ($ey - $sy)));
+            $linearity = (int)round(max(0.0, min(100.0, ($straight_dist / $total_distance) * 100.0)));
+        }
+
+        $avg_speed = 0;
+        if ($duration_ms > 0 && $total_distance > 0.0) {
+            $avg_speed = (int)round(($total_distance * 1000.0) / (float)$duration_ms);
+        }
+
+        return [
+            'points_count' => $points_count,
+            'duration_ms' => $duration_ms,
+            'total_distance' => (int)round(min(999999.0, $total_distance)),
+            'avg_speed' => max(0, min(99999, $avg_speed)),
+            'max_speed' => max(0, min(99999, (int)round($max_speed))),
+            'direction_changes' => max(0, min(10000, (int)$direction_changes)),
+            'linearity' => max(0, min(100, (int)$linearity)),
+            'click_count' => max(0, min(200, $click_count)),
+        ];
+    }
+
+    private function sanitize_cursor_device($raw)
+    {
+        $v = strtolower(trim((string)$raw));
+        if ($v === 'desktop' || $v === 'mobile' || $v === 'tablet') {
+            return $v;
+        }
+        return '';
+    }
+
+    private function sanitize_viewport($raw)
+    {
+        $v = trim((string)$raw);
+        if (!preg_match('/^([1-9][0-9]{1,4})x([1-9][0-9]{1,4})$/', $v, $m)) {
+            return '';
+        }
+        $w = (int)$m[1];
+        $h = (int)$m[2];
+        if ($w > 16384 || $h > 16384) {
+            return '';
+        }
+        return $w . 'x' . $h;
+    }
+
+    /**
+     * @param array<string,int> $features
+     * @return array{signals:string[],strict_bot:int}
+     */
+    private function evaluate_cursor_signals(array $features, $device_class, $is_guest)
+    {
+        $signals = [];
+        $strict_bot = 0;
+        $device = strtolower(trim((string)$device_class));
+
+        $points = (int)($features['points_count'] ?? 0);
+        $duration = (int)($features['duration_ms'] ?? 0);
+        $distance = (int)($features['total_distance'] ?? 0);
+        $avg_speed = (int)($features['avg_speed'] ?? 0);
+        $dir_changes = (int)($features['direction_changes'] ?? 0);
+        $linearity = (int)($features['linearity'] ?? 0);
+        $clicks = (int)($features['click_count'] ?? 0);
+
+        if ($duration >= 2800 && $points <= 1) {
+            $signals[] = 'cursor_no_movement';
+        }
+        if ($duration >= 2800 && $distance > 0 && $clicks === 0) {
+            $signals[] = 'cursor_no_clicks';
+        }
+        if ($avg_speed >= 2600 && $dir_changes <= 2 && $points >= 8) {
+            $signals[] = 'cursor_speed_outlier';
+        }
+        if ($device === 'desktop' && $points >= 16 && $distance >= 900 && $linearity >= 98 && $dir_changes <= 1 && $clicks === 0) {
+            $signals[] = 'cursor_script_path';
+            if ($is_guest) {
+                $strict_bot = 1;
+            }
+        }
+
+        return [
+            'signals' => array_values(array_unique($signals)),
+            'strict_bot' => $strict_bot,
+        ];
+    }
+
+    /**
      * Détecte si la colonne visitor_cookie_hash (migration 1.7.0) est disponible.
      */
     private function has_visitor_cookie_column()
@@ -515,6 +783,9 @@ class collect_controller
     private function is_guest_clone_country_excluded($country_code)
     {
         $cc = strtoupper(trim((string)$country_code));
+        if ($cc === '' || $cc === '-' || $cc === 'ZZ') {
+            return true;
+        }
         return ($cc === 'FR' || $cc === 'CO');
     }
 

@@ -18,6 +18,7 @@ class acp_controller
     protected $table_prefix;
     protected $has_ajax_telemetry_columns = null;
     protected $has_ajax_advanced_columns = null;
+    protected $has_cursor_columns = null;
     protected $has_visitor_cookie_column = null;
     protected $has_visitor_cookie_debug_columns = null;
     protected $has_behavior_learning_tables = null;
@@ -137,7 +138,7 @@ class acp_controller
         $this->assign_behavior_group_comparison($start_time);
         $this->assign_behavior_telemetry_focus_comparison($start_time);
         $this->assign_behavior_outlier_signals($start_time);
-        $this->assign_recent_behavior_cases($start_time, 80);
+        $this->assign_recent_behavior_cases($start_time, 200);
     }
 
     /**
@@ -360,6 +361,12 @@ class acp_controller
             $visitor_cookie_preexisting = (int)($row['visitor_cookie_preexisting'] ?? 0);
             $visitor_cookie_ajax_state = (int)($row['visitor_cookie_ajax_state'] ?? 0); // 0=none, 1=ok, 2=absent, 3=invalid, 4=mismatch
             $visitor_cookie_ajax_hash = strtolower(trim((string)($row['visitor_cookie_ajax_hash'] ?? '')));
+            $visitor_cookie_ajax_state_time = max((int)($row['ajax_seen_time'] ?? 0), (int)($row['visit_time'] ?? 0));
+            $visitor_cookie_ajax_hash_time = $visitor_cookie_ajax_state_time;
+            if (!$this->is_valid_visitor_cookie_hash($visitor_cookie_ajax_hash)) {
+                $visitor_cookie_ajax_hash = '';
+                $visitor_cookie_ajax_hash_time = 0;
+            }
 
             foreach ($pages as $page_row) {
                 if (!$scroll_done && !empty($page_row['scroll_down_ajax'])) {
@@ -388,12 +395,32 @@ class acp_controller
                         $visitor_cookie_preexisting = 1;
                     }
                     $ajax_state_candidate = (int)($page_row['visitor_cookie_ajax_state'] ?? 0);
-                    if ($ajax_state_candidate >= 0 && $ajax_state_candidate <= 4 && $ajax_state_candidate > $visitor_cookie_ajax_state) {
-                        $visitor_cookie_ajax_state = $ajax_state_candidate;
+                    $ajax_state_candidate_time = max((int)($page_row['ajax_seen_time'] ?? 0), (int)($page_row['visit_time'] ?? 0));
+                    if ($ajax_state_candidate >= 0 && $ajax_state_candidate <= 4) {
+                        // Conserver l'état AJAX le plus récent utile.
+                        // Un état 0 récent ne doit pas écraser un état non-zéro plus ancien.
+                        if (
+                            $ajax_state_candidate > 0
+                            && $ajax_state_candidate_time >= $visitor_cookie_ajax_state_time
+                        ) {
+                            $visitor_cookie_ajax_state = $ajax_state_candidate;
+                            $visitor_cookie_ajax_state_time = $ajax_state_candidate_time;
+                        } elseif (
+                            $ajax_state_candidate === 0
+                            && $visitor_cookie_ajax_state === 0
+                            && $ajax_state_candidate_time >= $visitor_cookie_ajax_state_time
+                        ) {
+                            $visitor_cookie_ajax_state = 0;
+                            $visitor_cookie_ajax_state_time = $ajax_state_candidate_time;
+                        }
                     }
                     $ajax_hash_candidate = strtolower(trim((string)($page_row['visitor_cookie_ajax_hash'] ?? '')));
-                    if ($this->is_valid_visitor_cookie_hash($ajax_hash_candidate)) {
+                    if (
+                        $this->is_valid_visitor_cookie_hash($ajax_hash_candidate)
+                        && $ajax_state_candidate_time >= $visitor_cookie_ajax_hash_time
+                    ) {
                         $visitor_cookie_ajax_hash = $ajax_hash_candidate;
+                        $visitor_cookie_ajax_hash_time = $ajax_state_candidate_time;
                     }
                 }
             }
@@ -454,7 +481,7 @@ class acp_controller
                 $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_UNAVAILABLE');
                 $cookie_ajax_class = 'diag-cookie-na';
             } elseif ($visitor_cookie_ajax_state === 0) {
-                $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_NONE');
+                $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_NONE_HINT');
                 $cookie_ajax_class = 'diag-cookie-na';
             } elseif ($visitor_cookie_ajax_state === 1) {
                 if ($visitor_cookie_present && $this->is_valid_visitor_cookie_hash($visitor_cookie_ajax_hash) && !hash_equals($visitor_cookie_hash, $visitor_cookie_ajax_hash)) {
@@ -521,8 +548,12 @@ class acp_controller
             $country_code_upper = strtoupper(trim((string)($row['country_code'] ?? '')));
             $cookie_fail2ban_label = $this->user->lang('STATS_VISITOR_COOKIE_FAIL2BAN_NONE');
             $cookie_fail2ban_class = 'diag-cookie-na';
+            $country_unknown = ($country_code_upper === '' || $country_code_upper === '-' || $country_code_upper === 'ZZ');
             if ($country_code_upper === 'FR' || $country_code_upper === 'CO') {
                 $cookie_fail2ban_label = $this->user->lang('STATS_VISITOR_COOKIE_FAIL2BAN_OBSERVE');
+                $cookie_fail2ban_class = 'diag-cookie-mid';
+            } elseif ($country_unknown) {
+                $cookie_fail2ban_label = $this->user->lang('STATS_VISITOR_COOKIE_FAIL2BAN_GEO_PENDING');
                 $cookie_fail2ban_class = 'diag-cookie-mid';
             } elseif ($cookie_ajax_fail || $cookie_ajax_mismatch) {
                 $cookie_fail2ban_label = $this->user->lang('STATS_VISITOR_COOKIE_FAIL2BAN_ACTIVE');
@@ -757,6 +788,33 @@ class acp_controller
 
         $this->has_ajax_advanced_columns = !$has_error;
         return $this->has_ajax_advanced_columns;
+    }
+
+    /**
+     * Détecte si les colonnes cursor (migration 1.9.0) sont disponibles.
+     */
+    private function has_cursor_columns()
+    {
+        if ($this->has_cursor_columns !== null) {
+            return $this->has_cursor_columns;
+        }
+
+        $sql = 'SELECT cursor_track_points, cursor_track_duration_ms, cursor_track_path, cursor_click_points,
+                       cursor_device_class, cursor_viewport, cursor_total_distance, cursor_avg_speed,
+                       cursor_max_speed, cursor_direction_changes, cursor_linearity, cursor_click_count
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_cursor_columns = !$has_error;
+        return $this->has_cursor_columns;
     }
 
     /**
@@ -1040,8 +1098,7 @@ class acp_controller
     }
 
     /**
-     * Compare la qualité de télémétrie entre membres connectés et invités
-     * ciblés (CN + hors FR/CO/CN), pour isoler les comportements ambigus.
+     * Compare la qualité de télémétrie entre membres et invités groupés par pays.
      */
     private function assign_behavior_telemetry_focus_comparison($start_time)
     {
@@ -1049,24 +1106,30 @@ class acp_controller
             return;
         }
 
-        $metrics_sql = 'SELECT grp,
+        $metrics_sql = 'SELECT grp_kind, grp_country_code, grp_country_name,
                                COUNT(*) AS sessions,
                                SUM(screen_res_cookie_seen) AS screen_res_cookie_sessions,
                                SUM(screen_res_ajax_seen) AS screen_res_ajax_sessions,
-                               SUM(screen_res_any_seen) AS screen_res_any_sessions,
                                SUM(ajax_seen) AS ajax_sessions,
                                SUM(scroll_seen) AS scroll_sessions
                 FROM (
                     SELECT
                         CASE
                             WHEN sess.has_member_human = 1 AND sess.has_bot_row = 0 AND sess.has_guest_human = 0 THEN \'members\'
-                            WHEN sess.has_guest_human = 1 AND sess.has_member_human = 0 AND sess.has_bot_row = 0 AND sess.country_norm = \'CN\' THEN \'guests_cn\'
-                            WHEN sess.has_guest_human = 1 AND sess.has_member_human = 0 AND sess.has_bot_row = 0 AND (sess.country_norm = \'\' OR sess.country_norm NOT IN (\'FR\',\'CO\',\'CN\')) THEN \'guests_ambiguous\'
+                            WHEN sess.has_guest_human = 1 AND sess.has_member_human = 0 AND sess.has_bot_row = 0 AND sess.country_norm = \'\' THEN \'guests_pending_geo\'
+                            WHEN sess.has_guest_human = 1 AND sess.has_member_human = 0 AND sess.has_bot_row = 0 THEN \'guests_country\'
                             ELSE \'other\'
-                        END AS grp,
+                        END AS grp_kind,
+                        CASE
+                            WHEN sess.has_guest_human = 1 AND sess.has_member_human = 0 AND sess.has_bot_row = 0 THEN sess.country_norm
+                            ELSE \'\'
+                        END AS grp_country_code,
+                        CASE
+                            WHEN sess.has_guest_human = 1 AND sess.has_member_human = 0 AND sess.has_bot_row = 0 THEN sess.country_name_norm
+                            ELSE \'\'
+                        END AS grp_country_name,
                         sess.screen_res_cookie_seen,
                         sess.screen_res_ajax_seen,
-                        sess.screen_res_any_seen,
                         sess.ajax_seen,
                         sess.scroll_seen
                     FROM (
@@ -1080,9 +1143,13 @@ class acp_controller
                                     THEN MAX(CASE WHEN is_first_visit = 1 AND country_code <> \'\' THEN UPPER(country_code) ELSE \'\' END)
                                 ELSE MAX(CASE WHEN country_code <> \'\' THEN UPPER(country_code) ELSE \'\' END)
                             END AS country_norm,
+                            CASE
+                                WHEN MAX(CASE WHEN is_first_visit = 1 AND country_name <> \'\' THEN country_name ELSE \'\' END) <> \'\'
+                                    THEN MAX(CASE WHEN is_first_visit = 1 AND country_name <> \'\' THEN country_name ELSE \'\' END)
+                                ELSE MAX(CASE WHEN country_name <> \'\' THEN country_name ELSE \'\' END)
+                            END AS country_name_norm,
                             MAX(CASE WHEN screen_res <> \'\' THEN 1 ELSE 0 END) AS screen_res_cookie_seen,
                             MAX(CASE WHEN screen_res_ajax <> \'\' THEN 1 ELSE 0 END) AS screen_res_ajax_seen,
-                            MAX(CASE WHEN (screen_res <> \'\' OR screen_res_ajax <> \'\') THEN 1 ELSE 0 END) AS screen_res_any_seen,
                             MAX(CASE WHEN ajax_seen_time > 0 THEN 1 ELSE 0 END) AS ajax_seen,
                             MAX(CASE WHEN scroll_down_ajax = 1 THEN 1 ELSE 0 END) AS scroll_seen
                         FROM ' . $this->table_prefix . 'bastien59_stats
@@ -1090,36 +1157,46 @@ class acp_controller
                         GROUP BY session_id
                     ) AS sess
                 ) AS x
-                WHERE grp <> \'other\'
-                GROUP BY grp';
+                WHERE grp_kind <> \'other\'
+                GROUP BY grp_kind, grp_country_code, grp_country_name
+                ORDER BY CASE
+                            WHEN grp_kind = \'members\' THEN 0
+                            WHEN grp_kind = \'guests_pending_geo\' THEN 1
+                            ELSE 2
+                         END ASC, sessions DESC';
 
         $result = $this->db->sql_query($metrics_sql);
         while ($row = $this->db->sql_fetchrow($result)) {
-            $grp = (string)($row['grp'] ?? '');
-            if ($grp === '' || $grp === 'other') {
+            $grp_kind = (string)($row['grp_kind'] ?? '');
+            if ($grp_kind === '' || $grp_kind === 'other') {
                 continue;
             }
 
             $sessions = max(1, (int)$row['sessions']);
-            $res_any_pct = round(((int)$row['screen_res_any_sessions'] * 100) / $sessions, 1);
             $res_cookie_pct = round(((int)$row['screen_res_cookie_sessions'] * 100) / $sessions, 1);
             $res_ajax_pct = round(((int)$row['screen_res_ajax_sessions'] * 100) / $sessions, 1);
             $ajax_pct = round(((int)$row['ajax_sessions'] * 100) / $sessions, 1);
             $scroll_pct = round(((int)$row['scroll_sessions'] * 100) / $sessions, 1);
 
-            $group_label = $grp;
-            if ($grp === 'members') {
+            $group_label = $grp_kind;
+            if ($grp_kind === 'members') {
                 $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_MEMBERS');
-            } elseif ($grp === 'guests_cn') {
-                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS_CN');
-            } elseif ($grp === 'guests_ambiguous') {
-                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS_AMBIGUOUS');
+            } elseif ($grp_kind === 'guests_pending_geo') {
+                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS_PENDING_GEO');
+            } elseif ($grp_kind === 'guests_country') {
+                $cc = strtoupper(trim((string)($row['grp_country_code'] ?? '')));
+                $cn = trim((string)($row['grp_country_name'] ?? ''));
+                if ($cc === '') {
+                    $country_label = $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS_COUNTRY_UNKNOWN');
+                } else {
+                    $country_label = trim($this->country_code_to_flag($cc) . ' ' . ($cn !== '' ? $cn : $cc));
+                }
+                $group_label = sprintf($this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS_COUNTRY'), $country_label);
             }
 
             $this->template->assign_block_vars('BEHAVIOR_TELEMETRY_SEGMENTS', [
                 'GROUP_LABEL' => htmlspecialchars($group_label, ENT_COMPAT, 'UTF-8'),
                 'SESSIONS' => number_format((int)$row['sessions'], 0, ',', ' '),
-                'RES_ANY_RATE' => number_format($res_any_pct, 1, ',', ' '),
                 'RES_COOKIE_RATE' => number_format($res_cookie_pct, 1, ',', ' '),
                 'RES_AJAX_RATE' => number_format($res_ajax_pct, 1, ',', ' '),
                 'AJAX_RATE' => number_format($ajax_pct, 1, ',', ' '),
@@ -1140,9 +1217,15 @@ class acp_controller
             'ajax_webdriver' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_WEBDRIVER'),
             'ajax_scroll_profile' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_AJAX_PROFILE'),
             'guest_fp_clone_multi_ip' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_FP_CLONE'),
+            'guest_fp_clone_multi_ip_shadow' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_FP_CLONE_SHADOW'),
             'guest_cookie_clone_multi_ip' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_CLONE'),
+            'guest_cookie_clone_multi_ip_shadow' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_CLONE_SHADOW'),
             'guest_cookie_ajax_fail' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_AJAX_FAIL'),
             'guest_cookie_ajax_fail_shadow' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_AJAX_FAIL_SHADOW'),
+            'cursor_no_movement' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_CURSOR_NO_MOVE'),
+            'cursor_no_clicks' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_CURSOR_NO_CLICKS'),
+            'cursor_speed_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_CURSOR_SPEED'),
+            'cursor_script_path' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_CURSOR_SCRIPT'),
         ];
 
         $sql = 'SELECT COUNT(*) AS total_sessions
@@ -1181,12 +1264,20 @@ class acp_controller
 
     private function assign_recent_behavior_cases($start_time, $limit)
     {
-        $sql = 'SELECT visit_time, user_ip, country_code, country_name, page_title, page_url, signals, user_agent
+        $has_cursor_columns = $this->has_cursor_columns();
+        $cursor_select = '';
+        if ($has_cursor_columns) {
+            $cursor_select = ', cursor_track_points, cursor_track_duration_ms, cursor_track_path, cursor_click_points,
+                               cursor_device_class, cursor_viewport, cursor_total_distance, cursor_avg_speed,
+                               cursor_max_speed, cursor_direction_changes, cursor_linearity, cursor_click_count';
+        }
+
+        $sql = 'SELECT visit_time, user_ip, country_code, country_name, page_title, page_url, signals, user_agent,
+                       screen_res, screen_res_ajax' . $cursor_select . '
                 FROM ' . $this->table_prefix . 'bastien59_stats
                 WHERE visit_time > ' . (int)$start_time . '
                 AND is_first_visit = 1
                 AND user_id <= 1
-                AND (signals LIKE \'%learn_%\' OR signals LIKE \'%ajax_scroll_%\' OR signals LIKE \'%ajax_webdriver%\' OR signals LIKE \'%guest_fp_clone_multi_ip%\' OR signals LIKE \'%guest_cookie_clone_multi_ip%\' OR signals LIKE \'%guest_cookie_ajax_fail%\' OR signals LIKE \'%guest_cookie_ajax_fail_shadow%\')
                 ORDER BY visit_time DESC';
         $result = $this->db->sql_query_limit($sql, $limit);
 
@@ -1196,18 +1287,206 @@ class acp_controller
                 $country_display = $this->country_code_to_flag($row['country_code']) . ' ' . htmlspecialchars($row['country_name'] ?: $row['country_code'], ENT_COMPAT, 'UTF-8');
             }
 
+            $cursor_svg = '';
+            $cursor_summary = '-';
+            $cursor_device = '';
+            if ($has_cursor_columns) {
+                $cursor_svg = $this->build_cursor_trace_svg($row);
+                $cursor_device = $this->format_cursor_device_label((string)($row['cursor_device_class'] ?? ''));
+                $cursor_summary = $this->format_cursor_summary($row);
+            }
+
             $this->template->assign_block_vars('BEHAVIOR_CASES', [
                 'TIME' => $this->user->format_date((int)$row['visit_time']),
                 'IP' => htmlspecialchars($row['user_ip'], ENT_COMPAT, 'UTF-8'),
                 'COUNTRY' => $country_display,
                 'PAGE_TITLE' => htmlspecialchars($row['page_title'], ENT_COMPAT, 'UTF-8'),
                 'PAGE_URL' => htmlspecialchars($row['page_url'], ENT_COMPAT, 'UTF-8'),
-                'SIGNALS' => htmlspecialchars($row['signals'], ENT_COMPAT, 'UTF-8'),
+                'SIGNALS' => htmlspecialchars($row['signals'] ?: '-', ENT_COMPAT, 'UTF-8'),
                 'SIGNALS_DESC' => $this->format_signals_description($row['signals']),
                 'USER_AGENT' => htmlspecialchars($row['user_agent'], ENT_COMPAT, 'UTF-8'),
+                'CURSOR_DEVICE' => htmlspecialchars($cursor_device, ENT_COMPAT, 'UTF-8'),
+                'CURSOR_SUMMARY' => htmlspecialchars($cursor_summary, ENT_COMPAT, 'UTF-8'),
+                'CURSOR_SVG' => $cursor_svg,
             ]);
         }
         $this->db->sql_freeresult($result);
+    }
+
+    private function format_cursor_device_label($device_class)
+    {
+        $d = strtolower(trim((string)$device_class));
+        if ($d === 'desktop') {
+            return $this->user->lang('STATS_BEHAVIOR_CURSOR_DEVICE_DESKTOP');
+        }
+        if ($d === 'mobile') {
+            return $this->user->lang('STATS_BEHAVIOR_CURSOR_DEVICE_MOBILE');
+        }
+        if ($d === 'tablet') {
+            return $this->user->lang('STATS_BEHAVIOR_CURSOR_DEVICE_TABLET');
+        }
+        return $this->user->lang('STATS_BEHAVIOR_CURSOR_DEVICE_UNKNOWN');
+    }
+
+    private function format_cursor_summary(array $row)
+    {
+        $points = (int)($row['cursor_track_points'] ?? 0);
+        if ($points <= 0) {
+            return $this->user->lang('STATS_BEHAVIOR_CURSOR_NONE');
+        }
+
+        $duration = (int)($row['cursor_track_duration_ms'] ?? 0);
+        $distance = (int)($row['cursor_total_distance'] ?? 0);
+        $avg_speed = (int)($row['cursor_avg_speed'] ?? 0);
+        $max_speed = (int)($row['cursor_max_speed'] ?? 0);
+        $dir_changes = (int)($row['cursor_direction_changes'] ?? 0);
+        $linearity = (int)($row['cursor_linearity'] ?? 0);
+        $clicks = (int)($row['cursor_click_count'] ?? 0);
+
+        return sprintf(
+            $this->user->lang('STATS_BEHAVIOR_CURSOR_SUMMARY'),
+            max(0, $points),
+            max(0, $duration),
+            max(0, $distance),
+            max(0, $avg_speed),
+            max(0, $max_speed),
+            max(0, $dir_changes),
+            max(0, min(100, $linearity)),
+            max(0, $clicks)
+        );
+    }
+
+    /**
+     * @return array<int,array{0:int,1:int,2:int}>
+     */
+    private function decode_cursor_points_json($raw, $limit = 300)
+    {
+        $out = [];
+        $text = trim((string)$raw);
+        if ($text === '' || $text === '[]') {
+            return $out;
+        }
+
+        $decoded = @json_decode($text, true);
+        if (!is_array($decoded)) {
+            return $out;
+        }
+
+        $max = max(1, min(400, (int)$limit));
+        $last_t = -1;
+        foreach ($decoded as $triplet) {
+            if (count($out) >= $max) {
+                break;
+            }
+            if (!is_array($triplet) || !isset($triplet[0], $triplet[1], $triplet[2])) {
+                continue;
+            }
+
+            $t = max(0, min(120000, (int)$triplet[0]));
+            $x = max(0, min(16384, (int)$triplet[1]));
+            $y = max(0, min(16384, (int)$triplet[2]));
+            if ($t < $last_t) {
+                continue;
+            }
+            $last_t = $t;
+            $out[] = [$t, $x, $y];
+        }
+
+        return $out;
+    }
+
+    /**
+     * @return array{0:int,1:int}
+     */
+    private function resolve_cursor_canvas_size(array $row)
+    {
+        $candidates = [
+            (string)($row['screen_res_ajax'] ?? ''),
+            (string)($row['screen_res'] ?? ''),
+            (string)($row['cursor_viewport'] ?? ''),
+        ];
+
+        foreach ($candidates as $candidate) {
+            $res = trim($candidate);
+            if (!preg_match('/^([1-9][0-9]{1,4})x([1-9][0-9]{1,4})$/', $res, $m)) {
+                continue;
+            }
+            $w = (int)$m[1];
+            $h = (int)$m[2];
+            if ($w >= 120 && $h >= 120 && $w <= 16384 && $h <= 16384) {
+                return [$w, $h];
+            }
+        }
+
+        return [1366, 768];
+    }
+
+    private function build_cursor_trace_svg(array $row)
+    {
+        $points = $this->decode_cursor_points_json((string)($row['cursor_track_path'] ?? ''), 300);
+        if (count($points) <= 0) {
+            return '';
+        }
+
+        $clicks = $this->decode_cursor_points_json((string)($row['cursor_click_points'] ?? ''), 120);
+        list($canvas_w, $canvas_h) = $this->resolve_cursor_canvas_size($row);
+
+        $plot = [];
+        foreach ($points as $p) {
+            $x = max(0, min($canvas_w, (int)$p[1]));
+            $y = max(0, min($canvas_h, (int)$p[2]));
+            $plot[] = $x . ',' . $y;
+        }
+        if (empty($plot)) {
+            return '';
+        }
+
+        $svg = '<svg class="behavior-cursor-svg" viewBox="0 0 ' . (int)$canvas_w . ' ' . (int)$canvas_h . '" width="220" height="140" preserveAspectRatio="xMidYMid meet">';
+        $svg .= '<rect x="0" y="0" width="' . (int)$canvas_w . '" height="' . (int)$canvas_h . '" fill="#f7fbff" stroke="#d8e4f2" />';
+        $svg .= '<polyline points="' . implode(' ', $plot) . '" fill="none" stroke="#0b74c7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />';
+
+        $step = max(8, (int)floor(count($points) / 12));
+        for ($i = $step; $i < count($points); $i += $step) {
+            $p0 = $points[$i - $step];
+            $p1 = $points[$i];
+            $x0 = (float)$p0[1];
+            $y0 = (float)$p0[2];
+            $x1 = (float)$p1[1];
+            $y1 = (float)$p1[2];
+            $dx = $x1 - $x0;
+            $dy = $y1 - $y0;
+            $len = sqrt(($dx * $dx) + ($dy * $dy));
+            if ($len < 10.0) {
+                continue;
+            }
+
+            $ux = $dx / $len;
+            $uy = $dy / $len;
+            $arrow = min(12.0, max(6.0, $len * 0.18));
+            $ax = $x1 - ($ux * $arrow);
+            $ay = $y1 - ($uy * $arrow);
+            $nx = -$uy;
+            $ny = $ux;
+            $hx1 = $ax + ($nx * ($arrow * 0.45));
+            $hy1 = $ay + ($ny * ($arrow * 0.45));
+            $hx2 = $ax - ($nx * ($arrow * 0.45));
+            $hy2 = $ay - ($ny * ($arrow * 0.45));
+
+            $svg .= '<line x1="' . (int)round($x0) . '" y1="' . (int)round($y0) . '" x2="' . (int)round($x1) . '" y2="' . (int)round($y1) . '" stroke="#6aa8d8" stroke-width="1" />';
+            $svg .= '<line x1="' . (int)round($x1) . '" y1="' . (int)round($y1) . '" x2="' . (int)round($hx1) . '" y2="' . (int)round($hy1) . '" stroke="#2f6f9f" stroke-width="1" />';
+            $svg .= '<line x1="' . (int)round($x1) . '" y1="' . (int)round($y1) . '" x2="' . (int)round($hx2) . '" y2="' . (int)round($hy2) . '" stroke="#2f6f9f" stroke-width="1" />';
+        }
+
+        foreach ($clicks as $click) {
+            $cx = max(0, min($canvas_w, (int)$click[1]));
+            $cy = max(0, min($canvas_h, (int)$click[2]));
+            $svg .= '<circle cx="' . $cx . '" cy="' . $cy . '" r="5" fill="none" stroke="#d43d3d" stroke-width="1.4" />';
+            $svg .= '<circle cx="' . $cx . '" cy="' . $cy . '" r="10" fill="none" stroke="#d43d3d" stroke-width="1" opacity="0.55" />';
+            $svg .= '<circle cx="' . $cx . '" cy="' . $cy . '" r="15" fill="none" stroke="#d43d3d" stroke-width="0.8" opacity="0.3" />';
+        }
+
+        $svg .= '</svg>';
+        return $svg;
     }
 
     /**
@@ -1261,9 +1540,15 @@ class acp_controller
             'ajax_scroll_jump'     => 'Scroll en saut brusque (grande distance avec 1-2 événements) (30 pts)',
             'ajax_scroll_profile'  => 'Profil de scroll automatisé (combinaison de signaux AJAX) (70 pts)',
             'guest_fp_clone_multi_ip' => 'Fingerprint invité cloné sur plusieurs IPs en fenêtre courte (hors FR/CO) (strict)',
+            'guest_fp_clone_multi_ip_shadow' => 'Fingerprint invité cloné multi-IP avec pays non encore résolu — signal différé par le cron (observation)',
             'guest_cookie_clone_multi_ip' => 'Cookie visiteur invité réutilisé sur plusieurs IPs en fenêtre courte (hors FR/CO) (strict)',
+            'guest_cookie_clone_multi_ip_shadow' => 'Cookie visiteur invité réutilisé multi-IP avec pays non encore résolu — signal différé par le cron (observation)',
             'guest_cookie_ajax_fail' => 'Cookie visiteur signé non relu (ou incohérent) lors de l\'AJAX malgré JS actif (hors FR/CO) (strict)',
-            'guest_cookie_ajax_fail_shadow' => 'Cookie visiteur signé non relu (ou incohérent) en AJAX — mode observation FR/CO (non signalé fail2ban)',
+            'guest_cookie_ajax_fail_shadow' => 'Cookie visiteur signé non relu (ou incohérent) en AJAX — mode observation FR/CO ou géolocalisation en attente (non signalé fail2ban)',
+            'cursor_no_movement' => 'Aucun déplacement curseur/touch significatif pendant la fenêtre de capture (observation)',
+            'cursor_no_clicks' => 'Trajet détecté sans clic pendant la fenêtre de capture (observation)',
+            'cursor_speed_outlier' => 'Trajet très rapide et peu varié (outlier curseur)',
+            'cursor_script_path' => 'Trajectoire quasi-linéaire et mécanique (signature d\'automation) (strict)',
             'learn_no_interact_outlier' => 'Écart au profil appris: absence d\'interaction inhabituel pour ce profil (25 pts)',
             'learn_speed_outlier'   => 'Écart au profil appris: scroll initial anormalement rapide (25 pts)',
             'learn_sparse_scroll_outlier' => 'Écart au profil appris: trop peu d\'événements de scroll (20 pts)',

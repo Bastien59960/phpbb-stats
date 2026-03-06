@@ -22,6 +22,7 @@ class listener implements EventSubscriberInterface
     protected $current_log_id = 0;
     protected $has_ajax_telemetry_columns = null;
     protected $has_ajax_advanced_columns = null;
+    protected $has_cursor_columns = null;
     protected $has_visitor_cookie_column = null;
     protected $has_visitor_cookie_debug_columns = null;
     protected $has_behavior_learning_tables = null;
@@ -258,7 +259,9 @@ class listener implements EventSubscriberInterface
         // dans certaines détections comportementales.
         $geo_data = ['country_code' => '', 'country_name' => '', 'hostname' => ''];
         if ($is_first_visit) {
-            $geo_data = $this->geolocate_ip($this->user->ip);
+            // Mode async: jamais d'appel réseau géoloc sur le thread web.
+            // La résolution IP est effectuée par la tâche cron dédiée.
+            $geo_data = $this->geolocate_ip($this->user->ip, false);
         }
 
         // 3. Détection UA + comportementale (seulement pour visiteurs non-bots-légitimes)
@@ -317,7 +320,11 @@ class listener implements EventSubscriberInterface
 
         // 5. Écriture security_audit.log (bridge vers fail2ban)
         // Ne log que les bots avec signaux détectés (pas phpBB natifs légitimes)
-        if (!empty($actionable_signals)) {
+        $audit_signals = $this->filter_security_audit_signals_by_country(
+            $actionable_signals,
+            (string)($geo_data['country_code'] ?? '')
+        );
+        if (!empty($audit_signals)) {
             // Compter les pages dans la session pour le log
             $page_count = 0;
             if (!$is_first_visit) {
@@ -331,7 +338,7 @@ class listener implements EventSubscriberInterface
             $this->write_security_audit(
                 $this->user->ip, $session_id,
                 (int)$this->user->data['user_id'],
-                $actionable_signals, $user_agent, $page_url,
+                $audit_signals, $user_agent, $page_url,
                 $screen_res, $page_count,
                 $hostname_check ?? ($geo_data['hostname'] ?? ''),
                 $claimed_bot, $rdns_fail_reason
@@ -368,6 +375,20 @@ class listener implements EventSubscriberInterface
             $sql_ary['visitor_cookie_preexisting'] = $this->visitor_cookie_preexisting ? 1 : 0;
             $sql_ary['visitor_cookie_ajax_state'] = 0;
             $sql_ary['visitor_cookie_ajax_hash'] = '';
+        }
+        if ($this->has_cursor_columns()) {
+            $sql_ary['cursor_track_points'] = 0;
+            $sql_ary['cursor_track_duration_ms'] = 0;
+            $sql_ary['cursor_track_path'] = '[]';
+            $sql_ary['cursor_click_points'] = '[]';
+            $sql_ary['cursor_device_class'] = '';
+            $sql_ary['cursor_viewport'] = '';
+            $sql_ary['cursor_total_distance'] = 0;
+            $sql_ary['cursor_avg_speed'] = 0;
+            $sql_ary['cursor_max_speed'] = 0;
+            $sql_ary['cursor_direction_changes'] = 0;
+            $sql_ary['cursor_linearity'] = 0;
+            $sql_ary['cursor_click_count'] = 0;
         }
 
         $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats ' . $this->db->sql_build_array('INSERT', $sql_ary);
@@ -454,6 +475,7 @@ class listener implements EventSubscriberInterface
             's' => (string)($this->user->session_id ?? ''),
             'i' => (int)$this->current_log_id,
             'x' => (int)($this->config['bastien59_stats_session_timeout'] ?? 900),
+            'cm' => max(800, min(6000, (int)($this->config['bastien59_stats_cursor_capture_ms'] ?? 3500))),
         ];
 
         if ($ajax_payload['i'] > 0 && $ajax_payload['s'] !== '') {
@@ -468,13 +490,13 @@ class listener implements EventSubscriberInterface
 
         $ajax_json = json_encode($ajax_payload, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
         if ($ajax_json === false) {
-            $ajax_json = '{"u":"","t":"","s":"","i":0,"x":900}';
+            $ajax_json = '{"u":"","t":"","s":"","i":0,"x":900,"cm":3500}';
         }
 
-        // Script léger:
-        // - garde la méthode cookie existante
-        // - envoie un ping AJAX immédiat pour vérifier le cookie visiteur
-        // - conserve un envoi AJAX séparé au 1er scroll pour la télémétrie comportementale
+        // Script client:
+        // - conserve la logique cookie résolution
+        // - envoie la résolution AJAX immédiatement (critique 1re page)
+        // - capture les mouvements curseur pendant 3.5s de focus/onglet actif, à chaque visite
         $script = <<<HTML
 <script>
 (function(w,d,c){
@@ -526,18 +548,34 @@ class listener implements EventSubscriberInterface
     // Endpoint AJAX (noms de clés volontairement opaques côté client)
     if(!c||!c.u||!c.t||!c.s||!c.i||!w.fetch||!w.FormData){return;}
 
-    var kCookie='b59x3c_'+String(c.s||'');
-    var kScroll='b59x3s_'+String(c.s||'');
+    var kCookie='b59x3c_'+String(c.s||'')+'_'+String(c.i||0);
+    var kScroll='b59x3s_'+String(c.s||'')+'_'+String(c.i||0);
+    var kCursor='b59x3m_'+String(c.s||'')+'_'+String(c.i||0);
     var ttl=Math.max(300,parseInt(c.x||900,10))*1000;
     var cookieSent=false;
     var cookieInflight=false;
     var scrollSent=false;
     var scrollInflight=false;
+    var cursorSent=false;
+    var cursorInflight=false;
     var t0=Date.now();
+    var captureMs=Math.max(800,Math.min(6000,parseInt(c.cm||3500,10)||3500));
     var bm=0;
     var se=0;
     var my=0;
     var mwd=(w.navigator&&w.navigator.webdriver)?1:0;
+    var points=[];
+    var clicks=[];
+    var maxPoints=260;
+    var maxClicks=80;
+    var lastPointTs=0;
+    var moveStepMs=14;
+    var listenersBound=false;
+    var captureStarted=false;
+    var captureFinalized=false;
+    var captureTick=0;
+    var activeStartTs=0;
+    var activeAccumMs=0;
     function oy(){
         return w.pageYOffset||d.documentElement.scrollTop||d.body.scrollTop||0;
     }
@@ -550,6 +588,121 @@ class listener implements EventSubscriberInterface
     function e4(){mk(8);}
     function e5(){mk(16);}
     function e6(){mk(32);}
+    function clamp(v,min,max){
+        var x=parseInt(v,10);
+        if(isNaN(x)){x=0;}
+        if(x<min){x=min;}
+        if(x>max){x=max;}
+        return x;
+    }
+    function readXY(ev){
+        if(!ev){return null;}
+        if(typeof ev.clientX==='number'&&typeof ev.clientY==='number'){
+            return {x:ev.clientX,y:ev.clientY};
+        }
+        if(ev.touches&&ev.touches[0]){
+            return {x:ev.touches[0].clientX,y:ev.touches[0].clientY};
+        }
+        if(ev.changedTouches&&ev.changedTouches[0]){
+            return {x:ev.changedTouches[0].clientX,y:ev.changedTouches[0].clientY};
+        }
+        return null;
+    }
+    function getViewport(){
+        var vw=clamp(w.innerWidth||0,0,16384);
+        var vh=clamp(w.innerHeight||0,0,16384);
+        if(vw<32||vh<32){return '';}
+        return String(vw)+'x'+String(vh);
+    }
+    function getDeviceClass(){
+        var ua=String((w.navigator&&w.navigator.userAgent)||'').toLowerCase();
+        var touchPts=parseInt((w.navigator&&w.navigator.maxTouchPoints)||0,10)||0;
+        var coarse=false;
+        try{
+            coarse=!!(w.matchMedia&&w.matchMedia('(pointer:coarse)').matches);
+        }catch(e){}
+        if(ua.indexOf('ipad')>-1||ua.indexOf('tablet')>-1){return 'tablet';}
+        if(ua.indexOf('android')>-1&&ua.indexOf('mobile')===-1){return 'tablet';}
+        if(ua.indexOf('iphone')>-1||ua.indexOf('ipod')>-1||ua.indexOf('mobile')>-1){return 'mobile';}
+        if(coarse&&touchPts>0){
+            var vp=getViewport();
+            if(vp){
+                var p=vp.split('x');
+                var wv=parseInt(p[0]||0,10)||0;
+                if(wv>0&&wv<900){return 'mobile';}
+                if(wv>=900&&wv<1366){return 'tablet';}
+            }
+            return 'mobile';
+        }
+        return 'desktop';
+    }
+    function hasActiveTab(){
+        var visible=true;
+        if(d&&typeof d.visibilityState==='string'){
+            visible=(d.visibilityState==='visible');
+        }
+        var focused=true;
+        try{
+            if(d&&typeof d.hasFocus==='function'){
+                focused=!!d.hasFocus();
+            }
+        }catch(e){}
+        return visible&&focused;
+    }
+    function captureElapsed(nowTs){
+        var now=clamp(nowTs||Date.now(),0,2147483647);
+        var total=activeAccumMs;
+        if(captureStarted && activeStartTs>0){
+            total+=Math.max(0,now-activeStartTs);
+        }
+        return clamp(total,0,120000);
+    }
+    function pauseCaptureClock(){
+        if(!captureStarted || activeStartTs<=0){return;}
+        activeAccumMs=clamp(activeAccumMs + (Date.now()-activeStartTs),0,120000);
+        activeStartTs=0;
+    }
+    function resumeCaptureClock(){
+        if(!captureStarted){return;}
+        if(activeStartTs>0){return;}
+        activeStartTs=Date.now();
+    }
+    function pushPoint(x,y,ts){
+        if(points.length>=maxPoints){return;}
+        var px=clamp(x,0,16384);
+        var py=clamp(y,0,16384);
+        var dt=captureElapsed(ts);
+        points.push([dt,px,py]);
+    }
+    function onMove(ev){
+        e1();
+        var now=Date.now();
+        if((now-lastPointTs)<moveStepMs){return;}
+        var xy=readXY(ev);
+        if(!xy){return;}
+        lastPointTs=now;
+        pushPoint(xy.x,xy.y,now);
+    }
+    function onClick(ev){
+        e6();
+        if(clicks.length>=maxClicks){return;}
+        var xy=readXY(ev);
+        if(!xy){return;}
+        var now=Date.now();
+        clicks.push([captureElapsed(now),clamp(xy.x,0,16384),clamp(xy.y,0,16384)]);
+    }
+    function serializePts(items,maxLen){
+        if(!items||!items.length){return '';}
+        var out=[];
+        for(var i=0;i<items.length;i++){
+            var p=items[i];
+            if(!p||p.length<3){continue;}
+            out.push(String(clamp(p[0],0,120000))+':'+String(clamp(p[1],0,16384))+':'+String(clamp(p[2],0,16384)));
+        }
+        var txt=out.join(';');
+        if(txt.length>maxLen){txt=txt.substring(0,maxLen);}
+        return txt;
+    }
     function e7(){
         var y=oy();
         se++;
@@ -574,6 +727,7 @@ class listener implements EventSubscriberInterface
             method:'POST',
             body:f,
             credentials:'same-origin',
+            keepalive:true,
             headers:{'X-Requested-With':'XMLHttpRequest'}
         }).then(function(resp){
             if(!resp||!resp.ok){throw 0;}
@@ -586,15 +740,15 @@ class listener implements EventSubscriberInterface
             if(typeof onDone==='function'){ onDone(); }
         });
     }
-    function basePayload(scrollFlag){
+    function basePayload(mode){
         var f=new FormData();
         f.append('k',String(c.t||''));
         f.append('s',String(c.s||''));
         f.append('i',String(c.i||0));
-        f.append('a',String(scrollFlag?1:0));
+        f.append('a',String(clamp(mode,0,2)));
         var r=g();
         if(r){f.append('r',r);}
-        f.append('v','2');
+        f.append('v','3');
         return f;
     }
     function sendCookieProbe(){
@@ -610,15 +764,9 @@ class listener implements EventSubscriberInterface
         if(scrollSent||scrollInflight||wasSent(kScroll)){ scrollSent=true; return; }
         scrollInflight=true;
         var f=basePayload(1);
-        var dt=Date.now()-t0;
-        if(dt<0){dt=0;}
-        if(dt>120000){dt=120000;}
-        var sn=se;
-        if(sn<0){sn=0;}
-        if(sn>10000){sn=10000;}
-        var sy=my;
-        if(sy<0){sy=0;}
-        if(sy>500000){sy=500000;}
+        var dt=clamp(Date.now()-t0,0,120000);
+        var sn=clamp(se,0,10000);
+        var sy=clamp(my,0,500000);
         f.append('b',String(bm&255));
         f.append('d',String(dt));
         f.append('n',String(sn));
@@ -629,8 +777,101 @@ class listener implements EventSubscriberInterface
             markSent(kScroll);
         },function(){ scrollInflight=false; });
     }
+    function sendCursorTelemetry(){
+        if(!captureStarted){ return; }
+        if(cursorSent||cursorInflight||wasSent(kCursor)){ cursorSent=true; return; }
+        pauseCaptureClock();
+        cursorInflight=true;
+        var f=basePayload(2);
+        var dt=captureElapsed(Date.now());
+        var sn=clamp(se,0,10000);
+        var sy=clamp(my,0,500000);
+        var viewport=getViewport();
+        var path=serializePts(points,12000);
+        var clickPath=serializePts(clicks,5000);
+        f.append('b',String(bm&255));
+        f.append('d',String(dt));
+        f.append('n',String(sn));
+        f.append('y',String(sy));
+        f.append('w',String(mwd?1:0));
+        f.append('z',String(getDeviceClass()));
+        if(viewport){f.append('l',viewport);}
+        if(path){f.append('m',path);}
+        if(clickPath){f.append('q',clickPath);}
+        postAjax(f,function(){
+            cursorSent=true;
+            markSent(kCursor);
+        },function(){ cursorInflight=false; });
+    }
+    function unbindCaptureListeners(){
+        if(!listenersBound||!w.removeEventListener){return;}
+        listenersBound=false;
+        w.removeEventListener('mousemove',onMove,true);
+        w.removeEventListener('pointermove',onMove,true);
+        w.removeEventListener('touchmove',onMove,true);
+        w.removeEventListener('click',onClick,true);
+        w.removeEventListener('pointerdown',onClick,true);
+    }
+    function bindCaptureListeners(){
+        if(listenersBound||!w.addEventListener){return;}
+        listenersBound=true;
+        w.addEventListener('mousemove',onMove,{passive:true,capture:true});
+        w.addEventListener('pointermove',onMove,{passive:true,capture:true});
+        w.addEventListener('touchmove',onMove,{passive:true,capture:true});
+        w.addEventListener('click',onClick,{passive:true,capture:true});
+        w.addEventListener('pointerdown',onClick,{passive:true,capture:true});
+    }
+    function stopCaptureTicker(){
+        if(captureTick&&w.clearInterval){
+            w.clearInterval(captureTick);
+        }
+        captureTick=0;
+    }
+    function ensureCaptureTicker(){
+        if(captureTick||!w.setInterval){return;}
+        captureTick=w.setInterval(function(){
+            if(captureFinalized||cursorSent||wasSent(kCursor)){
+                stopCaptureTicker();
+                return;
+            }
+            if(!captureStarted){return;}
+            if(!hasActiveTab()){
+                pauseCaptureClock();
+                return;
+            }
+            resumeCaptureClock();
+            if(captureElapsed(Date.now())>=captureMs){
+                finalizeCapture();
+            }
+        },120);
+    }
+    function maybeStartCapture(){
+        if(captureFinalized||cursorSent||wasSent(kCursor)){return;}
+        if(!hasActiveTab()){return;}
+        if(!captureStarted){
+            captureStarted=true;
+            activeAccumMs=0;
+            activeStartTs=Date.now();
+            bindCaptureListeners();
+        }else{
+            resumeCaptureClock();
+        }
+        ensureCaptureTicker();
+    }
+    function pauseCapture(){
+        if(!captureStarted||captureFinalized){return;}
+        pauseCaptureClock();
+    }
+    function finalizeCapture(){
+        if(captureFinalized||!captureStarted){return;}
+        captureFinalized=true;
+        pauseCaptureClock();
+        sendCursorTelemetry();
+        unbindCaptureListeners();
+        stopCaptureTicker();
+    }
 
-    if(wasSent(kCookie)&&wasSent(kScroll)){ return; }
+    if(wasSent(kCookie)&&wasSent(kScroll)&&wasSent(kCursor)){ return; }
 
     var done=false;
     function h(){
@@ -643,22 +884,35 @@ class listener implements EventSubscriberInterface
             if(w.removeEventListener){w.removeEventListener('scroll',h,true);}
         }
     }
-    if(w.addEventListener && !wasSent(kScroll)){
+    if(w.addEventListener){
         w.addEventListener('mousemove',e1,{passive:true,capture:true});
         w.addEventListener('keydown',e2,{passive:true,capture:true});
         w.addEventListener('touchstart',e3,{passive:true,capture:true});
         w.addEventListener('pointerdown',e4,{passive:true,capture:true});
         w.addEventListener('wheel',e5,{passive:true,capture:true});
         w.addEventListener('click',e6,{passive:true,capture:true});
-        w.addEventListener('scroll',h,{passive:true,capture:true});
+        if(!wasSent(kScroll)){ w.addEventListener('scroll',h,{passive:true,capture:true}); }
         h();
     }
-    if(!wasSent(kCookie)){
-        if(w.setTimeout){
-            w.setTimeout(sendCookieProbe,120);
-        }else{
-            sendCookieProbe();
-        }
+    if(!wasSent(kCookie)){ sendCookieProbe(); }
+    if(!wasSent(kCursor)){ maybeStartCapture(); }
+    if(w.addEventListener){
+        w.addEventListener('focus',function(){ maybeStartCapture(); },{capture:true});
+        w.addEventListener('blur',function(){ pauseCapture(); },{capture:true});
+        w.addEventListener('pagehide',function(){
+            if(!wasSent(kCookie)){ sendCookieProbe(); }
+            if(!wasSent(kCursor)){ finalizeCapture(); }
+        },{capture:true});
+    }
+    if(d&&d.addEventListener){
+        d.addEventListener('visibilitychange',function(){
+            if(d.visibilityState==='visible'){
+                maybeStartCapture();
+            }else{
+                pauseCapture();
+                if(!wasSent(kCookie)){ sendCookieProbe(); }
+            }
+        },{capture:true});
     }
 })(window,document,$ajax_json);
 </script>
@@ -1081,10 +1335,26 @@ HTML;
         if ($country_code === '') {
             $country_code = strtoupper(trim((string)($snapshot['country_code_any'] ?? '')));
         }
+        $country_pending = $this->is_country_code_pending($country_code);
+        $country_excluded = $this->is_guest_clone_country_excluded($country_code);
 
-        // Signal 1 : Invité atterrit sur posting.php en première visite
+        $referer_trimmed = trim((string)$referer);
+        $is_direct_entry = ($referer_trimmed === '' || $referer_trimmed === '-');
+
+        // Signal 1 : accès direct invité à posting.php en première visite.
+        // On limite strictement aux modes de publication (post/reply/quote)
+        // et aux entrées directes pour éviter les faux positifs sur:
+        // - mode=edit (session expirée / onglet ancien)
+        // - navigation normale intra-forum avec referer.
         if ($is_first_visit && strpos($page_lower, 'posting.php') !== false) {
-            $add_hard_signal('posting_first_visit');
+            $posting_mode = '';
+            if (preg_match('/[?&]mode=([a-z_]+)/', $page_lower, $mode_match)) {
+                $posting_mode = strtolower((string)$mode_match[1]);
+            }
+            $is_publish_mode = in_array($posting_mode, ['post', 'reply', 'quote'], true);
+            if ($is_publish_mode && $is_direct_entry && $page_count <= 1) {
+                $add_hard_signal('posting_first_visit');
+            }
         }
 
         // Signal 1b (strict) : accès direct à une fiche membre en première visite,
@@ -1093,8 +1363,6 @@ HTML;
             strpos($page_lower, 'memberlist.php') !== false
             && strpos($page_lower, 'mode=viewprofile') !== false
         );
-        $referer_trimmed = trim((string)$referer);
-        $is_direct_entry = ($referer_trimmed === '' || $referer_trimmed === '-');
         if (
             $is_first_visit
             && $is_viewprofile_page
@@ -1223,15 +1491,23 @@ HTML;
                     }
                 }
 
-                // Signal 7 : clone de fingerprint invité diffusé sur plusieurs IPs.
-                // Exclut explicitement FR/CO pour limiter les faux positifs locaux.
-                if ($this->detect_guest_fingerprint_clone_multi_ip($session_id, $user_agent, $snapshot, $country_code)) {
-                    $add_hard_signal('guest_fp_clone_multi_ip');
-                }
-
-                // Signal 8 : même cookie visiteur réutilisé sur plusieurs IPs en fenêtre courte.
-                if ($this->detect_guest_cookie_clone_multi_ip($visitor_cookie_hash, $country_code)) {
-                    $add_hard_signal('guest_cookie_clone_multi_ip');
+                // Signal 7/8 : signaux pays-dépendants.
+                // Si pays inconnu, on stocke en mode "shadow" (différé) et le cron décidera
+                // après géolocalisation si on doit les promouvoir en strict.
+                if ($country_pending) {
+                    if ($this->detect_guest_fingerprint_clone_multi_ip($session_id, $user_agent, $snapshot, $country_code, true)) {
+                        $add_observe_signal('guest_fp_clone_multi_ip_shadow');
+                    }
+                    if ($this->detect_guest_cookie_clone_multi_ip($visitor_cookie_hash, $country_code, true)) {
+                        $add_observe_signal('guest_cookie_clone_multi_ip_shadow');
+                    }
+                } elseif (!$country_excluded) {
+                    if ($this->detect_guest_fingerprint_clone_multi_ip($session_id, $user_agent, $snapshot, $country_code, false)) {
+                        $add_hard_signal('guest_fp_clone_multi_ip');
+                    }
+                    if ($this->detect_guest_cookie_clone_multi_ip($visitor_cookie_hash, $country_code, false)) {
+                        $add_hard_signal('guest_cookie_clone_multi_ip');
+                    }
                 }
 
                 // Signal 9 (strict) : AJAX reçu mais cookie signé non relu/invalide/incohérent.
@@ -1240,7 +1516,6 @@ HTML;
                     $ajax_cookie_hash = strtolower(trim((string)($snapshot['visitor_cookie_ajax_hash_any'] ?? '')));
                     $ajax_cookie_state = (int)($snapshot['visitor_cookie_ajax_state'] ?? 0); // 0=none, 1=ok, 2=absent, 3=invalid, 4=mismatch
                     $cookie_preexisting = (int)($snapshot['visitor_cookie_preexisting'] ?? 0) === 1;
-                    $country_excluded = $this->is_guest_clone_country_excluded($country_code);
                     $cookie_hash_valid = preg_match('/^[a-f0-9]{64}$/', $cookie_hash);
                     $ajax_hash_valid = preg_match('/^[a-f0-9]{64}$/', $ajax_cookie_hash);
                     $ajax_cookie_mismatch = (
@@ -1325,6 +1600,33 @@ HTML;
 
         $this->has_ajax_advanced_columns = !$has_error;
         return $this->has_ajax_advanced_columns;
+    }
+
+    /**
+     * Détecte si les colonnes de tracking curseur (migration 1.9.0) sont disponibles.
+     */
+    private function has_cursor_columns()
+    {
+        if ($this->has_cursor_columns !== null) {
+            return $this->has_cursor_columns;
+        }
+
+        $sql = 'SELECT cursor_track_points, cursor_track_duration_ms, cursor_track_path, cursor_click_points,
+                       cursor_device_class, cursor_viewport, cursor_total_distance, cursor_avg_speed,
+                       cursor_max_speed, cursor_direction_changes, cursor_linearity, cursor_click_count
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_cursor_columns = !$has_error;
+        return $this->has_cursor_columns;
     }
 
     /**
@@ -1482,7 +1784,17 @@ HTML;
     private function is_guest_clone_country_excluded($country_code)
     {
         $cc = strtoupper(trim((string)$country_code));
+        // Pays inconnu => mode observation (pas de strict) pour éviter les faux positifs.
+        if ($cc === '' || $cc === '-' || $cc === 'ZZ') {
+            return true;
+        }
         return ($cc === 'FR' || $cc === 'CO');
+    }
+
+    private function is_country_code_pending($country_code)
+    {
+        $cc = strtoupper(trim((string)$country_code));
+        return ($cc === '' || $cc === '-' || $cc === 'ZZ');
     }
 
     /**
@@ -1494,9 +1806,13 @@ HTML;
      * - diffusion multi-IP dans une fenêtre courte
      * - exclusion FR/CO
      */
-    private function detect_guest_fingerprint_clone_multi_ip($session_id, $user_agent, array $snapshot, $country_code)
+    private function detect_guest_fingerprint_clone_multi_ip($session_id, $user_agent, array $snapshot, $country_code, $allow_pending_country = false)
     {
-        if ($this->is_guest_clone_country_excluded($country_code)) {
+        $cc = strtoupper(trim((string)$country_code));
+        if ($cc === 'FR' || $cc === 'CO') {
+            return false;
+        }
+        if (!$allow_pending_country && $this->is_country_code_pending($cc)) {
             return false;
         }
 
@@ -1560,8 +1876,10 @@ HTML;
                 AND screen_res_ajax = \'' . $this->db->sql_escape($screen_res_ajax) . '\'
                 AND ajax_interact_mask = ' . (int)$interact_mask . '
                 AND ajax_scroll_events = ' . (int)$scroll_events . '
-                AND ajax_scroll_max_y = ' . (int)$scroll_max_y . "
-                AND UPPER(country_code) NOT IN ('FR','CO')";
+                AND ajax_scroll_max_y = ' . (int)$scroll_max_y;
+        if (!$allow_pending_country) {
+            $sql .= " AND UPPER(country_code) NOT IN ('FR','CO')";
+        }
 
         $this->db->sql_return_on_error(true);
         $result = $this->db->sql_query_limit($sql, 1);
@@ -1588,9 +1906,13 @@ HTML;
      * Détecte un cookie visiteur invité cloné sur plusieurs IPs en fenêtre courte.
      * Strict: exclut FR/CO + seuils élevés pour limiter les faux positifs.
      */
-    private function detect_guest_cookie_clone_multi_ip($visitor_cookie_hash, $country_code)
+    private function detect_guest_cookie_clone_multi_ip($visitor_cookie_hash, $country_code, $allow_pending_country = false)
     {
-        if ($this->is_guest_clone_country_excluded($country_code)) {
+        $cc = strtoupper(trim((string)$country_code));
+        if ($cc === 'FR' || $cc === 'CO') {
+            return false;
+        }
+        if (!$allow_pending_country && $this->is_country_code_pending($cc)) {
             return false;
         }
 
@@ -1615,8 +1937,10 @@ HTML;
                 WHERE visit_time >= ' . (int)$cutoff . '
                 AND user_id <= 1
                 AND is_first_visit = 1
-                AND visitor_cookie_hash = \'' . $this->db->sql_escape($hash) . '\'
-                AND UPPER(country_code) NOT IN (\'FR\',\'CO\')';
+                AND visitor_cookie_hash = \'' . $this->db->sql_escape($hash) . '\'';
+        if (!$allow_pending_country) {
+            $sql .= ' AND UPPER(country_code) NOT IN (\'FR\',\'CO\')';
+        }
 
         $this->db->sql_return_on_error(true);
         $result = $this->db->sql_query_limit($sql, 1);
@@ -1638,6 +1962,44 @@ HTML;
         $uniq_ips = (int)($row['unique_ips'] ?? 0);
         $uniq_sessions = (int)($row['unique_sessions'] ?? 0);
         return ($uniq_ips >= $min_unique_ips && $hits >= $min_hits && $uniq_sessions >= $min_hits);
+    }
+
+    /**
+     * Les signaux pays-dépendants ne doivent pas alimenter fail2ban tant que
+     * la géolocalisation IP n'est pas terminée par le cron async.
+     *
+     * @param string[] $signals
+     * @return string[]
+     */
+    private function filter_security_audit_signals_by_country(array $signals, $country_code)
+    {
+        if (empty($signals)) {
+            return [];
+        }
+
+        if (!$this->is_country_code_pending($country_code)) {
+            return $signals;
+        }
+
+        $country_bound = [
+            'guest_fp_clone_multi_ip' => true,
+            'guest_cookie_clone_multi_ip' => true,
+            'guest_cookie_ajax_fail' => true,
+        ];
+
+        $filtered = [];
+        foreach ($signals as $sig) {
+            $key = trim((string)$sig);
+            if ($key === '') {
+                continue;
+            }
+            if (isset($country_bound[$key])) {
+                continue;
+            }
+            $filtered[] = $key;
+        }
+
+        return array_values(array_unique($filtered));
     }
 
     /**
@@ -2038,7 +2400,7 @@ HTML;
         if ($geo && !empty($geo['hostname'])) {
             return $geo['hostname'];
         }
-        // Résolution DNS avec timeout 1s (gethostbyaddr natif peut bloquer 30s)
+        // Résolution DNS avec timeout court (gethostbyaddr natif peut bloquer 30s)
         $hostname = '';
         $rdns_raw = @shell_exec('timeout 0.25 getent hosts ' . escapeshellarg($ip) . ' 2>/dev/null');
         if ($rdns_raw) {
@@ -2200,7 +2562,7 @@ HTML;
     /**
      * Géolocalise une adresse IP via ip-api.com avec cache + DNS reverse
      */
-    private function geolocate_ip($ip)
+    private function geolocate_ip($ip, $allow_live_lookup = true)
     {
         $default = ['country_code' => '', 'country_name' => '', 'hostname' => ''];
 
@@ -2209,10 +2571,15 @@ HTML;
             return ['country_code' => 'LO', 'country_name' => 'Local', 'hostname' => 'localhost'];
         }
 
-        // Vérifier le cache d'abord
+        // Vérifier le cache (clé IP + fallback /16)
         $cached = $this->get_geo_cache($ip);
         if ($cached !== false) {
             return $cached;
+        }
+
+        // Mode async: pas d'appel réseau sur le thread web.
+        if (!$allow_live_lookup) {
+            return $default;
         }
 
         // DNS Reverse Lookup via shell avec timeout court pour éviter de bloquer les workers PHP
@@ -2227,13 +2594,13 @@ HTML;
             }
         }
 
-        // Appel API ip-api.com (gratuit, 45 req/min)
+        // Appel API ip-api.com (utilisé uniquement hors mode async)
         $url = 'http://ip-api.com/json/' . urlencode($ip) . '?fields=status,country,countryCode,city';
 
         $context = stream_context_create([
             'http' => [
-                // Timeout agressif: la géoloc ne doit jamais pénaliser l'affichage du forum.
-                'timeout' => 0.6,
+                // Timeout agressif: ne pas pénaliser l'affichage.
+                'timeout' => 1.2,
                 'ignore_errors' => true,
             ]
         ]);
@@ -2257,7 +2624,7 @@ HTML;
             }
         }
 
-        // Mettre en cache (expire après 30 jours)
+        // Mettre en cache (TTL configurable, défaut 45 jours)
         $this->set_geo_cache($ip, $result);
 
         return $result;
@@ -2284,15 +2651,33 @@ HTML;
      */
     private function get_geo_cache($ip)
     {
-        $sql = 'SELECT country_code, country_name, city, hostname FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
-                WHERE ip_address = \'' . $this->db->sql_escape($ip) . '\'
-                AND cached_time > ' . (time() - 30 * 86400);
+        $keys = $this->build_geo_cache_keys($ip);
+        if (empty($keys)) {
+            return false;
+        }
+
+        $escaped = [];
+        foreach ($keys as $key) {
+            $escaped[] = '\'' . $this->db->sql_escape($key) . '\'';
+        }
+
+        $sql = 'SELECT ip_address, country_code, country_name, city, hostname
+                FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
+                WHERE ip_address IN (' . implode(',', $escaped) . ')
+                AND cached_time > ' . (time() - $this->get_geo_cache_ttl_sec());
 
         $result = $this->db->sql_query($sql);
-        $row = $this->db->sql_fetchrow($result);
+        $rows = [];
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $rows[(string)$row['ip_address']] = $row;
+        }
         $this->db->sql_freeresult($result);
 
-        if ($row) {
+        foreach ($keys as $key) {
+            if (!isset($rows[$key])) {
+                continue;
+            }
+            $row = $rows[$key];
             return [
                 'country_code' => $row['country_code'],
                 'country_name' => $row['country_name'],
@@ -2309,23 +2694,78 @@ HTML;
      */
     private function set_geo_cache($ip, $data)
     {
-        // Supprimer l'ancienne entrée si elle existe
-        $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
-                WHERE ip_address = \'' . $this->db->sql_escape($ip) . '\'';
-        $this->db->sql_query($sql);
+        $keys = $this->build_geo_cache_keys($ip);
+        $keys = array_values(array_unique(array_filter($keys, function ($v) {
+            return trim((string)$v) !== '';
+        })));
 
-        // Insérer la nouvelle
-        $sql_ary = [
-            'ip_address'   => $ip,
-            'country_code' => $data['country_code'],
-            'country_name' => $data['country_name'],
-            'city'         => $data['city'] ?? '',
-            'hostname'     => $data['hostname'] ?? '',
-            'cached_time'  => time(),
-        ];
+        if (empty($keys)) {
+            return;
+        }
 
-        $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_geo_cache ' .
-               $this->db->sql_build_array('INSERT', $sql_ary);
-        $this->db->sql_query($sql);
+        foreach ($keys as $key) {
+            $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
+                    WHERE ip_address = \'' . $this->db->sql_escape($key) . '\'';
+            $this->db->sql_query($sql);
+
+            $sql_ary = [
+                'ip_address'   => $key,
+                'country_code' => substr((string)($data['country_code'] ?? ''), 0, 5),
+                'country_name' => substr((string)($data['country_name'] ?? ''), 0, 100),
+                'city'         => substr((string)($data['city'] ?? ''), 0, 100),
+                'hostname'     => substr((string)($data['hostname'] ?? ''), 0, 255),
+                'cached_time'  => time(),
+            ];
+
+            $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_geo_cache ' .
+                $this->db->sql_build_array('INSERT', $sql_ary);
+            $this->db->sql_query($sql);
+        }
+    }
+
+    private function get_geo_cache_ttl_sec()
+    {
+        $ttl_days = (int)($this->config['bastien59_stats_geo_cache_ttl_days'] ?? 45);
+        $ttl_days = max(1, min(365, $ttl_days));
+        return $ttl_days * 86400;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function build_geo_cache_keys($ip)
+    {
+        $keys = [];
+        $clean_ip = trim((string)$ip);
+        if ($clean_ip === '') {
+            return $keys;
+        }
+
+        // Priorité: IP exacte
+        $keys[] = $clean_ip;
+
+        // Fallback /16 pour IPv4: réduit massivement le nombre d'appels externes.
+        $subnet = $this->get_ipv4_subnet16_prefix($clean_ip);
+        if ($subnet !== '') {
+            $keys[] = 'v4:' . $subnet;
+        }
+
+        return $keys;
+    }
+
+    private function get_ipv4_subnet16_prefix($ip)
+    {
+        $clean_ip = trim((string)$ip);
+        if (!preg_match('/^(\d{1,3})\.(\d{1,3})\.\d{1,3}\.\d{1,3}$/', $clean_ip, $m)) {
+            return '';
+        }
+
+        $a = (int)$m[1];
+        $b = (int)$m[2];
+        if ($a < 0 || $a > 255 || $b < 0 || $b > 255) {
+            return '';
+        }
+
+        return $a . '.' . $b;
     }
 }

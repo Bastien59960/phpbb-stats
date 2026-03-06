@@ -30,3 +30,14 @@ services:
             - '%core.table_prefix%'
         tags:
             - { name: event.listener }
+
+    bastien59960.stats.cron.geo_async:
+        class: bastien59960\stats\cron\task\geo_async
+        arguments:
+            - '@dbal.conn'
+            - '@config'
+            - '%core.table_prefix%'
+        calls:
+            - [set_name, [cron.task.bastien59960.stats.geo_async]]
+        tags:
+            - { name: cron.task }
