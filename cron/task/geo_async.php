@@ -57,6 +57,12 @@ class geo_async extends \phpbb\cron\task\base
 
     public function is_runnable()
     {
+        // Ne jamais s'exécuter via le cron web : les sleeps/pauses API bloqueraient
+        // le cron_lock phpBB pendant 5-10 min et empêcheraient les autres crons
+        // (reactions, etc.) de tourner. Ce cron est géré par le crontab système.
+        if (!$this->is_cli_runtime()) {
+            return false;
+        }
         return !empty($this->config['bastien59_stats_enabled']);
     }
 

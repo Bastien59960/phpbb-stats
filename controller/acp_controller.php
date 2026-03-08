@@ -2128,9 +2128,9 @@ class acp_controller
         }
 
         $descriptions = [
-            'empty_ua'             => 'User-Agent vide (80 pts)',
+            'empty_ua'             => 'User-Agent vide/absent (80 pts)',
             'ua_pattern'           => 'Pattern de bot dans le UA : bot/, crawler, headlesschrome... (70 pts)',
-            'no_browser_signature' => 'Aucun navigateur reconnu dans le UA — renforcement uniquement (25 pts)',
+            'no_browser_signature' => 'User-Agent absent/inexploitable (25 pts)',
             'fake_chrome_build'    => 'Numéro de build Chrome impossible pour une version récente (55 pts)',
             'old_firefox'          => 'Firefox < 30, version de 2014 (55 pts)',
             'bad_gecko_date'       => 'Date Gecko invalide dans le UA (50 pts)',

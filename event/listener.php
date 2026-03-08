@@ -276,7 +276,7 @@ class listener implements EventSubscriberInterface
         if (!$is_legit_bot) {
             // Couche 2a : Détection par User-Agent (versions anciennes, patterns bots, anomalies)
             $ua_signals = $this->detect_bot($user_agent);
-            // no_browser_signature seul ne suffit pas — protège navigateurs exotiques (Lynx, w3m)
+            // no_browser_signature est réservé aux UA absents/inexploitables.
             $strong_ua_signals = array_filter($ua_signals, function($s) { return $s !== 'no_browser_signature'; });
 
             // Couche 2b : Détection comportementale (signaux impossibles à voir via Apache)
@@ -1188,12 +1188,14 @@ HTML;
 
 
 
-	$signals = [];
-        if (empty($user_agent)) {
-            return ['empty_ua'];
+        $signals = [];
+        $ua_raw = trim((string)$user_agent);
+        if ($ua_raw === '' || $ua_raw === '-') {
+            // Compat: conserver empty_ua (ban direct confirmé) + no_browser_signature.
+            return ['empty_ua', 'no_browser_signature'];
         }
 
-        $ua_lower = strtolower($user_agent);
+        $ua_lower = strtolower($ua_raw);
 
         // 1. On définit qui est "Ami"
         $is_friend = false;
@@ -1232,25 +1234,9 @@ HTML;
                 break;
             }
         }
-
-
-
-        // Pas de navigateur reconnu dans le UA
-        $browsers = ['mozilla', 'chrome', 'safari', 'firefox', 'edge', 'opera', 'msie', 'trident'];
-        $has_browser = false;
-        foreach ($browsers as $browser) {
-            if (strpos($ua_lower, $browser) !== false) {
-                $has_browser = true;
-                break;
-            }
-        }
-        if (!$has_browser) {
-            $signals[] = 'no_browser_signature';
-        }
-
         // Fake Chrome build numbers (botnet pattern)
         // Real Chrome 120+ builds are in the 6000-7999 range
-        if (preg_match('/Chrome\/(\d+)\.0\.(\d+)\.(\d+)/', $user_agent, $matches)) {
+        if (preg_match('/Chrome\/(\d+)\.0\.(\d+)\.(\d+)/', $ua_raw, $matches)) {
             $chrome_major = (int)$matches[1];
             $chrome_build = (int)$matches[2];
             $chrome_patch = (int)$matches[3];
@@ -1265,14 +1251,14 @@ HTML;
 
         // Firefox < seuil configurable (défaut: 30 = 2014)
         $firefox_threshold = (int)($this->config['bastien59_stats_firefox_threshold'] ?? 30);
-        if (preg_match('/Firefox\/(\d+)\./', $user_agent, $matches)) {
+        if (preg_match('/Firefox\/(\d+)\./', $ua_raw, $matches)) {
             if ((int)$matches[1] < $firefox_threshold) {
                 $signals[] = 'old_firefox';
             }
         }
 
         // Impossible Gecko dates
-        if (preg_match('/Gecko\/(\d{4})-/', $user_agent, $matches)) {
+        if (preg_match('/Gecko\/(\d{4})-/', $ua_raw, $matches)) {
             $gecko_year = (int)$matches[1];
             if ($gecko_year > 2030 || $gecko_year < 2000) {
                 $signals[] = 'bad_gecko_date';
@@ -1281,7 +1267,7 @@ HTML;
 
         // Chrome < seuil configurable = trop ancien (défaut: 130 = oct 2024)
         $chrome_threshold = (int)($this->config['bastien59_stats_chrome_threshold'] ?? 130);
-        if (preg_match('/Chrome\/(\d+)\./', $user_agent, $matches)) {
+        if (preg_match('/Chrome\/(\d+)\./', $ua_raw, $matches)) {
             $chromeVer = (int)$matches[1];
             if ($chromeVer < $chrome_threshold && $chromeVer > 0 && strpos($ua_lower, 'headlesschrome') === false) {
                 $signals[] = 'old_chrome_' . $chromeVer;
@@ -1289,7 +1275,7 @@ HTML;
         }
 
         // Safari build number fake (réel >= 400)
-        if (preg_match('/Safari\/(\d+)\./', $user_agent, $matches)) {
+        if (preg_match('/Safari\/(\d+)\./', $ua_raw, $matches)) {
             $safari_build = (int)$matches[1];
             if ($safari_build < 400 && $safari_build > 0) {
                 $signals[] = 'fake_safari_build';
@@ -1297,12 +1283,12 @@ HTML;
         }
 
         // Template literal non résolu dans le UA (ex: Firefox/{version})
-        if (strpos($user_agent, '{') !== false && strpos($user_agent, '}') !== false) {
+        if (strpos($ua_raw, '{') !== false && strpos($ua_raw, '}') !== false) {
             $signals[] = 'template_literal';
         }
 
         // iPhone OS 13_2_3 figé = botnet Tencent Cloud
-        if (strpos($user_agent, 'iPhone OS 13_2_3') !== false) {
+        if (strpos($ua_raw, 'iPhone OS 13_2_3') !== false) {
             $signals[] = 'iphone_13_2_3';
         }
 
