@@ -320,7 +320,7 @@ body.cursor-modal-open { overflow: hidden; }
                         <!-- IF SESSIONS.USERNAME != "Invite" --><span class="badge badge-member">{SESSIONS.USERNAME}</span><!-- ENDIF -->
                         <br>
                         <span class="ip">{SESSIONS.IP}</span>
-                        <!-- IF SESSIONS.COUNTRY --><br><span style="font-size:14px;">{SESSIONS.COUNTRY}</span><!-- ENDIF -->
+                        <!-- IF SESSIONS.COUNTRY --><br><span style="font-size:14px;">{SESSIONS.COUNTRY}<!-- IF SESSIONS.CITY -->, <span style="color:#555;">{SESSIONS.CITY}</span><!-- ENDIF --></span><!-- ENDIF -->
                         <!-- IF SESSIONS.HOSTNAME --><br><small style="color:#888; font-size:10px;" title="{SESSIONS.HOSTNAME}">{SESSIONS.HOSTNAME}</small><!-- ENDIF -->
                         <br>
                         <span class="time">{SESSIONS.START_TIME}</span>

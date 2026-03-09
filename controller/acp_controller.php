@@ -361,6 +361,74 @@ class acp_controller
         }
         $cookie_overview = $this->get_visitor_cookie_cross_ip_overview(array_values(array_unique(array_values($session_cookie_hashes))), 86400);
 
+        // Requête 3 : Villes depuis le cache de géolocalisation (lookup par sous-réseau)
+        $city_by_subnet = [];
+        {
+            $ipv4_prefix = max(8, min(32, (int)($this->config['bastien59_stats_geo_ipv4_prefix_len'] ?? 24)));
+            $ipv6_prefix = max(32, min(64, (int)($this->config['bastien59_stats_geo_ipv6_prefix_len'] ?? 48)));
+            $subnet_keys = [];
+            $ip_to_subnet = []; // IP → cache key (pour le lookup inverse)
+            foreach ($sessions as $sess_row) {
+                $ip = trim((string)($sess_row['user_ip'] ?? ''));
+                if ($ip === '' || isset($ip_to_subnet[$ip])) {
+                    continue;
+                }
+                if (strpos($ip, ':') === false) {
+                    // IPv4 : x.x.x.0/prefix
+                    $parts = explode('.', $ip);
+                    if (count($parts) === 4) {
+                        $host_bits = 32 - $ipv4_prefix;
+                        $mask = $host_bits > 0 ? ~((1 << $host_bits) - 1) & 0xFFFFFFFF : 0xFFFFFFFF;
+                        $int_ip = ((int)$parts[0] << 24) | ((int)$parts[1] << 16) | ((int)$parts[2] << 8) | (int)$parts[3];
+                        $net_int = $int_ip & $mask;
+                        $net_str = long2ip($net_int);
+                        $cache_key = 'v4:' . $net_str . '/' . $ipv4_prefix;
+                        $ip_to_subnet[$ip] = $cache_key;
+                        $subnet_keys[$cache_key] = true;
+                    }
+                } else {
+                    // IPv6 : masquage binaire sur $ipv6_prefix bits
+                    $bin = @inet_pton($ip);
+                    if ($bin !== false && strlen($bin) === 16) {
+                        $masked = '';
+                        for ($byte = 0; $byte < 16; $byte++) {
+                            $bits_in_byte = max(0, min(8, $ipv6_prefix - $byte * 8));
+                            if ($bits_in_byte >= 8) {
+                                $masked .= $bin[$byte];
+                            } elseif ($bits_in_byte <= 0) {
+                                $masked .= "\x00";
+                            } else {
+                                $masked .= chr(ord($bin[$byte]) & (0xFF << (8 - $bits_in_byte)) & 0xFF);
+                            }
+                        }
+                        $net_str = @inet_ntop($masked);
+                        if ($net_str !== false) {
+                            $cache_key = 'v6:' . $net_str . '/' . $ipv6_prefix;
+                            $ip_to_subnet[$ip] = $cache_key;
+                            $subnet_keys[$cache_key] = true;
+                        }
+                    }
+                }
+            }
+            if (!empty($subnet_keys)) {
+                $escaped_keys = array_map(function ($k) { return '\'' . $this->db->sql_escape($k) . '\''; }, array_keys($subnet_keys));
+                $sql_city = 'SELECT ip_address, city FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
+                              WHERE ip_address IN (' . implode(',', $escaped_keys) . ') AND city <> \'\'';
+                $res_city = $this->db->sql_query($sql_city);
+                while ($city_row = $this->db->sql_fetchrow($res_city)) {
+                    $city_by_subnet[$city_row['ip_address']] = $city_row['city'];
+                }
+                $this->db->sql_freeresult($res_city);
+            }
+            // Construire le map final IP → ville
+            $city_by_ip = [];
+            foreach ($ip_to_subnet as $ip => $key) {
+                if (isset($city_by_subnet[$key])) {
+                    $city_by_ip[$ip] = $city_by_subnet[$key];
+                }
+            }
+        }
+
         // Assigner les sessions au template
         foreach ($sessions as $row) {
             $session_id = $row['session_id'];
@@ -382,6 +450,9 @@ class acp_controller
                 $flag = $this->country_code_to_flag($country_code_value);
                 $country_display = $flag . ' ' . htmlspecialchars($country_name_value !== '' ? $country_name_value : $country_code_value, ENT_COMPAT, 'UTF-8');
             }
+
+            // Ville depuis le cache géoloc (lookup par sous-réseau, construit en pré-query)
+            $city_value = trim((string)($city_by_ip[$row['user_ip'] ?? ''] ?? ''));
 
             // Hostname depuis le cache (pas de DNS lookup temps réel)
             $hostname = trim((string)($row['session_hostname'] ?? ''));
@@ -823,7 +894,8 @@ class acp_controller
                 'FORWARD_DNS_STATUS'=> $forward_dns_status,
                 'FORWARD_DNS_IPS'   => htmlspecialchars($forward_dns_ips, ENT_COMPAT, 'UTF-8'),
                 'COUNTRY'           => $country_display,
-                'COUNTRY_CODE'  => htmlspecialchars($country_code_value, ENT_COMPAT, 'UTF-8'),
+                'COUNTRY_CODE'      => htmlspecialchars($country_code_value, ENT_COMPAT, 'UTF-8'),
+                'CITY'              => htmlspecialchars($city_value, ENT_COMPAT, 'UTF-8'),
                 'OS'            => htmlspecialchars($row['user_os'], ENT_COMPAT, 'UTF-8'),
                 'DEVICE'        => htmlspecialchars($row['user_device'], ENT_COMPAT, 'UTF-8'),
                 'RES'           => htmlspecialchars($res_display, ENT_COMPAT, 'UTF-8'),
