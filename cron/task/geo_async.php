@@ -14,6 +14,8 @@ class geo_async extends \phpbb\cron\task\base
     const GEO_API_LIMIT_PER_MIN = 45;
     /** safety target to keep margin below hard limit */
     const GEO_API_SAFE_PER_MIN = 40;
+    /** Durée max d'un run (secondes) — libère le cron_lock avant la limite watchdog de 300s */
+    const MAX_RUNTIME_SECONDS = 240;
 
     /** @var \phpbb\db\driver\driver_interface */
     protected $db;
@@ -47,6 +49,9 @@ class geo_async extends \phpbb\cron\task\base
 
     /** @var int|null */
     protected $geo_ipv4_prefix_len = null;
+
+    /** @var int|null */
+    protected $geo_ipv6_prefix_len = null;
 
     public function __construct(\phpbb\db\driver\driver_interface $db, \phpbb\config\config $config, $table_prefix)
     {
@@ -114,7 +119,16 @@ class geo_async extends \phpbb\cron\task\base
             ));
         }
 
+        $deadline = $start_ts + self::MAX_RUNTIME_SECONDS;
+
         while ($batch_index < $max_loops) {
+            if (microtime(true) >= $deadline) {
+                if ($this->is_cli_runtime()) {
+                    $this->cli_log(sprintf('[geo_async] Arret limite temps: %.0fs >= %ds.', microtime(true) - $start_ts, self::MAX_RUNTIME_SECONDS));
+                }
+                break;
+            }
+
             $pending_total_all = $this->get_pending_ip_count($ttl_days);
             if ($pending_total_all <= 0) {
                 break;
@@ -393,7 +407,7 @@ class geo_async extends \phpbb\cron\task\base
 
         $now = time();
         $ttl_sec = max(3600, (int)$ttl_days * 86400);
-        $sql = 'SELECT ip_address, country_code, country_name, city, hostname
+        $sql = 'SELECT ip_address, country_code, country_name, city
                 FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
                 WHERE ip_address IN (' . implode(',', $escaped) . ')
                 AND cached_time > ' . (int)($now - $ttl_sec) . '
@@ -415,85 +429,40 @@ class geo_async extends \phpbb\cron\task\base
                 'country_code' => (string)($r['country_code'] ?? ''),
                 'country_name' => (string)($r['country_name'] ?? ''),
                 'city' => (string)($r['city'] ?? ''),
-                'hostname' => (string)($r['hostname'] ?? ''),
                 '__cache_key' => (string)$key,
             ];
-        }
-
-        // Fallback IPv4 paramétrable (ACP): compromis coût API / précision géoloc.
-        $subnet_key = $this->get_ipv4_subnet_key($ip);
-        if ($subnet_key !== '') {
-            $geo = $this->get_geo_cache_from_subnet($subnet_key, $ttl_sec);
-            if ($geo !== false) {
-                $this->set_geo_cache($ip, $geo);
-                $geo['__cache_key'] = 'v4:' . $subnet_key;
-                return $geo;
-            }
         }
 
         return false;
     }
 
-    private function get_geo_cache_from_subnet($subnet_key, $ttl_sec)
-    {
-        $subnet_key = trim((string)$subnet_key);
-        if ($subnet_key === '') {
-            return false;
-        }
-
-        $now = time();
-        $sql = 'SELECT ip_address, country_code, country_name, city, hostname
-                FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
-                WHERE cached_time > ' . (int)($now - max(3600, (int)$ttl_sec)) . '
-                AND country_code <> \'\'
-                AND ip_address = \'' . $this->db->sql_escape('v4:' . $subnet_key) . '\'
-                ORDER BY cached_time DESC';
-        $result = $this->db->sql_query_limit($sql, 1);
-        $row = $this->db->sql_fetchrow($result);
-        $this->db->sql_freeresult($result);
-        if (!$row) {
-            return false;
-        }
-
-        return [
-            'country_code' => (string)($row['country_code'] ?? ''),
-            'country_name' => (string)($row['country_name'] ?? ''),
-            'city' => (string)($row['city'] ?? ''),
-            'hostname' => (string)($row['hostname'] ?? ''),
-            '__cache_key' => (string)($row['ip_address'] ?? ''),
-        ];
-    }
-
     private function set_geo_cache($ip, array $geo)
     {
         $keys = $this->build_geo_cache_keys($ip);
-        $keys = array_values(array_unique(array_filter($keys, function ($v) {
-            return trim((string)$v) !== '';
-        })));
-
         if (empty($keys)) {
             return;
         }
 
+        // Toujours une seule clé (sous-réseau IPv4 ou IPv6)
+        $key = $keys[0];
         $now = time();
-        foreach ($keys as $key) {
-            $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
-                    WHERE ip_address = \'' . $this->db->sql_escape($key) . '\'';
-            $this->db->sql_query($sql);
 
-            $sql_ary = [
-                'ip_address' => $key,
-                'country_code' => substr((string)($geo['country_code'] ?? ''), 0, 5),
-                'country_name' => substr((string)($geo['country_name'] ?? ''), 0, 100),
-                'city' => substr((string)($geo['city'] ?? ''), 0, 100),
-                'hostname' => substr((string)($geo['hostname'] ?? ''), 0, 255),
-                'cached_time' => $now,
-            ];
+        $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
+                WHERE ip_address = \'' . $this->db->sql_escape($key) . '\'';
+        $this->db->sql_query($sql);
 
-            $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_geo_cache '
-                . $this->db->sql_build_array('INSERT', $sql_ary);
-            $this->db->sql_query($sql);
-        }
+        $sql_ary = [
+            'ip_address'   => $key,
+            'country_code' => substr((string)($geo['country_code'] ?? ''), 0, 5),
+            'country_name' => substr((string)($geo['country_name'] ?? ''), 0, 100),
+            'city'         => substr((string)($geo['city'] ?? ''), 0, 100),
+            'hostname'     => '',
+            'cached_time'  => $now,
+        ];
+
+        $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_geo_cache '
+            . $this->db->sql_build_array('INSERT', $sql_ary);
+        $this->db->sql_query($sql);
     }
 
     private function backfill_stats_for_ip($ip, array $geo, $ttl_days)
@@ -1118,19 +1087,24 @@ class geo_async extends \phpbb\cron\task\base
      */
     private function build_geo_cache_keys($ip)
     {
-        $keys = [];
         $ip = trim((string)$ip);
         if ($ip === '') {
-            return $keys;
+            return [];
         }
 
-        $keys[] = $ip;
-        $subnet_key = $this->get_ipv4_subnet_key($ip);
-        if ($subnet_key !== '') {
-            $keys[] = 'v4:' . $subnet_key;
+        // IPv4 : clé sous-réseau uniquement (ex: v4:1.2.3.0/24)
+        $v4_key = $this->get_ipv4_subnet_key($ip);
+        if ($v4_key !== '') {
+            return ['v4:' . $v4_key];
         }
 
-        return $keys;
+        // IPv6 : clé sous-réseau uniquement (ex: v6:2001:db8::/48)
+        $v6_key = $this->get_ipv6_subnet_key($ip);
+        if ($v6_key !== '') {
+            return ['v6:' . $v6_key];
+        }
+
+        return [];
     }
 
     private function get_ipv4_subnet_key($ip)
@@ -1218,6 +1192,59 @@ class geo_async extends \phpbb\cron\task\base
         $bits = max(16, min(32, $bits));
         $this->geo_ipv4_prefix_len = $bits;
         return (int)$this->geo_ipv4_prefix_len;
+    }
+
+    /**
+     * Calcule la clé de sous-réseau IPv6 (ex: "2001:db8::/48").
+     * La précision /48 correspond approximativement à un site/quartier urbain.
+     */
+    private function get_ipv6_subnet_key($ip)
+    {
+        $ip = trim((string)$ip);
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) === false) {
+            return '';
+        }
+
+        $prefix_len = $this->get_geo_ipv6_prefix_len();
+        $bin = @inet_pton($ip);
+        if ($bin === false || strlen($bin) !== 16) {
+            return '';
+        }
+
+        // Masquer les bits hors préfixe
+        $masked = '';
+        for ($i = 0; $i < 16; $i++) {
+            $byte_start = $i * 8;
+            if ($byte_start >= $prefix_len) {
+                $masked .= chr(0);
+            } elseif ($byte_start + 8 <= $prefix_len) {
+                $masked .= $bin[$i];
+            } else {
+                $bits = $prefix_len - $byte_start;
+                $mask = 0xFF & (0xFF << (8 - $bits));
+                $masked .= chr(ord($bin[$i]) & $mask);
+            }
+        }
+
+        $network = @inet_ntop($masked);
+        if ($network === false) {
+            return '';
+        }
+
+        return $network . '/' . $prefix_len;
+    }
+
+    private function get_geo_ipv6_prefix_len()
+    {
+        if ($this->geo_ipv6_prefix_len !== null) {
+            return (int)$this->geo_ipv6_prefix_len;
+        }
+
+        // /48 = précision quartier/site (standard MaxMind, RIPE). Min /32, max /64.
+        $bits = (int)($this->config['bastien59_stats_geo_ipv6_prefix_len'] ?? 48);
+        $bits = max(32, min(64, $bits));
+        $this->geo_ipv6_prefix_len = $bits;
+        return (int)$this->geo_ipv6_prefix_len;
     }
 
     private function is_local_ip($ip)

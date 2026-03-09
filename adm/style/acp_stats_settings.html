@@ -35,10 +35,14 @@
 	</fieldset>
 
 	<fieldset>
-		<legend>Geolocalisation IPv4</legend>
+		<legend>Geolocalisation - Cache sous-reseau</legend>
 		<dl>
-			<dt><label for="stats_geo_ipv4_prefix_len">Prefixe cache IPv4 :</label><br /><span>Taille du sous-reseau utilise pour la cle de cache geoloc IPv4. Plus petit = plus precis, plus de lookups live.<br />Exemples: /16 = 65 536 IP (5.34.0.0 a 5.34.255.255), /24 = 256 IP (5.34.129.0 a 5.34.129.255), /28 = 16 IP (5.34.129.176 a 5.34.129.191).</span></dt>
+			<dt><label for="stats_geo_ipv4_prefix_len">Prefixe cache IPv4 :</label><br /><span>Granularite du sous-reseau pour la cle de cache IPv4. /24 = quartier (~256 IP), /16 = ville (~65 536 IP).<br />Exemples : /24 = 1.2.3.0/24, /16 = 1.2.0.0/16.</span></dt>
 			<dd>/<input type="number" id="stats_geo_ipv4_prefix_len" name="stats_geo_ipv4_prefix_len" value="{STATS_GEO_IPV4_PREFIX_LEN}" min="16" max="32" style="width:80px;" /></dd>
+		</dl>
+		<dl>
+			<dt><label for="stats_geo_ipv6_prefix_len">Prefixe cache IPv6 :</label><br /><span>Granularite du sous-reseau pour la cle de cache IPv6. /48 = site/quartier (~65 536 /64), /56 = residence (~256 /64), /32 = operateur.<br />Recommande : /48 (equivalent au /24 IPv4 pour la precision geoloc).</span></dt>
+			<dd>/<input type="number" id="stats_geo_ipv6_prefix_len" name="stats_geo_ipv6_prefix_len" value="{STATS_GEO_IPV6_PREFIX_LEN}" min="32" max="64" style="width:80px;" /></dd>
 		</dl>
 	</fieldset>
 

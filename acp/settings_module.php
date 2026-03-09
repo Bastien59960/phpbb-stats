@@ -73,6 +73,11 @@ class settings_module
             $geo_ipv4_prefix_len = max(16, min(32, (int)$geo_ipv4_prefix_len));
             $config->set('bastien59_stats_geo_ipv4_prefix_len', $geo_ipv4_prefix_len);
 
+            // Préfixe IPv6 du cache géoloc (/32 à /64, défaut /48)
+            $geo_ipv6_prefix_len = $request->variable('stats_geo_ipv6_prefix_len', 48);
+            $geo_ipv6_prefix_len = max(32, min(64, (int)$geo_ipv6_prefix_len));
+            $config->set('bastien59_stats_geo_ipv6_prefix_len', $geo_ipv6_prefix_len);
+
             trigger_error($user->lang('CONFIG_UPDATED') . adm_back_link($this->u_action));
         }
 
@@ -86,6 +91,7 @@ class settings_module
             'STATS_FIREFOX_THRESHOLD'=> $config['bastien59_stats_firefox_threshold'] ?? 30,
             'STATS_NOSCREENRES_PAGES'=> $config['bastien59_stats_noscreenres_pages'] ?? 3,
             'STATS_GEO_IPV4_PREFIX_LEN' => $config['bastien59_stats_geo_ipv4_prefix_len'] ?? 24,
+            'STATS_GEO_IPV6_PREFIX_LEN' => $config['bastien59_stats_geo_ipv6_prefix_len'] ?? 48,
             'STATS_AUDIT_LOG_PATH'   => $config['bastien59_stats_audit_log_path'] ?? '/var/log/security_audit.log',
             'STATS_AUDIT_LOG_STATUS' => $this->check_log_status($config['bastien59_stats_audit_log_path'] ?? '/var/log/security_audit.log'),
         ]);
