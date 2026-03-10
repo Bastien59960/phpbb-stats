@@ -134,6 +134,12 @@ php /var/www/forum/bin/phpbbcli.php cron:run
 php /var/www/forum/bin/phpbbcli.php cron:run cron.task.bastien59960.stats.geo_async
 ```
 
+Entrée crontab système recommandée (production):
+
+```cron
+*/5 * * * * cd /var/www/forum && php bin/phpbbcli.php cron:run cron.task.bastien59960.stats.geo_async >> /var/log/phpbb_geo_async.log 2>&1
+```
+
 ### Audit cross-IP (dry-run)
 
 ```bash
