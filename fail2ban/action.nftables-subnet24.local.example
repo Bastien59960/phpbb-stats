@@ -1,0 +1,21 @@
+# Add this file as /etc/fail2ban/action.d/nftables-subnet24.conf
+# Custom action: takes triggering IPv4, derives x.x.x.0/24 and bans that subnet.
+# Creates/uses a dedicated nftables set and injects a drop rule in f2b-chain.
+
+[Definition]
+
+actionstart = /usr/sbin/nft list table <family> <table> >/dev/null 2>&1 || /usr/sbin/nft add table <family> <table>
+              /usr/sbin/nft list chain <family> <table> <chain> >/dev/null 2>&1 || /usr/sbin/nft add chain <family> <table> <chain> "{ type filter hook input priority <priority> ; }"
+              /usr/sbin/nft list set <family> <table> <set_name> >/dev/null 2>&1 || /usr/sbin/nft add set <family> <table> <set_name> "{ type ipv4_addr; flags interval,timeout; }"
+              /usr/sbin/nft list chain <family> <table> <chain> 2>/dev/null | /bin/grep -q "@<set_name>" || /usr/sbin/nft add rule <family> <table> <chain> ip saddr @<set_name> drop
+actionstop =
+actioncheck = /usr/sbin/nft list set <family> <table> <set_name> >/dev/null 2>&1
+actionban = subnet="$(echo "<ip>" | /usr/bin/awk -F. 'NF==4 { print $1 "." $2 "." $3 ".0/24" }')"; [ -n "$subnet" ] && /usr/sbin/nft add element <family> <table> <set_name> "{ $subnet timeout <bantime>s }"
+actionunban = subnet="$(echo "<ip>" | /usr/bin/awk -F. 'NF==4 { print $1 "." $2 "." $3 ".0/24" }')"; [ -n "$subnet" ] && /usr/sbin/nft delete element <family> <table> <set_name> "{ $subnet }" 2>/dev/null || true
+
+[Init]
+family = inet
+table = f2b-table
+chain = f2b-chain
+priority = -1
+set_name = addr-set-subnet24

@@ -240,15 +240,22 @@ class acp_controller
         $interaction_condition = !empty($interaction_predicates)
             ? '(' . implode(' OR ', $interaction_predicates) . ')'
             : '0 = 1';
+        $member_session_max_seconds = $this->get_member_session_max_seconds();
+        $session_bucket_expr = $this->build_session_bucket_sql_expr(
+            'session_id',
+            'user_id',
+            'visit_time',
+            $member_session_max_seconds
+        );
 
         // Requête 1 : sessions uniques triées par dernière activité.
-        // Sélectionne une seule ligne "landing" par session_id (fallback robuste si plusieurs
+        // Sélectionne une seule ligne "landing" par session regroupée (fallback robuste si plusieurs
         // is_first_visit=1 existent pour la même clé session).
-        $sql = 'SELECT s.*, sess.page_count, sess.last_visit_time, sess.has_interaction, sess.last_interaction_time,
+        $sql = 'SELECT s.*, sess.session_bucket, sess.page_count, sess.last_visit_time, sess.has_interaction, sess.last_interaction_time,
                        sess.session_country_code, sess.session_country_name, sess.session_hostname
                 FROM ' . $this->table_prefix . 'bastien59_stats s
                 INNER JOIN (
-                    SELECT session_id,
+                    SELECT ' . $session_bucket_expr . ' AS session_bucket,
                            COUNT(*) AS page_count,
                            MAX(visit_time) AS last_visit_time,
                            COALESCE(
@@ -281,9 +288,8 @@ class acp_controller
                            MAX(CASE WHEN ' . $interaction_condition . ' THEN 1 ELSE 0 END) AS has_interaction,
                            MAX(CASE WHEN ' . $interaction_condition . ' THEN visit_time ELSE 0 END) AS last_interaction_time
                     FROM ' . $this->table_prefix . 'bastien59_stats
-                    GROUP BY session_id
-                ) sess ON sess.session_id = s.session_id
-                       AND s.log_id = sess.landing_log_id
+                    GROUP BY ' . $session_bucket_expr . '
+                ) sess ON s.log_id = sess.landing_log_id
                 WHERE sess.last_visit_time > ' . (int)$start_time . $bot_filter . '
                 ORDER BY sess.has_interaction DESC,
                          CASE
@@ -295,15 +301,25 @@ class acp_controller
         $result = $this->db->sql_query_limit($sql, $limit);
 
         $sessions = [];
-        $session_ids = [];
+        $session_ids_map = [];
         while ($row = $this->db->sql_fetchrow($result)) {
             $sessions[] = $row;
-            $session_ids[] = '\'' . $this->db->sql_escape($row['session_id']) . '\'';
+            $session_id = (string)($row['session_id'] ?? '');
+            if ($session_id !== '') {
+                $session_ids_map[$session_id] = true;
+            }
         }
         $this->db->sql_freeresult($result);
 
         if (empty($sessions)) {
             return;
+        }
+        if (empty($session_ids_map)) {
+            return;
+        }
+        $session_ids = [];
+        foreach (array_keys($session_ids_map) as $session_id) {
+            $session_ids[] = '\'' . $this->db->sql_escape($session_id) . '\'';
         }
 
         // Requête 2 : Récupérer TOUTES les pages de TOUTES les sessions en une requête
@@ -325,7 +341,7 @@ class acp_controller
                cursor_device_class, cursor_viewport, cursor_total_distance, cursor_avg_speed,
                cursor_max_speed, cursor_direction_changes, cursor_linearity, cursor_click_count'
             : '';
-        $sql_pages = 'SELECT log_id, session_id, page_url, page_title, visit_time, duration, referer, screen_res'
+        $sql_pages = 'SELECT log_id, session_id, user_id, page_url, page_title, visit_time, duration, referer, screen_res'
                     . $extra_ajax_columns
                     . $extra_cookie_columns
                     . $extra_cookie_debug_columns
@@ -335,26 +351,39 @@ class acp_controller
                       ORDER BY visit_time ASC';
         $result_pages = $this->db->sql_query($sql_pages);
         while ($page = $this->db->sql_fetchrow($result_pages)) {
-            $pages_by_session[$page['session_id']][] = $page;
+            $page_session_key = $this->build_session_bucket_key(
+                (string)($page['session_id'] ?? ''),
+                (int)($page['user_id'] ?? 0),
+                (int)($page['visit_time'] ?? 0),
+                $member_session_max_seconds
+            );
+            if ($page_session_key === '') {
+                continue;
+            }
+            $pages_by_session[$page_session_key][] = $page;
         }
         $this->db->sql_freeresult($result_pages);
 
         // Prépare une vue globale multi-IP par hash cookie visiteur (fenêtre 24h).
         $session_cookie_hashes = [];
         foreach ($sessions as $row) {
+            $session_key = (string)($row['session_bucket'] ?? ($row['session_id'] ?? ''));
+            if ($session_key === '') {
+                continue;
+            }
             $hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
             if ($this->is_valid_visitor_cookie_hash($hash)) {
-                $session_cookie_hashes[(string)$row['session_id']] = $hash;
+                $session_cookie_hashes[$session_key] = $hash;
             }
         }
-        foreach ($pages_by_session as $sid => $rows) {
-            if (isset($session_cookie_hashes[(string)$sid])) {
+        foreach ($pages_by_session as $session_key => $rows) {
+            if (isset($session_cookie_hashes[(string)$session_key])) {
                 continue;
             }
             foreach ($rows as $page_row) {
                 $hash = strtolower(trim((string)($page_row['visitor_cookie_hash'] ?? '')));
                 if ($this->is_valid_visitor_cookie_hash($hash)) {
-                    $session_cookie_hashes[(string)$sid] = $hash;
+                    $session_cookie_hashes[(string)$session_key] = $hash;
                     break;
                 }
             }
@@ -431,7 +460,8 @@ class acp_controller
 
         // Assigner les sessions au template
         foreach ($sessions as $row) {
-            $session_id = $row['session_id'];
+            $session_id = (string)($row['session_id'] ?? '');
+            $session_key = (string)($row['session_bucket'] ?? $session_id);
             $bot_source = $row['bot_source'] ?? '';
             $is_phpbb_bot = ($bot_source === 'phpbb') ? 1 : 0;
 
@@ -505,7 +535,7 @@ class acp_controller
                 $forward_dns_status = '<span style="color:#999;">N/A (pas de Reverse DNS)</span>';
             }
 
-            $pages = $pages_by_session[$session_id] ?? [];
+            $pages = $pages_by_session[$session_key] ?? [];
             $landing_log_id = (int)($row['log_id'] ?? 0);
             if ($landing_log_id > 0 && count($pages) > 1) {
                 $landing_page = null;
@@ -622,8 +652,8 @@ class acp_controller
 
             }
 
-            if (isset($session_cookie_hashes[(string)$session_id]) && $this->is_valid_visitor_cookie_hash($session_cookie_hashes[(string)$session_id])) {
-                $visitor_cookie_hash = $session_cookie_hashes[(string)$session_id];
+            if (isset($session_cookie_hashes[(string)$session_key]) && $this->is_valid_visitor_cookie_hash($session_cookie_hashes[(string)$session_key])) {
+                $visitor_cookie_hash = $session_cookie_hashes[(string)$session_key];
             }
 
             $res_cookie_px = $this->format_resolution_px($res_cookie);
@@ -1080,6 +1110,46 @@ class acp_controller
         $this->db->sql_freeresult($result);
 
         return $username ?: sprintf($this->user->lang('STATS_USER_FALLBACK'), $user_id);
+    }
+
+    /**
+     * Fenetre max de regroupement des sessions membres (en secondes).
+     */
+    private function get_member_session_max_seconds()
+    {
+        $hours = (int)($this->config['bastien59_stats_member_session_max_hours'] ?? 24);
+        $hours = max(1, min(168, $hours));
+        return $hours * 3600;
+    }
+
+    /**
+     * Expression SQL de clé de regroupement de session.
+     */
+    private function build_session_bucket_sql_expr($session_id_col, $user_id_col, $visit_time_col, $member_session_max_seconds)
+    {
+        $max_seconds = max(3600, (int)$member_session_max_seconds);
+        return 'CASE WHEN ' . $user_id_col . ' > 1
+                THEN CONCAT(' . $session_id_col . ', \':\', FLOOR(' . $visit_time_col . ' / ' . $max_seconds . '))
+                ELSE ' . $session_id_col . '
+            END';
+    }
+
+    /**
+     * Clé de regroupement côté PHP (doit refléter build_session_bucket_sql_expr()).
+     */
+    private function build_session_bucket_key($session_id, $user_id, $visit_time, $member_session_max_seconds)
+    {
+        $sid = trim((string)$session_id);
+        if ($sid === '') {
+            return '';
+        }
+        if ((int)$user_id <= 1) {
+            return $sid;
+        }
+
+        $max_seconds = max(3600, (int)$member_session_max_seconds);
+        $bucket = (int) floor(max(0, (int)$visit_time) / $max_seconds);
+        return $sid . ':' . $bucket;
     }
 
     /**
@@ -1722,6 +1792,7 @@ class acp_controller
             'guest_cookie_clone_multi_ip_shadow' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_CLONE_SHADOW'),
             'guest_cookie_ajax_fail' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_AJAX_FAIL'),
             'guest_cookie_ajax_fail_shadow' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_AJAX_FAIL_SHADOW'),
+            'cn_no_interaction_5m' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_CN_NO_INTERACTION_5M'),
             'cursor_no_movement' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_CURSOR_NO_MOVE'),
             'cursor_no_clicks' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_CURSOR_NO_CLICKS'),
             'cursor_speed_outlier' => $this->user->lang('STATS_BEHAVIOR_SIGNAL_CURSOR_SPEED'),
@@ -2226,6 +2297,7 @@ class acp_controller
             'guest_cookie_clone_multi_ip_shadow' => 'Cookie visiteur invité réutilisé multi-IP avec pays non encore résolu — signal différé par le cron (observation)',
             'guest_cookie_ajax_fail' => 'Cookie visiteur signé non relu (ou incohérent) lors de l\'AJAX malgré JS actif (hors FR/CO) (strict)',
             'guest_cookie_ajax_fail_shadow' => 'Cookie visiteur signé non relu (ou incohérent) en AJAX — mode observation FR/CO ou géolocalisation en attente (non signalé fail2ban)',
+            'cn_no_interaction_5m' => 'Session invitée CN sans interaction réelle après 5 minutes (signal différé sans cron)',
             'cursor_no_movement' => 'Aucun déplacement curseur/touch significatif pendant la fenêtre de capture (observation)',
             'cursor_no_clicks' => 'Trajet détecté sans clic pendant la fenêtre de capture (observation)',
             'cursor_speed_outlier' => 'Trajet très rapide et peu varié (outlier curseur)',

@@ -1,0 +1,15 @@
+# Add this snippet to /etc/fail2ban/jail.d/phpbb-cn-no-interaction.local
+# Dedicated jail:
+# - signal cn_no_interaction_5m
+# - bans the full /24 subnet of the triggering IPv4 for 3 days
+
+[phpbb-cn-no-interaction]
+enabled = true
+port = http,https
+filter = phpbb-cn-no-interaction
+backend = auto
+logpath = /var/log/security_audit.log
+maxretry = 1
+findtime = 21600
+bantime = 259200
+action = nftables-subnet24[name=phpbb-cn-no-interaction,set_name=addr-set-phpbb-cn-no-interaction-subnet24]

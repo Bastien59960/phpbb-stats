@@ -42,9 +42,18 @@ class settings_module
             $session_timeout = max(5, min(120, (int)$session_timeout));
             $config->set('bastien59_stats_session_timeout', $session_timeout * 60); // Stocké en secondes
 
+            // Duree max de regroupement des sessions membres (1-168 heures)
+            $member_session_max_hours = $request->variable('stats_member_session_max_hours', 24);
+            $member_session_max_hours = max(1, min(168, (int)$member_session_max_hours));
+            $config->set('bastien59_stats_member_session_max_hours', $member_session_max_hours);
+
             // Extension activée
             $enabled = $request->variable('stats_enabled', 1);
             $config->set('bastien59_stats_enabled', $enabled ? 1 : 0);
+
+            // Signal différé CN: pas d'interaction après 5 minutes
+            $cn_no_interaction_enabled = $request->variable('stats_cn_no_interaction_enabled', 1);
+            $config->set('bastien59_stats_cn_no_interaction_enabled', $cn_no_interaction_enabled ? 1 : 0);
 
             // Chemin du log de sécurité
             $audit_log_path = $request->variable('stats_audit_log_path', '/var/log/security_audit.log');
@@ -84,9 +93,17 @@ class settings_module
         $template->assign_vars([
             'U_ACTION'               => $this->u_action,
             'STATS_ENABLED'          => $config['bastien59_stats_enabled'] ?? 1,
+            'STATS_CN_NO_INTERACTION_ENABLED' => isset($config['bastien59_stats_cn_no_interaction_enabled'])
+                ? (int)$config['bastien59_stats_cn_no_interaction_enabled']
+                : 1,
+            'STATS_CN_NO_INTERACTION_COUNTRIES' => 'CN',
             'STATS_RETENTION_DAYS'   => $config['bastien59_stats_retention'] ?? 30,
             'STATS_RETENTION_BOTS'   => $config['bastien59_stats_retention_bots'] ?? 5,
             'STATS_SESSION_TIMEOUT'  => (int)(($config['bastien59_stats_session_timeout'] ?? 900) / 60),
+            'STATS_MEMBER_SESSION_MAX_HOURS' => max(
+                1,
+                min(168, (int)($config['bastien59_stats_member_session_max_hours'] ?? 24))
+            ),
             'STATS_CHROME_THRESHOLD' => $config['bastien59_stats_chrome_threshold'] ?? 130,
             'STATS_FIREFOX_THRESHOLD'=> $config['bastien59_stats_firefox_threshold'] ?? 30,
             'STATS_NOSCREENRES_PAGES'=> $config['bastien59_stats_noscreenres_pages'] ?? 3,

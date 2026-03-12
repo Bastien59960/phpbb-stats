@@ -26,11 +26,35 @@
 		</dl>
 	</fieldset>
 
+		<fieldset>
+			<legend>Sessions</legend>
+			<dl>
+				<dt><label for="stats_session_timeout">Timeout de session (minutes) :</label><br /><span>Duree d'inactivite avant qu'une nouvelle visite soit consideree comme une nouvelle session (5-120 minutes).</span></dt>
+				<dd><input type="number" id="stats_session_timeout" name="stats_session_timeout" value="{STATS_SESSION_TIMEOUT}" min="5" max="120" style="width:80px;" /> minutes</dd>
+			</dl>
+			<dl>
+				<dt><label for="stats_member_session_max_hours">Duree max session membre (heures) :</label><br /><span>Dans l'onglet Sessions, les membres connectes sont regroupes sur une fenetre maximale. Defaut recommande: 24h (1 jour).</span></dt>
+				<dd><input type="number" id="stats_member_session_max_hours" name="stats_member_session_max_hours" value="{STATS_MEMBER_SESSION_MAX_HOURS}" min="1" max="168" style="width:80px;" /> heures</dd>
+			</dl>
+		</fieldset>
+
 	<fieldset>
-		<legend>Sessions</legend>
+		<legend>Signal differe CN (sans cron)</legend>
 		<dl>
-			<dt><label for="stats_session_timeout">Timeout de session (minutes) :</label><br /><span>Duree d'inactivite avant qu'une nouvelle visite soit consideree comme une nouvelle session (5-120 minutes).</span></dt>
-			<dd><input type="number" id="stats_session_timeout" name="stats_session_timeout" value="{STATS_SESSION_TIMEOUT}" min="5" max="120" style="width:80px;" /> minutes</dd>
+			<dt><label for="stats_cn_no_interaction_enabled">Activer le signal <code>cn_no_interaction_5m</code> :</label><br /><span>Si une session invitée d'un pays ciblé n'a aucune interaction reelle au bout de 5 minutes, un signal est ecrit dans <code>security_audit.log</code> pour fail2ban.</span></dt>
+			<dd><input type="checkbox" id="stats_cn_no_interaction_enabled" name="stats_cn_no_interaction_enabled" value="1"<!-- IF STATS_CN_NO_INTERACTION_ENABLED --> checked<!-- ENDIF --> /></dd>
+		</dl>
+		<dl>
+			<dt>Pays cibles (ban via cette methode)</dt>
+			<dd><code>{STATS_CN_NO_INTERACTION_COUNTRIES}</code> (CN = Chine)</dd>
+		</dl>
+		<dl>
+			<dt>Comportement</dt>
+			<dd>
+				- Sans cron: emission au prochain hit du site apres les 5 minutes.<br />
+				- Si une interaction reelle est detectee avant emission (scroll/interactions/clics/curseur), ce signal n'est pas emis.<br />
+				- Les autres triggers (UA, fake bots, etc.) restent immediats.
+			</dd>
 		</dl>
 	</fieldset>
 

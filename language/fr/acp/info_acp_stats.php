@@ -164,6 +164,7 @@ $lang = array_merge($lang, [
 	'STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_CLONE_SHADOW' => 'Cookie visiteur invité cloné multi-IP (géolocalisation en attente, signal différé)',
 	'STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_AJAX_FAIL' => 'Cookie visiteur non relu/incohérent en AJAX (strict, hors FR/CO)',
 	'STATS_BEHAVIOR_SIGNAL_GUEST_COOKIE_AJAX_FAIL_SHADOW' => 'Cookie visiteur non relu/incohérent en AJAX (mode observation FR/CO ou géolocalisation en attente, non signalé fail2ban)',
+	'STATS_BEHAVIOR_SIGNAL_CN_NO_INTERACTION_5M' => 'Invité CN sans interaction après 5 minutes (signal différé)',
 	'STATS_BEHAVIOR_SIGNAL_CURSOR_NO_MOVE' => 'Fenêtre curseur: aucun déplacement significatif',
 	'STATS_BEHAVIOR_SIGNAL_CURSOR_NO_CLICKS' => 'Fenêtre curseur: déplacement sans clic',
 	'STATS_BEHAVIOR_SIGNAL_CURSOR_SPEED' => 'Fenêtre curseur: vitesse anormale / trajectoire peu variée',

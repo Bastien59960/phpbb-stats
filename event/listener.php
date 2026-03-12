@@ -35,6 +35,10 @@ class listener implements EventSubscriberInterface
     const AJAX_LINK_NAME = 'b59_stats_px';
     const VISITOR_COOKIE_NAME = 'b59_vid';
     const VISITOR_COOKIE_TTL = 15552000; // 180 days
+    const CN_NO_INTERACTION_SIGNAL = 'cn_no_interaction_5m';
+    const CN_NO_INTERACTION_DELAY_SEC = 300; // 5 minutes
+    const CN_NO_INTERACTION_BATCH_LIMIT = 50; // Max sessions processed per request
+    const CN_NO_INTERACTION_COUNTRY_CODES = ['CN']; // Extendable list (ACP info panel)
 
     // Domaines reverse DNS légitimes pour vérification des bots prétendus
     // Source : https://developers.google.com/search/docs/crawling-indexing/verifying-googlebot
@@ -409,7 +413,11 @@ class listener implements EventSubscriberInterface
             $this->learn_registered_behavior($session_id, $user_agent, $screen_res);
         }
 
-        // 7. Nettoyage automatique (1 chance sur 100)
+        // 7. Signal différé CN: pas d'interaction après 5 minutes.
+        // Sans cron: traité à chaque requête (petit lot), émission différée au prochain hit.
+        $this->emit_cn_no_interaction_signals($time_now);
+
+        // 8. Nettoyage automatique (1 chance sur 100)
         // Rétention différenciée : 5 jours pour les bots, 30 jours pour les humains
         if (mt_rand(1, 100) === 1) {
             $retention_humans = (int)($this->config['bastien59_stats_retention'] ?? 30);
@@ -2088,6 +2096,176 @@ HTML;
         }
 
         return array_values(array_unique($filtered));
+    }
+
+    /**
+     * Émet un signal différé pour sessions invitées CN sans interaction après 5 min.
+     * Règle:
+     * - pays dans la liste CN_NO_INTERACTION_COUNTRY_CODES (actuellement CN)
+     * - session invitée (user_id <= 1), non-bot
+     * - 5 minutes écoulées depuis la page d'entrée de session
+     * - aucune interaction observée (scroll/interactions/cursor) depuis cette entrée
+     *
+     * Sans cron: le signal est émis au prochain hit du site.
+     */
+    private function emit_cn_no_interaction_signals($time_now)
+    {
+        if (!$this->is_cn_no_interaction_enabled()) {
+            return;
+        }
+
+        $countries = $this->get_cn_no_interaction_country_codes();
+        if (empty($countries)) {
+            return;
+        }
+
+        $signal = self::CN_NO_INTERACTION_SIGNAL;
+        $cutoff = (int)$time_now - (int)self::CN_NO_INTERACTION_DELAY_SEC;
+        if ($cutoff <= 0) {
+            return;
+        }
+
+        $interaction_checks = [];
+        if ($this->has_ajax_telemetry_columns()) {
+            $interaction_checks[] = 's2.scroll_down_ajax = 1';
+        }
+        if ($this->has_ajax_advanced_columns()) {
+            $interaction_checks[] = 's2.ajax_interact_mask > 0';
+            $interaction_checks[] = 's2.ajax_scroll_events > 0';
+            $interaction_checks[] = 's2.ajax_first_scroll_ms > 0';
+        }
+        if ($this->has_cursor_columns()) {
+            $interaction_checks[] = 's2.cursor_track_points > 0';
+            $interaction_checks[] = 's2.cursor_click_count > 0';
+        }
+        if (empty($interaction_checks)) {
+            // Schéma trop ancien: impossible de qualifier "pas d'interaction" proprement.
+            return;
+        }
+
+        $country_sql = [];
+        foreach ($countries as $cc) {
+            $country_sql[] = '\'' . $this->db->sql_escape($cc) . '\'';
+        }
+        $interaction_sql = implode(' OR ', $interaction_checks);
+        $stats_table = $this->table_prefix . 'bastien59_stats';
+
+        $sql = 'SELECT s.log_id, s.session_id, s.user_ip, s.user_id, s.user_agent, s.page_url, s.screen_res, s.signals,
+                       (SELECT COUNT(*) FROM ' . $stats_table . ' s4
+                        WHERE s4.session_id = s.session_id
+                        AND s4.log_id >= s.log_id) AS page_count
+                FROM ' . $stats_table . ' s
+                WHERE s.is_first_visit = 1
+                AND s.user_id <= 1
+                AND s.is_bot = 0
+                AND s.visit_time <= ' . (int)$cutoff . '
+                AND UPPER(s.country_code) IN (' . implode(',', $country_sql) . ')
+                AND (s.signals = \'\' OR s.signals NOT LIKE \'%' . $this->db->sql_escape($signal) . '%\')
+                AND s.log_id = (
+                    SELECT MAX(sx.log_id)
+                    FROM ' . $stats_table . ' sx
+                    WHERE sx.session_id = s.session_id
+                    AND sx.is_first_visit = 1
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM ' . $stats_table . ' s2
+                    WHERE s2.session_id = s.session_id
+                    AND s2.log_id >= s.log_id
+                    AND (' . $interaction_sql . ')
+                )
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM ' . $stats_table . ' s3
+                    WHERE s3.session_id = s.session_id
+                    AND s3.log_id >= s.log_id
+                    AND s3.is_bot = 1
+                )
+                ORDER BY s.visit_time ASC';
+
+        $result = $this->db->sql_query_limit($sql, (int) self::CN_NO_INTERACTION_BATCH_LIMIT);
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $this->write_security_audit(
+                (string)($row['user_ip'] ?? ''),
+                (string)($row['session_id'] ?? ''),
+                (int)($row['user_id'] ?? 0),
+                [$signal],
+                (string)($row['user_agent'] ?? ''),
+                (string)($row['page_url'] ?? ''),
+                (string)($row['screen_res'] ?? ''),
+                (int)($row['page_count'] ?? 1),
+                '',
+                '',
+                ''
+            );
+
+            $existing_signals = (string)($row['signals'] ?? '');
+            $updated_signals = $this->append_signal_once($existing_signals, $signal);
+            if ($updated_signals !== $existing_signals) {
+                $sql_update = 'UPDATE ' . $stats_table . '
+                               SET signals = \'' . $this->db->sql_escape(substr($updated_signals, 0, 255)) . '\'
+                               WHERE log_id = ' . (int)$row['log_id'];
+                $this->db->sql_query($sql_update);
+            }
+        }
+        $this->db->sql_freeresult($result);
+    }
+
+    /**
+     * Active/désactive le signal CN "pas d'interaction en 5 minutes".
+     * Défaut: actif si la config n'existe pas encore.
+     */
+    private function is_cn_no_interaction_enabled()
+    {
+        if (!isset($this->config['bastien59_stats_cn_no_interaction_enabled'])) {
+            return true;
+        }
+        return (int)$this->config['bastien59_stats_cn_no_interaction_enabled'] === 1;
+    }
+
+    /**
+     * Codes pays concernés par la méthode "pas d'interaction en 5 minutes".
+     *
+     * @return string[]
+     */
+    private function get_cn_no_interaction_country_codes()
+    {
+        $out = [];
+        foreach (self::CN_NO_INTERACTION_COUNTRY_CODES as $cc) {
+            $cc = strtoupper(trim((string)$cc));
+            if (preg_match('/^[A-Z]{2}$/', $cc)) {
+                $out[$cc] = true;
+            }
+        }
+        return array_keys($out);
+    }
+
+    /**
+     * Ajoute un signal dans une chaîne CSV sans doublon.
+     */
+    private function append_signal_once($signals_csv, $signal)
+    {
+        $target = trim((string)$signal);
+        if ($target === '') {
+            return (string)$signals_csv;
+        }
+
+        $seen = [];
+        $list = [];
+        foreach (explode(',', (string)$signals_csv) as $item) {
+            $item = trim((string)$item);
+            if ($item === '' || isset($seen[$item])) {
+                continue;
+            }
+            $seen[$item] = true;
+            $list[] = $item;
+        }
+
+        if (!isset($seen[$target])) {
+            $list[] = $target;
+        }
+
+        return implode(',', $list);
     }
 
     /**
