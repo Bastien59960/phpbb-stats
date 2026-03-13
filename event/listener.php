@@ -37,7 +37,7 @@ class listener implements EventSubscriberInterface
     const VISITOR_COOKIE_TTL = 15552000; // 180 days
     const CN_NO_INTERACTION_SIGNAL = 'cn_no_interaction_5m';
     const CN_NO_INTERACTION_DELAY_SEC = 300; // 5 minutes
-    const CN_NO_INTERACTION_BATCH_LIMIT = 50; // Max sessions processed per request
+    const CN_NO_INTERACTION_BATCH_LIMIT = 5; // Max sessions processed par déclenchement (throttle 60s)
     const CN_NO_INTERACTION_COUNTRY_CODES = ['CN']; // Extendable list (ACP info panel)
 
     // Domaines reverse DNS légitimes pour vérification des bots prétendus
@@ -2113,6 +2113,15 @@ HTML;
         if (!$this->is_cn_no_interaction_enabled()) {
             return;
         }
+
+        // Throttle : un seul worker toutes les 60 secondes.
+        // set_atomic() échoue si la valeur a changé entre-temps → garde atomicité.
+        $throttle_key = 'bastien59_stats_cn_no_interaction_last_run';
+        $last_run = (int)($this->config[$throttle_key] ?? 0);
+        if ((int)$time_now - $last_run < 60) {
+            return;
+        }
+        $this->config->set_atomic($throttle_key, $last_run, (string)(int)$time_now);
 
         $countries = $this->get_cn_no_interaction_country_codes();
         if (empty($countries)) {
