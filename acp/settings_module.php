@@ -20,6 +20,36 @@ class settings_module
         $form_key = 'acp_stats_settings';
         add_form_key($form_key);
 
+        // Purge immédiate (bouton "Purger maintenant")
+        if ($request->is_set_post('submit_purge'))
+        {
+            if (!check_form_key($form_key))
+            {
+                trigger_error($user->lang('FORM_INVALID') . adm_back_link($this->u_action), E_USER_WARNING);
+            }
+
+            global $db, $table_prefix;
+            $retention_humans = (int)($config['bastien59_stats_retention'] ?? 30);
+            $retention_bots   = (int)($config['bastien59_stats_retention_bots'] ?? 5);
+
+            if ($retention_bots > 0) {
+                $cutoff_bots = time() - ($retention_bots * 86400);
+                $db->sql_query('DELETE FROM ' . $table_prefix . 'bastien59_stats WHERE is_bot = 1 AND visit_time < ' . (int)$cutoff_bots);
+                $deleted_bots = (int)$db->sql_affectedrows();
+            } else {
+                $deleted_bots = 0;
+            }
+            if ($retention_humans > 0) {
+                $cutoff_humans = time() - ($retention_humans * 86400);
+                $db->sql_query('DELETE FROM ' . $table_prefix . 'bastien59_stats WHERE is_bot = 0 AND visit_time < ' . (int)$cutoff_humans);
+                $deleted_humans = (int)$db->sql_affectedrows();
+            } else {
+                $deleted_humans = 0;
+            }
+
+            trigger_error('Purge terminée : ' . number_format($deleted_bots) . ' lignes bot et ' . number_format($deleted_humans) . ' lignes humain supprimées.' . adm_back_link($this->u_action));
+        }
+
         if ($request->is_set_post('submit'))
         {
             if (!check_form_key($form_key))
@@ -90,9 +120,22 @@ class settings_module
             trigger_error($user->lang('CONFIG_UPDATED') . adm_back_link($this->u_action));
         }
 
+        // Taille de la table pour affichage dans l'ACP
+        global $db, $table_prefix;
+        $result_size = $db->sql_query(
+            'SELECT TABLE_ROWS, ROUND((DATA_LENGTH + INDEX_LENGTH)/1024/1024, 1) AS size_mb
+             FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = \'' . $table_prefix . 'bastien59_stats\''
+        );
+        $size_row = $db->sql_fetchrow($result_size);
+        $db->sql_freeresult($result_size);
+
         $template->assign_vars([
             'U_ACTION'               => $this->u_action,
             'STATS_ENABLED'          => $config['bastien59_stats_enabled'] ?? 1,
+            'STATS_TABLE_ROWS'       => number_format((int)($size_row['TABLE_ROWS'] ?? 0), 0, ',', ' '),
+            'STATS_TABLE_SIZE_MB'    => $size_row['size_mb'] ?? '?',
+            'STATS_RETENTION_BOTS_WARNING' => ((int)($config['bastien59_stats_retention_bots'] ?? 5)) > 7 ? 1 : 0,
             'STATS_CN_NO_INTERACTION_ENABLED' => isset($config['bastien59_stats_cn_no_interaction_enabled'])
                 ? (int)$config['bastien59_stats_cn_no_interaction_enabled']
                 : 1,

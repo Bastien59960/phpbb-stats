@@ -291,12 +291,7 @@ class acp_controller
                     GROUP BY ' . $session_bucket_expr . '
                 ) sess ON s.log_id = sess.landing_log_id
                 WHERE sess.last_visit_time > ' . (int)$start_time . $bot_filter . '
-                ORDER BY sess.has_interaction DESC,
-                         CASE
-                             WHEN sess.has_interaction = 1 THEN sess.last_interaction_time
-                             ELSE sess.last_visit_time
-                         END DESC,
-                         sess.last_visit_time DESC';
+                ORDER BY sess.last_visit_time DESC';
 
         $result = $this->db->sql_query_limit($sql, $limit);
 
@@ -341,6 +336,9 @@ class acp_controller
                cursor_device_class, cursor_viewport, cursor_total_distance, cursor_avg_speed,
                cursor_max_speed, cursor_direction_changes, cursor_linearity, cursor_click_count'
             : '';
+        // Plafond global : évite l'OOM quand une session bot accumule des milliers de pages.
+        // 15 000 lignes × ~500 octets/ligne ≈ 7,5 Mo, bien en-dessous de la limite PHP de 128 Mo.
+        $pages_query_limit = max(500, (int)($limit * 30));
         $sql_pages = 'SELECT log_id, session_id, user_id, page_url, page_title, visit_time, duration, referer, screen_res'
                     . $extra_ajax_columns
                     . $extra_cookie_columns
@@ -349,7 +347,7 @@ class acp_controller
                       FROM ' . $this->table_prefix . 'bastien59_stats
                       WHERE session_id IN (' . implode(',', $session_ids) . ')
                       ORDER BY visit_time ASC';
-        $result_pages = $this->db->sql_query($sql_pages);
+        $result_pages = $this->db->sql_query_limit($sql_pages, $pages_query_limit);
         while ($page = $this->db->sql_fetchrow($result_pages)) {
             $page_session_key = $this->build_session_bucket_key(
                 (string)($page['session_id'] ?? ''),
@@ -917,6 +915,8 @@ class acp_controller
                 $cursor_has_data = 1;
             }
 
+            $signals_class = $row['is_bot'] ? $this->classify_signals($row['signals'] ?? '') : ['type' => 'none', 'score' => 0];
+
             $this->template->assign_block_vars('SESSIONS', [
                 'SESSION_ID'        => substr($session_id, 0, 8) . '...',
                 'IP'                => $row['user_ip'],
@@ -966,6 +966,8 @@ class acp_controller
                 'BOT_SOURCE'    => htmlspecialchars($bot_source, ENT_COMPAT, 'UTF-8'),
                 'SIGNALS'       => htmlspecialchars($row['signals'] ?? '', ENT_COMPAT, 'UTF-8'),
                 'SIGNALS_DESC'  => $this->format_signals_description($row['signals'] ?? ''),
+                'BOT_VERDICT_TYPE' => $signals_class['type'],
+                'BOT_SCORE'     => $signals_class['score'],
                 'START_TIME'    => $this->user->format_date((int)($row['visit_time'] ?? 0)),
                 'LANDING_PAGE'  => htmlspecialchars($landing_title, ENT_COMPAT, 'UTF-8'),
                 'LANDING_URL'   => htmlspecialchars($landing_url, ENT_COMPAT, 'UTF-8'),
@@ -2297,11 +2299,11 @@ class acp_controller
             'guest_cookie_clone_multi_ip_shadow' => 'Cookie visiteur invité réutilisé multi-IP avec pays non encore résolu — signal différé par le cron (observation)',
             'guest_cookie_ajax_fail' => 'Cookie visiteur signé non relu (ou incohérent) lors de l\'AJAX malgré JS actif (hors FR/CO) (strict)',
             'guest_cookie_ajax_fail_shadow' => 'Cookie visiteur signé non relu (ou incohérent) en AJAX — mode observation FR/CO ou géolocalisation en attente (non signalé fail2ban)',
-            'cn_no_interaction_5m' => 'Session invitée CN sans interaction réelle après 5 minutes (signal différé sans cron)',
-            'cursor_no_movement' => 'Aucun déplacement curseur/touch significatif pendant la fenêtre de capture (observation)',
-            'cursor_no_clicks' => 'Trajet détecté sans clic pendant la fenêtre de capture (observation)',
-            'cursor_speed_outlier' => 'Trajet très rapide et peu varié (outlier curseur)',
-            'cursor_script_path' => 'Trajectoire quasi-linéaire et mécanique (signature d\'automation) (strict)',
+            'cn_no_interaction_5m' => 'Session invitée CN — une seule page visitée en 5 min + première visite du jour → signalé à fail2ban (70 pts)',
+            'cursor_no_movement' => '<span style="color:#888">[observation — desktop uniquement, non envoyé à fail2ban seul]</span> Aucun mouvement de curseur souris pendant la fenêtre de capture (≥ 2.8 s). Non applicable sur mobile (les appuis tactiles ne génèrent pas de mousemove). Peut indiquer un bot headless sur desktop, ou un humain qui lit sans bouger la souris.',
+            'cursor_no_clicks' => '<span style="color:#888">[observation — desktop uniquement, non envoyé à fail2ban seul]</span> Déplacement de curseur détecté mais aucun clic pendant la fenêtre de capture.',
+            'cursor_speed_outlier' => '<span style="color:#888">[observation]</span> Déplacement de curseur très rapide et peu varié (vitesse anormale).',
+            'cursor_script_path' => 'Trajectoire de curseur quasi-linéaire et mécanique sur desktop (signature d\'automation) (strict)',
             'learn_no_interact_outlier' => 'Écart au profil appris: absence d\'interaction inhabituel pour ce profil (25 pts)',
             'learn_speed_outlier'   => 'Écart au profil appris: scroll initial anormalement rapide (25 pts)',
             'learn_sparse_scroll_outlier' => 'Écart au profil appris: trop peu d\'événements de scroll (20 pts)',
@@ -2328,6 +2330,76 @@ class acp_controller
         }
 
         return !empty($parts) ? '<ul style="margin:2px 0 0 15px;padding:0;list-style:square;">' . implode('', $parts) . '</ul>' : '';
+    }
+
+    /**
+     * Classifie les signaux d'une session pour déterminer si fail2ban a été notifié.
+     * Retourne ['type' => 'strict'|'scored'|'observation'|'none', 'score' => int]
+     *  - strict      : au moins un signal dur (ban immédiat, sans seuil de score)
+     *  - scored      : signaux à points, score >= 50 → fail2ban notifié
+     *  - observation : uniquement des signaux d'observation (enregistrés DB, non envoyés fail2ban)
+     *  - none        : aucun signal
+     */
+    private function classify_signals(string $signals_str): array
+    {
+        if (trim($signals_str) === '' || $signals_str === '-') {
+            return ['type' => 'none', 'score' => 0];
+        }
+
+        static $observation_signals = [
+            'cursor_no_movement', 'cursor_no_clicks', 'cursor_speed_outlier',
+            'guest_fp_clone_multi_ip_shadow', 'guest_cookie_clone_multi_ip_shadow',
+            'guest_cookie_ajax_fail_shadow',
+        ];
+
+        static $strict_signals = [
+            'fake_legit_bot', 'cursor_script_path', 'viewprofile_first_visit_no_res',
+            'guest_fp_clone_multi_ip', 'guest_cookie_clone_multi_ip', 'guest_cookie_ajax_fail',
+        ];
+
+        static $signal_scores = [
+            'posting_first_visit' => 65, 'posting_get_loop' => 65,
+            'html_entities_in_url' => 45, 'no_screen_res' => 35,
+            'ajax_scroll_no_interact' => 25, 'ajax_scroll_too_fast' => 30,
+            'ajax_scroll_jump' => 30, 'ajax_scroll_profile' => 70,
+            'bad_gecko_date' => 50, 'fake_safari_build' => 50,
+            'fake_chrome_build' => 50, 'template_literal' => 50, 'iphone_13_2_3' => 50,
+            'empty_ua' => 70, 'ajax_webdriver' => 95,
+            'learn_no_interact_outlier' => 25, 'learn_speed_outlier' => 25,
+            'learn_sparse_scroll_outlier' => 20, 'learn_jump_outlier' => 20,
+            'learn_reactions_assets_missing_outlier' => 25, 'learn_behavior_outlier' => 20,
+            'cn_no_interaction_5m' => 70,
+        ];
+
+        $parts = array_filter(array_map('trim', explode(',', $signals_str)));
+        $score = 0;
+        $has_strict = false;
+        $all_observation = true;
+
+        foreach ($parts as $sig) {
+            if (preg_match('/_shadow$/', $sig)) {
+                continue; // signal différé, non encore envoyé à fail2ban
+            }
+            if (in_array($sig, $observation_signals, true)) {
+                continue; // observation uniquement
+            }
+            $all_observation = false;
+            if (in_array($sig, $strict_signals, true) || preg_match('/^ua_pattern:|^legit_ua_pattern:/', $sig)) {
+                $has_strict = true;
+            } elseif (preg_match('/^old_chrome_\d+$/', $sig)) {
+                $score += 50;
+            } else {
+                $score += $signal_scores[$sig] ?? 0;
+            }
+        }
+
+        if ($has_strict) {
+            return ['type' => 'strict', 'score' => $score];
+        }
+        if ($all_observation) {
+            return ['type' => 'observation', 'score' => 0];
+        }
+        return ['type' => 'scored', 'score' => $score];
     }
 
     private function extract_bot_name($user_agent)

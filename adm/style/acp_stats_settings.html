@@ -15,14 +15,37 @@
 	</fieldset>
 
 	<fieldset>
+		<legend>Etat de la table de statistiques</legend>
+		<dl>
+			<dt>Taille actuelle</dt>
+			<dd>
+				<strong>~{STATS_TABLE_ROWS} lignes</strong> — <strong>{STATS_TABLE_SIZE_MB} Mo</strong>
+				(données + index)
+			</dd>
+		</dl>
+		<dl>
+			<dt>Purge immédiate</dt>
+			<dd>
+				Applique immédiatement les règles de rétention configurées ci-dessous, sans attendre le nettoyage automatique (1% des requêtes).<br />
+				<input class="button2" type="submit" name="submit_purge" value="Purger maintenant" style="margin-top:6px;" />
+			</dd>
+		</dl>
+	</fieldset>
+
+	<fieldset>
 		<legend>Retention des donnees</legend>
 		<dl>
 			<dt><label for="stats_retention_days">Retention humains (jours) :</label><br /><span>Nombre de jours de conservation des donnees des visiteurs humains (1-365).</span></dt>
 			<dd><input type="number" id="stats_retention_days" name="stats_retention_days" value="{STATS_RETENTION_DAYS}" min="1" max="365" style="width:80px;" /> jours</dd>
 		</dl>
 		<dl>
-			<dt><label for="stats_retention_bots">Retention bots (jours) :</label><br /><span>Nombre de jours de conservation des donnees des bots (1-30).</span></dt>
-			<dd><input type="number" id="stats_retention_bots" name="stats_retention_bots" value="{STATS_RETENTION_BOTS}" min="1" max="30" style="width:80px;" /> jours</dd>
+			<dt><label for="stats_retention_bots">Retention bots (jours) :</label><br /><span>Nombre de jours de conservation des donnees des bots (1-30). Recommande : 5-7 jours maximum. Au-dela, le volume de donnees devient tres important.</span></dt>
+			<dd>
+				<input type="number" id="stats_retention_bots" name="stats_retention_bots" value="{STATS_RETENTION_BOTS}" min="1" max="30" style="width:80px;" /> jours
+				<!-- IF STATS_RETENTION_BOTS_WARNING -->
+				<span style="color:#c0392b; margin-left:10px;">&#9888; Valeur elevee : les bots generent beaucoup de donnees. Recommande : 5-7 jours max.</span>
+				<!-- ENDIF -->
+			</dd>
 		</dl>
 	</fieldset>
 
@@ -41,7 +64,7 @@
 	<fieldset>
 		<legend>Signal differe CN (sans cron)</legend>
 		<dl>
-			<dt><label for="stats_cn_no_interaction_enabled">Activer le signal <code>cn_no_interaction_5m</code> :</label><br /><span>Si une session invitée d'un pays ciblé n'a aucune interaction reelle au bout de 5 minutes, un signal est ecrit dans <code>security_audit.log</code> pour fail2ban.</span></dt>
+			<dt><label for="stats_cn_no_interaction_enabled">Activer le signal <code>cn_no_interaction_5m</code> :</label><br /><span>Si une session invitee d'un pays cible ne consulte qu'une seule page en 5 minutes (pas de navigation vers d'autres pages), un signal est ecrit dans <code>security_audit.log</code> pour fail2ban. La regle ne s'applique qu'a la premiere visite de la journee (IP non vue dans les 24h precedentes).</span></dt>
 			<dd><input type="checkbox" id="stats_cn_no_interaction_enabled" name="stats_cn_no_interaction_enabled" value="1"<!-- IF STATS_CN_NO_INTERACTION_ENABLED --> checked<!-- ENDIF --> /></dd>
 		</dl>
 		<dl>
@@ -52,60 +75,48 @@
 			<dt>Comportement</dt>
 			<dd>
 				- Sans cron : emission au prochain hit du site apres les 5 minutes.<br />
-				- Si une interaction reelle est detectee avant emission, ce signal n'est pas emis.<br />
+				- Si le visiteur navigue vers d'autres pages avant les 5 minutes, le signal n'est pas emis (<code>page_count &gt; 1</code>).<br />
+				- Si l'IP a deja ete vue dans les 24 heures precedant la session, la regle ne s'applique pas (protection contre les faux positifs sur les humains qui reviennent).<br />
 				- Les autres triggers (UA, fake bots, etc.) restent immediats.
 			</dd>
 		</dl>
 		<dl>
-			<dt>Definition precise de "interaction reelle" (conditions SQL <code>NOT EXISTS</code>)</dt>
+			<dt>Critere de declenchement (SQL)</dt>
 			<dd>
-				Une session est consideree "avec interaction" si AU MOINS UNE des colonnes suivantes est vraie :<br />
-				<ul style="margin:6px 0 0 18px; padding:0; list-style:disc;">
-					<li><code>scroll_down_ajax = 1</code> — page scrollee &gt; 12 px (evenement JS <code>scroll</code> confirme)</li>
-					<li><code>ajax_interact_mask &gt; 0</code> — masque d'interaction non nul (voir bits ci-dessous)</li>
-					<li><code>ajax_scroll_events &gt; 0</code> — au moins un evenement scroll enregistre</li>
-					<li><code>ajax_first_scroll_ms &gt; 0</code> — timing du premier scroll disponible</li>
-					<li><code>cursor_track_points &gt; 0</code> — points de trajectoire curseur capturés</li>
-					<li><code>cursor_click_count &gt; 0</code> — au moins un clic</li>
-				</ul>
+				<code>page_count = 1</code> — la session ne contient qu'une seule page vue (pas de navigation reelle).<br />
+				<code>NOT EXISTS (visit dans les 24h precedentes pour la meme IP)</code> — premiere visite du jour.<br />
+				<br />
+				<strong>Pourquoi ce changement par rapport a l'ancien critere d'interaction ?</strong><br />
+				L'ancienne regle utilisait un <code>NOT EXISTS</code> sur les colonnes de telemetrie JS
+				(<code>scroll_down_ajax</code>, <code>ajax_interact_mask</code>, etc.).<br />
+				Un botnet CN observe en mars 2026 contournait cette regle en injectant 2 evenements
+				<code>wheel</code> synthetiques, ce qui posait <code>scroll_down_ajax=1</code> et satisfaisait
+				la condition d'exclusion. Le masque etait <code>ajax_interact_mask=16</code> (wheel seul, bit 1
+				mousemove absent) — physiquement impossible sur un vrai desktop.<br />
+				La navigation vers d'autres pages est impossible a simuler sans vraiment charger ces pages,
+				ce qui rend le critere <code>page_count=1</code> beaucoup plus robuste.
 			</dd>
 		</dl>
 		<dl>
-			<dt>Bits du masque <code>ajax_interact_mask</code></dt>
+			<dt>Evasion resolue — Botnet CN "wheel sans curseur" (observe mars 2026, corrige mars 2026)</dt>
 			<dd>
-				<code>bit 1</code> = mousemove &nbsp;|&nbsp;
-				<code>bit 2</code> = keydown &nbsp;|&nbsp;
-				<code>bit 4</code> = touchstart &nbsp;|&nbsp;
-				<code>bit 8</code> = pointerdown &nbsp;|&nbsp;
-				<code>bit 16</code> = <strong>wheel</strong> &nbsp;|&nbsp;
-				<code>bit 32</code> = click
-			</dd>
-		</dl>
-		<dl>
-			<dt style="color:#c0392b;">⚠ Evasion documentee — Botnet CN "wheel sans curseur" (observe mars 2026)</dt>
-			<dd>
-				<strong>Fingerprint :</strong><br />
+				<strong>Fingerprint du bot :</strong><br />
 				<ul style="margin:6px 0 0 18px; padding:0; list-style:disc;">
 					<li><code>ajax_interact_mask = 16</code> — uniquement l'evenement <code>wheel</code>, aucun <code>mousemove</code> (bit 1 absent)</li>
 					<li><code>ajax_scroll_events = 2</code> — exactement 2 evenements scroll (tres constant)</li>
 					<li><code>ajax_first_scroll_ms</code> — entre 94 ms et 5 679 ms (simule un delai humain)</li>
-					<li><code>scroll_down_ajax = 1</code> — le scroll JS est bien declenche par les wheel events</li>
-					<li><code>cursor_track_points = 0</code> — aucun mouvement de souris enregistre</li>
+					<li><code>scroll_down_ajax = 1</code> — declenche par les wheel events synthetiques</li>
+					<li><code>cursor_track_points = 0</code> — aucun mouvement de souris</li>
 					<li><code>cursor_click_count = 0</code> — aucun clic</li>
 					<li>UA : Chrome/139 sur Windows 10/11, resolution 3840×2160</li>
 				</ul>
-				<strong>Pourquoi il passe :</strong> Le bot dispatche 2 evenements <code>wheel</code> synthetiques. Cela declenche
-				<code>scroll_down_ajax = 1</code> via le listener scroll JS, ce qui satisfait la condition d'exclusion
-				du <code>NOT EXISTS</code> — la session n'est pas consideree "sans interaction" et le signal
-				<code>cn_no_interaction_5m</code> n'est pas emis.<br /><br />
-				<strong>Pourquoi c'est physiquement suspect :</strong> Sur un vrai desktop, utiliser la molette
-				implique que le curseur est sur la page, ce qui declenche systematiquement des <code>mousemove</code>
-				(bit 1). Un masque exclusivement = 16 sans bit 1 est impossible en utilisation reelle.<br /><br />
-				<strong>Signal partiel existant :</strong> <code>cursor_no_movement</code> est deja pose sur ces sessions
-				(absence totale de trajectoire curseur) mais ne declenche pas de jail autonome.<br /><br />
-				<strong>Piste de correction :</strong> Exclure les sessions dont <code>ajax_interact_mask = 16</code>
-				(wheel seul) ET <code>cursor_track_points = 0</code> de la condition d'exclusion, ou ajouter
-				une jail specifique sur le signal <code>cursor_no_movement</code> + pays CN.
+				<strong>Pourquoi il passait :</strong> <code>scroll_down_ajax=1</code> satisfaisait le <code>NOT EXISTS</code>
+				de l'ancienne regle → signal non emis.<br />
+				<strong>Pourquoi il est maintenant bloque :</strong> Le bot ne navigue que sur une seule page →
+				<code>page_count=1</code> → signal emis apres 5 minutes.<br />
+				<strong>Bits du masque <code>ajax_interact_mask</code> (reference) :</strong>
+				<code>bit 1</code>=mousemove | <code>bit 2</code>=keydown | <code>bit 4</code>=touchstart |
+				<code>bit 8</code>=pointerdown | <code>bit 16</code>=wheel | <code>bit 32</code>=click
 			</dd>
 		</dl>
 	</fieldset>
