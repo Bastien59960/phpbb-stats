@@ -197,7 +197,8 @@ $lang = array_merge($lang, [
 
 	// Sessions
 	'STATS_FILTER_HUMANS'			=> 'Humans',
-	'STATS_FILTER_ROBOTS'			=> 'Robots',
+	'STATS_FILTER_PHPBB_BOTS'		=> 'Legit bots',
+	'STATS_FILTER_ROBOTS'			=> 'Detected bots',
 	'STATS_COL_VISITOR'				=> 'Visitor',
 	'STATS_COL_DEVICE'				=> 'Device',
 	'STATS_COL_LANDING_PAGE'		=> 'Landing page',

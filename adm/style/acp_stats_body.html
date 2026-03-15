@@ -288,6 +288,7 @@ body.cursor-modal-open { overflow: hidden; }
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
             <div style="display:flex; gap:15px; align-items:center;">
                 <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-humans" checked onchange="filterSessions()"> <span class="badge badge-human">{L_STATS_FILTER_HUMANS}</span></label>
+                <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-phpbb-bots" checked onchange="filterSessions()"> <span class="badge badge-bot-phpbb">{L_STATS_FILTER_PHPBB_BOTS}</span></label>
                 <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-bots" checked onchange="filterSessions()"> <span class="badge badge-bot">{L_STATS_FILTER_ROBOTS}</span></label>
             </div>
             <form method="post" action="{U_ACTION}" style="margin:0;">
@@ -1005,15 +1006,18 @@ var mapDataHumans = {MAP_DATA_HUMANS_JSON};
 var mapDataBots = {MAP_DATA_BOTS_JSON};
 var baseAction = '{U_ACTION}'.replace(/&amp;/g, '&');
 
-// === FILTRE SESSIONS (cases a cocher humains/robots) ===
+// === FILTRE SESSIONS (cases a cocher humains / bots legitimes / bots detectes) ===
 function filterSessions() {
     var showHumans = document.getElementById('filter-sessions-humans').checked;
+    var showPhpbbBots = document.getElementById('filter-sessions-phpbb-bots').checked;
     var showBots = document.getElementById('filter-sessions-bots').checked;
     var rows = document.querySelectorAll('#sessions-table tbody tr[data-type]');
     for (var i = 0; i < rows.length; i++) {
         var type = rows[i].getAttribute('data-type');
         if (type === 'human') {
             rows[i].style.display = showHumans ? '' : 'none';
+        } else if (type === 'phpbb-bot') {
+            rows[i].style.display = showPhpbbBots ? '' : 'none';
         } else if (type === 'bot') {
             rows[i].style.display = showBots ? '' : 'none';
         }

@@ -4,6 +4,24 @@ Toutes les modifications notables de cette extension sont documentées dans ce f
 
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
+## [1.10.1] - 2026-03-15
+
+### Added
+- Sessions ACP : troisième filtre "Bots légitimes" (`phpbb-bot`) séparé de "Bots détectés" — les crawlers reconnus (Googlebot, etc.) ont maintenant leur propre checkbox indépendante
+- Documentation complète dans les paramètres ACP de la logique `cn_no_interaction_5m` : définition précise des 6 conditions SQL d'interaction réelle, bits du masque `ajax_interact_mask`, évasion documentée
+
+### Security
+- **Évasion documentée — Botnet CN "wheel sans curseur" (observé 2026-03-15)** :
+  Fingerprint : `ajax_interact_mask=16` (événement `wheel` seul, sans `mousemove`),
+  `ajax_scroll_events=2` exact, `cursor_track_points=0`, UA Chrome/139 Windows 10/11, résolution 3840×2160.
+  Le bot dispatche 2 événements `wheel` synthétiques → `scroll_down_ajax=1` → condition `NOT EXISTS`
+  du signal `cn_no_interaction_5m` satisfaite → pas de signal → pas de jail.
+  **Pourquoi suspect** : sur un vrai desktop, `wheel` sans `mousemove` (bit 1) est physiquement impossible
+  (le curseur doit être sur la page pour utiliser la molette).
+  **Signal partiel existant** : `cursor_no_movement` est déjà posé mais ne déclenche pas de jail autonome.
+  **Piste de correction** : exclure `ajax_interact_mask=16` AND `cursor_track_points=0` de la condition
+  d'exclusion, ou créer une jail `phpbb-cn-wheel-only` sur ce signal combiné au pays CN.
+
 ## [1.10.0] - 2026-03-06
 
 ### Added

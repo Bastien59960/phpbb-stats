@@ -962,7 +962,7 @@ class acp_controller
                 'USERNAME'      => ($row['user_id'] > 1) ? $this->get_username($row['user_id']) : $this->user->lang('STATS_GUEST'),
                 'IS_GUEST'      => ($row['user_id'] <= 1 && !$row['is_bot']) ? 1 : 0,
                 'IS_BOT'        => (int)$row['is_bot'],
-                'BOT_CLASS'     => ($row['is_bot']) ? 'bot' : 'human',
+                'BOT_CLASS'     => ($row['is_bot']) ? ($is_phpbb_bot ? 'phpbb-bot' : 'bot') : 'human',
                 'BOT_SOURCE'    => htmlspecialchars($bot_source, ENT_COMPAT, 'UTF-8'),
                 'SIGNALS'       => htmlspecialchars($row['signals'] ?? '', ENT_COMPAT, 'UTF-8'),
                 'SIGNALS_DESC'  => $this->format_signals_description($row['signals'] ?? ''),
