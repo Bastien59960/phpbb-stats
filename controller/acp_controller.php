@@ -836,9 +836,18 @@ class acp_controller
             $cursor_preview_viewport_label = '-';
             $cursor_page_blocks = [];
             if ($has_cursor_columns) {
-                $cursor_candidates = $pages;
-                if (empty($cursor_candidates)) {
-                    $cursor_candidates = [$row];
+                // Ne générer les SVG que pour les pages avec des données curseur réelles.
+                // Les bots n'ont jamais cursor_track_points > 0 → itération zéro pour eux.
+                // Cap à 20 pages max pour éviter l'OOM sur les sessions avec des centaines de pages.
+                $cursor_candidates_raw = $pages ?: [$row];
+                $cursor_candidates = [];
+                foreach ($cursor_candidates_raw as $cr) {
+                    if ((int)($cr['cursor_track_points'] ?? 0) > 0) {
+                        $cursor_candidates[] = $cr;
+                        if (count($cursor_candidates) >= 20) {
+                            break;
+                        }
+                    }
                 }
 
                 foreach ($cursor_candidates as $cursor_row_src) {
@@ -1007,13 +1016,19 @@ class acp_controller
             }
 
             // Assigner les pages de la session (à partir de la 2ème)
+            // Afficher 50 pages max dans la liste de la session (la page de landing est déjà affichée).
+            // Au-delà, seul le compteur total (PAGE_COUNT) est pertinent.
             $first = true;
             $page_index = 1;
+            $pages_shown = 0;
             foreach ($pages as $page) {
                 if ($first) {
                     $first = false;
                     $page_index = 2;
                     continue; // Skip first page (already shown as landing)
+                }
+                if ($pages_shown >= 50) {
+                    break;
                 }
                 $this->template->assign_block_vars('SESSIONS.PAGES', [
                     'PAGE_INDEX' => $page_index,
@@ -1023,6 +1038,7 @@ class acp_controller
                     'DURATION'  => $this->format_duration($page['duration']),
                 ]);
                 $page_index++;
+                $pages_shown++;
             }
         }
     }
