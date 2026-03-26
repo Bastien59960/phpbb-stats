@@ -182,64 +182,13 @@ class listener implements EventSubscriberInterface
         $time_now = time();
         $user_ip = (string)$this->user->ip;
         $native_session_id = (string)($this->user->session_id ?? '');
-        $session_id = $this->build_tracking_session_id($native_session_id, $user_ip, (int)$this->user->data['user_id']);
+        $user_id = (int)$this->user->data['user_id'];
         $user_agent = $this->user->browser ?? '';
 
         // Timeout de session configurable (15 min par défaut)
         $session_timeout = (int)($this->config['bastien59_stats_session_timeout'] ?? 900);
 
-        // 1. Vérifier si c'est la première visite de ce visiteur (session trackée + timeout)
-        // Le tracking est isolé par (session phpBB + IP + user_id) pour éviter les mélanges NAT/proxy.
-        $sql = 'SELECT log_id, visit_time, session_id as last_session
-                FROM ' . $this->table_prefix . 'bastien59_stats
-                WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
-                AND user_ip = \'' . $this->db->sql_escape($user_ip) . '\'
-                ORDER BY visit_time DESC, log_id DESC';
-
-        $result = $this->db->sql_query_limit($sql, 1);
-        $last_row = $this->db->sql_fetchrow($result);
-        $this->db->sql_freeresult($result);
-
-        // Nouvelle session si : pas de visite OU dernière visite > timeout
-        $is_first_visit = 0;
-        if ($last_row === false) {
-            $is_first_visit = 1;
-        } else {
-            $time_since_last = $time_now - (int)$last_row['visit_time'];
-            if ($time_since_last > $session_timeout) {
-                $is_first_visit = 1; // Nouvelle session après timeout
-            } else {
-                // Même session : conserver la clé session trackée.
-                $session_id = $last_row['last_session'];
-            }
-        }
-
-        // 2. Mise à jour de la durée de la dernière page HTML précédente.
-        // Les téléchargements de PJ ne doivent pas écraser la durée de consultation
-        // de la page qui les a déclenchés.
-        if (!$is_download) {
-            $sql_duration = 'SELECT log_id, visit_time
-                             FROM ' . $this->table_prefix . 'bastien59_stats
-                             WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
-                             AND user_ip = \'' . $this->db->sql_escape($user_ip) . '\'
-                             AND LOWER(page_url) NOT LIKE \'%download/file.php%\'
-                             ORDER BY visit_time DESC, log_id DESC';
-            $result_duration = $this->db->sql_query_limit($sql_duration, 1);
-            $duration_row = $this->db->sql_fetchrow($result_duration);
-            $this->db->sql_freeresult($result_duration);
-
-            if ($duration_row && isset($duration_row['log_id']) && isset($duration_row['visit_time'])) {
-                $duration = $time_now - (int)$duration_row['visit_time'];
-                if ($duration >= 0 && $duration <= $session_timeout) {
-                    $sql_update = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
-                                   SET duration = ' . (int)$duration . '
-                                   WHERE log_id = ' . (int)$duration_row['log_id'];
-                    $this->db->sql_query($sql_update);
-                }
-            }
-        }
-
-        // 3. Collecter les données
+        // 2. Collecter les données
         $page_url = isset($context['page_url'])
             ? (string)$context['page_url']
             : $this->request->raw_variable('REQUEST_URI', '', \phpbb\request\request_interface::SERVER);
@@ -266,6 +215,40 @@ class listener implements EventSubscriberInterface
         $screen_res = $this->request->variable('bastien59_stats_res', '', true, \phpbb\request\request_interface::COOKIE);
         $visitor_cookie_id = $this->get_or_init_visitor_cookie_id();
         $visitor_cookie_hash = ($visitor_cookie_id !== '') ? hash('sha256', $visitor_cookie_id) : '';
+        $tracking_session = $this->resolve_tracking_session(
+            $native_session_id,
+            $user_ip,
+            $user_id,
+            $visitor_cookie_hash,
+            $time_now,
+            $session_timeout
+        );
+        $session_id = (string)($tracking_session['session_id'] ?? '');
+        $is_first_visit = !empty($tracking_session['is_first_visit']) ? 1 : 0;
+
+        // 3. Mise à jour de la durée de la dernière page HTML précédente.
+        // Les téléchargements de PJ ne doivent pas écraser la durée de consultation
+        // de la page qui les a déclenchés.
+        if (!$is_download) {
+            $sql_duration = 'SELECT log_id, visit_time
+                             FROM ' . $this->table_prefix . 'bastien59_stats
+                             WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
+                             AND LOWER(page_url) NOT LIKE \'%download/file.php%\'
+                             ORDER BY visit_time DESC, log_id DESC';
+            $result_duration = $this->db->sql_query_limit($sql_duration, 1);
+            $duration_row = $this->db->sql_fetchrow($result_duration);
+            $this->db->sql_freeresult($result_duration);
+
+            if ($duration_row && isset($duration_row['log_id']) && isset($duration_row['visit_time'])) {
+                $duration = $time_now - (int)$duration_row['visit_time'];
+                if ($duration >= 0 && $duration <= $session_timeout) {
+                    $sql_update = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
+                                   SET duration = ' . (int)$duration . '
+                                   WHERE log_id = ' . (int)$duration_row['log_id'];
+                    $this->db->sql_query($sql_update);
+                }
+            }
+        }
 
         // === DÉTECTION DES BOTS (2 couches) ===
         // Couche 1 : Protection bots légitimes (phpBB natif + whitelist + vérif rDNS)
@@ -346,7 +329,6 @@ class listener implements EventSubscriberInterface
                                     ELSE bot_source
                                 END
                             WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
-                            AND user_ip = \'' . $this->db->sql_escape($user_ip) . '\'
                             AND is_bot = 0';
             $this->db->sql_query($sql_reclass);
         }
@@ -996,6 +978,100 @@ HTML;
      * Construit une clé de session de tracking stable et cloisonnée.
      * Évite les collisions entre visiteurs partageant IP/NAT/proxy.
      */
+    /**
+     * Résout la session de tracking courante.
+     *
+     * Quand le cookie visiteur stats est disponible, il devient la clé d'ancrage principale
+     * pour regrouper les pages et téléchargements même si l'IP change en cours de navigation.
+     * On conserve néanmoins un vrai timeout de session : au-delà, une nouvelle session_id est émise.
+     *
+     * Fallback historique : si le cookie visiteur n'est pas exploitable, on garde le couplage
+     * phpBB session + IP pour éviter les mélanges sur des clients sans cookie.
+     */
+    private function resolve_tracking_session($native_session_id, $user_ip, $user_id, $visitor_cookie_hash, $time_now, $session_timeout)
+    {
+        $sid = trim((string)$native_session_id);
+        $ip = trim((string)$user_ip);
+        $uid = (int)$user_id;
+        $timeout = max(300, (int)$session_timeout);
+        $time_now = max(0, (int)$time_now);
+        $cookie_hash = strtolower(trim((string)$visitor_cookie_hash));
+
+        if ($this->has_visitor_cookie_column() && $this->is_valid_visitor_cookie_hash($cookie_hash)) {
+            $sql = 'SELECT log_id, visit_time, session_id
+                    FROM ' . $this->table_prefix . 'bastien59_stats
+                    WHERE user_id = ' . (int)$uid . '
+                    AND visitor_cookie_hash = \'' . $this->db->sql_escape($cookie_hash) . '\'
+                    ORDER BY visit_time DESC, log_id DESC';
+
+            $result = $this->db->sql_query_limit($sql, 1);
+            $last_row = $this->db->sql_fetchrow($result);
+            $this->db->sql_freeresult($result);
+
+            if ($last_row && !empty($last_row['session_id'])) {
+                $time_since_last = $time_now - (int)$last_row['visit_time'];
+                if ($time_since_last >= 0 && $time_since_last <= $timeout) {
+                    return [
+                        'session_id' => (string)$last_row['session_id'],
+                        'is_first_visit' => 0,
+                    ];
+                }
+            }
+
+            return [
+                'session_id' => $this->build_cookie_tracking_session_id($cookie_hash, $uid, $time_now),
+                'is_first_visit' => 1,
+            ];
+        }
+
+        $session_id = $this->build_tracking_session_id($sid, $ip, $uid);
+        $sql = 'SELECT log_id, visit_time, session_id AS last_session
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
+                AND user_ip = \'' . $this->db->sql_escape($ip) . '\'
+                ORDER BY visit_time DESC, log_id DESC';
+
+        $result = $this->db->sql_query_limit($sql, 1);
+        $last_row = $this->db->sql_fetchrow($result);
+        $this->db->sql_freeresult($result);
+
+        if ($last_row === false) {
+            return [
+                'session_id' => $session_id,
+                'is_first_visit' => 1,
+            ];
+        }
+
+        $time_since_last = $time_now - (int)$last_row['visit_time'];
+        if ($time_since_last > $timeout) {
+            return [
+                'session_id' => $session_id,
+                'is_first_visit' => 1,
+            ];
+        }
+
+        return [
+            'session_id' => (string)$last_row['last_session'],
+            'is_first_visit' => 0,
+        ];
+    }
+
+    /**
+     * Génère une session_id dédiée aux sessions regroupées par cookie visiteur stats.
+     * L'ID reste opaque mais change à chaque nouvelle fenêtre de session.
+     */
+    private function build_cookie_tracking_session_id($visitor_cookie_hash, $user_id, $time_now)
+    {
+        $hash = strtolower(trim((string)$visitor_cookie_hash));
+        $uid = (int)$user_id;
+        $time_now = max(0, (int)$time_now);
+
+        return md5('vid|' . $hash . '|' . $uid . '|' . $time_now);
+    }
+
+    /**
+     * Fallback historique sans cookie stats exploitable.
+     */
     private function build_tracking_session_id($native_session_id, $user_ip, $user_id)
     {
         $sid = trim((string)$native_session_id);
@@ -1013,6 +1089,11 @@ HTML;
         }
 
         return md5('fallback|' . microtime(true) . '|' . mt_rand());
+    }
+
+    private function is_valid_visitor_cookie_hash($hash)
+    {
+        return (bool)preg_match('/^[a-f0-9]{64}$/', strtolower(trim((string)$hash)));
     }
 
     /**

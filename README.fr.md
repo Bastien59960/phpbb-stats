@@ -41,6 +41,7 @@ Signaux stricts ou d'observation selon contexte géographique:
 - Collecte résolution, scroll, interactions, webdriver, traces curseur/touch.
 - Cookie visiteur signé `b59_vid` (hashé en base, jamais stocké en clair).
 - États AJAX cookie distingués: absent, invalide, mismatch.
+- Quand ce cookie est présent, il devient l'ancre principale de session côté extension: les pages forum et téléchargements restent regroupés dans la même session même si l'IP change en cours de navigation, tant que le timeout de session n'est pas dépassé.
 
 ### Géolocalisation asynchrone robuste (cron `geo_async`)
 
@@ -58,7 +59,10 @@ Signaux stricts ou d'observation selon contexte géographique:
 
 - Les hits `download/file.php` sont enregistrés dans la même session que les pages HTML via le hook phpBB `core.download_file_send_to_browser_before`.
 - La timeline ACP conserve l'ordre chronologique `page -> téléchargements`, avec referer, UA, IP, géoloc et hostname sur les lignes concernées.
+- La ligne d'entrée de session est aussi rendue dans la chronologie comme entrée `#1`, puis chaque sous-ligne affiche `IP - durée` pour rendre visibles les bascules d'IP dans la même session.
 - Les téléchargements restent visibles dans **Sessions**, mais ils sont exclus des heuristiques purement "page HTML + JS" (`page_count`, signaux absence d'interaction, durée de la page précédente).
+- Les sessions composées uniquement de téléchargements directs affichent désormais des libellés `N/A` explicites pour AJAX, CSS/JS réactions et assets Apache, au lieu d'un faux état "absent".
+- Les cartes de session ACP sont visuellement encadrées selon le verdict: vert (OK ou bot phpBB légitime), orange (suspicion), rouge (signal strict).
 
 ### Aucun DNS synchrone sur le thread web
 

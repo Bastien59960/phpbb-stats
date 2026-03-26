@@ -4,6 +4,14 @@ Toutes les modifications notables de cette extension sont documentées dans ce f
 
 Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+- Le cookie visiteur signé `b59_vid` devient l'ancre principale de session quand il est présent: les pages forum et téléchargements restent regroupés dans la même session même si l'IP change avant le timeout
+- L'ACP **Sessions** affiche désormais une vraie ligne chronologique `#1` pour la page d'entrée, puis chaque ligne de timeline au format `IP - durée` pour rendre les bascules d'IP immédiatement lisibles
+- Les sessions composées uniquement de téléchargements directs affichent des états `N/A` explicites pour AJAX, assets réactions et assets Apache, au lieu d'un diagnostic trompeur "absent"
+- Les cartes de session ACP sont maintenant encadrées visuellement selon le verdict: vert (OK / bot phpBB légitime), orange (suspicion), rouge (signal strict)
+
 ## [1.16.0] - 2026-03-26
 
 ### Added

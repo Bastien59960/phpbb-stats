@@ -54,6 +54,55 @@
 .sessions-table tr:hover { background: #f9f9f9; }
 .sessions-table .session-row { background: #f5f5f5; border-top: 2px solid #ddd; }
 .sessions-table .page-row td { padding-left: 40px; font-size: 13px; color: #666; }
+.sessions-table .page-row .row-side-meta { display: inline; font-size: 11px; line-height: 1.35; }
+.sessions-table .page-row .row-side-ip { font-family: monospace; }
+.sessions-table .page-row .row-side-ip.ip-changed { color: #c0392b; font-weight: bold; }
+.sessions-table .page-row .row-side-ip.ip-same { color: #666; }
+.sessions-table .page-row .row-side-sep { color: #999; padding: 0 4px; }
+.sessions-table .page-row .row-side-duration { color: #888; }
+.sessions-table .session-row.session-state-ok td { background: #f4fbf6; border-top: 3px solid #27ae60; }
+.sessions-table .session-row.session-state-warning td { background: #fff8f1; border-top: 3px solid #e67e22; }
+.sessions-table .session-row.session-state-danger td { background: #fff3f2; border-top: 3px solid #c0392b; }
+.sessions-table .session-details-row.session-state-ok td,
+.sessions-table .page-row.session-state-ok td { background: #fcfffd; }
+.sessions-table .session-details-row.session-state-warning td,
+.sessions-table .page-row.session-state-warning td { background: #fffdfa; }
+.sessions-table .session-details-row.session-state-danger td,
+.sessions-table .page-row.session-state-danger td { background: #fffafa; }
+
+.sessions-table .session-state-ok td:first-child { border-left: 3px solid #27ae60; }
+.sessions-table .session-state-warning td:first-child { border-left: 3px solid #e67e22; }
+.sessions-table .session-state-danger td:first-child { border-left: 3px solid #c0392b; }
+.sessions-table .session-state-ok td:last-child { border-right: 3px solid #27ae60; }
+.sessions-table .session-state-warning td:last-child { border-right: 3px solid #e67e22; }
+.sessions-table .session-state-danger td:last-child { border-right: 3px solid #c0392b; }
+
+.sessions-table .session-row.session-state-ok td:first-child { border-top-left-radius: 12px; }
+.sessions-table .session-row.session-state-ok td:last-child { border-top-right-radius: 12px; }
+.sessions-table .session-row.session-state-warning td:first-child { border-top-left-radius: 12px; }
+.sessions-table .session-row.session-state-warning td:last-child { border-top-right-radius: 12px; }
+.sessions-table .session-row.session-state-danger td:first-child { border-top-left-radius: 12px; }
+.sessions-table .session-row.session-state-danger td:last-child { border-top-right-radius: 12px; }
+
+.sessions-table .last-row.session-state-ok td { border-bottom: 3px solid #27ae60; }
+.sessions-table .last-row.session-state-warning td { border-bottom: 3px solid #e67e22; }
+.sessions-table .last-row.session-state-danger td { border-bottom: 3px solid #c0392b; }
+.sessions-table .last-row.session-state-ok td:first-child { border-bottom-left-radius: 12px; }
+.sessions-table .last-row.session-state-ok td:last-child { border-bottom-right-radius: 12px; }
+.sessions-table .last-row.session-state-warning td:first-child { border-bottom-left-radius: 12px; }
+.sessions-table .last-row.session-state-warning td:last-child { border-bottom-right-radius: 12px; }
+.sessions-table .last-row.session-state-danger td:first-child { border-bottom-left-radius: 12px; }
+.sessions-table .last-row.session-state-danger td:last-child { border-bottom-right-radius: 12px; }
+
+.sessions-table .session-row.session-state-ok:hover td,
+.sessions-table .session-details-row.session-state-ok:hover td,
+.sessions-table .page-row.session-state-ok:hover td { background: #eef8f1; }
+.sessions-table .session-row.session-state-warning:hover td,
+.sessions-table .session-details-row.session-state-warning:hover td,
+.sessions-table .page-row.session-state-warning:hover td { background: #fff5eb; }
+.sessions-table .session-row.session-state-danger:hover td,
+.sessions-table .session-details-row.session-state-danger:hover td,
+.sessions-table .page-row.session-state-danger:hover td { background: #feeeee; }
 
 /* Badges */
 .badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: bold; }
@@ -310,7 +359,7 @@ body.cursor-modal-open { overflow: hidden; }
             </thead>
             <tbody>
             <!-- BEGIN SESSIONS -->
-                <tr class="session-row session-{SESSIONS.BOT_CLASS}" data-type="{SESSIONS.BOT_CLASS}" onclick="toggleDetails(this)" style="cursor: pointer;" title="Cliquez pour voir les détails de diagnostic">
+                <tr class="session-row session-{SESSIONS.BOT_CLASS} {SESSIONS.SESSION_FRAME_CLASS}" data-type="{SESSIONS.BOT_CLASS}" onclick="toggleDetails(this)" style="cursor: pointer;" title="Cliquez pour voir les détails de diagnostic">
                     <td class="session-info">
                         <!-- IF SESSIONS.IS_BOT -->
                             <span class="badge badge-bot">{L_STATS_BADGE_BOT}</span>
@@ -404,12 +453,15 @@ body.cursor-modal-open { overflow: hidden; }
                         <span class="page-count">{SESSIONS.PAGES_COUNT_LABEL}</span>
                     </td>
                 </tr>
-                <tr class="session-details-row session-{SESSIONS.BOT_CLASS}" data-type="{SESSIONS.BOT_CLASS}" style="display: none;">
+                <tr class="session-details-row session-{SESSIONS.BOT_CLASS} {SESSIONS.SESSION_FRAME_CLASS}" data-type="{SESSIONS.BOT_CLASS}" style="display: none;">
                     <td colspan="5" style="padding: 10px 20px 10px 40px; background: #fdfdfd; font-size: 12px; line-height: 1.7; border-bottom: 1px solid #eee;">
                         <div style="max-width: 90%;">
                             <strong style="color: #105289;">Informations de Diagnostic</strong><br>
                             <strong>Reverse DNS :</strong> {SESSIONS.REVERSE_DNS_STATUS}<br>
                             <strong>Forward DNS :</strong> {SESSIONS.FORWARD_DNS_STATUS}<!-- IF SESSIONS.FORWARD_DNS_IPS --> (IPs: {SESSIONS.FORWARD_DNS_IPS})<!-- ENDIF --><br>
+                            <!-- IF SESSIONS.HAS_MULTI_IP -->
+                            <strong>{L_STATS_SESSION_IPS_LABEL}</strong> {SESSIONS.SESSION_IP_LIST}<br>
+                            <!-- ENDIF -->
                             <strong>{L_STATS_SCROLL_LABEL}</strong> <span class="badge {SESSIONS.SCROLL_CLASS}">{SESSIONS.SCROLL_LABEL}</span><br>
                             <!-- IF SESSIONS.RES_BOTH_MISSING -->
                             <strong>{L_STATS_RES_SCREEN_LABEL}</strong> {SESSIONS.RES_SCREEN_PX}<br>
@@ -471,12 +523,29 @@ body.cursor-modal-open { overflow: hidden; }
                         </div>
                     </td>
                 </tr>
+                <!-- BEGIN LANDING_ROW -->
+                <tr class="page-row session-{SESSIONS.BOT_CLASS} {SESSIONS.LANDING_ROW.FRAME_CLASS}<!-- IF SESSIONS.LANDING_ROW.IS_LAST --> last-row<!-- ENDIF -->" data-type="{SESSIONS.BOT_CLASS}">
+                    <td style="text-align:right; color:#888;">
+                        <span class="session-page-index">{SESSIONS.LANDING_PAGE_INDEX}</span>&#8627; {SESSIONS.LANDING_TIME}
+                    </td>
+                    <td style="color:#888; font-size:11px;">
+                        <!-- IF SESSIONS.LANDING_HAS_IP --><span class="row-side-meta row-side-ip ip-same">{SESSIONS.LANDING_IP}</span><span class="row-side-sep">-</span><!-- ENDIF --><span class="row-side-duration">{SESSIONS.LANDING_DURATION}</span>
+                    </td>
+                    <td colspan="3">
+                        <strong>{SESSIONS.LANDING_PAGE}</strong><br>
+                        <a href="{SESSIONS.LANDING_URL}" target="_blank" style="font-size:11px; color:#888; word-break:break-all;">{SESSIONS.LANDING_URL}</a>
+                        <!-- IF SESSIONS.LANDING_HAS_REFERER --><br><span style="font-size:11px; color:#666;">Referer: {SESSIONS.LANDING_REFERER}</span><!-- ENDIF -->
+                    </td>
+                </tr>
+                <!-- END LANDING_ROW -->
                 <!-- BEGIN PAGES -->
-                <tr class="page-row session-{SESSIONS.BOT_CLASS}" data-type="{SESSIONS.BOT_CLASS}">
+                <tr class="page-row session-{SESSIONS.BOT_CLASS} {SESSIONS.PAGES.FRAME_CLASS}<!-- IF SESSIONS.PAGES.IS_LAST --> last-row<!-- ENDIF -->" data-type="{SESSIONS.BOT_CLASS}">
                     <td style="text-align:right; color:#888;">
                         <span class="session-page-index">{SESSIONS.PAGES.PAGE_INDEX}</span>&#8627; {SESSIONS.PAGES.TIME}
                     </td>
-                    <td style="color:#888; font-size:11px;">{SESSIONS.PAGES.DURATION}</td>
+                    <td style="color:#888; font-size:11px;">
+                        <!-- IF SESSIONS.PAGES.HAS_IP --><span class="row-side-meta row-side-ip <!-- IF SESSIONS.PAGES.IP_CHANGED -->ip-changed<!-- ELSE -->ip-same<!-- ENDIF -->">{SESSIONS.PAGES.IP}</span><span class="row-side-sep">-</span><!-- ENDIF --><span class="row-side-duration">{SESSIONS.PAGES.DURATION}</span>
+                    </td>
                     <td colspan="3">
                         <strong>{SESSIONS.PAGES.TITLE}</strong><br>
                         <a href="{SESSIONS.PAGES.URL}" target="_blank" style="font-size:11px; color:#888; word-break:break-all;">{SESSIONS.PAGES.URL}</a>

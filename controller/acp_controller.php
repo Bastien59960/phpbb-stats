@@ -347,7 +347,7 @@ class acp_controller
         // Plafond global : évite l'OOM quand une session bot accumule des milliers de pages.
         // 15 000 lignes × ~500 octets/ligne ≈ 7,5 Mo, bien en-dessous de la limite PHP de 128 Mo.
         $pages_query_limit = max(500, (int)($limit * 30));
-        $sql_pages = 'SELECT log_id, session_id, user_id, page_url, page_title, visit_time, duration, referer, screen_res'
+        $sql_pages = 'SELECT log_id, session_id, user_id, user_ip, page_url, page_title, visit_time, duration, referer, screen_res'
                     . $extra_ajax_columns
                     . $extra_cookie_columns
                     . $extra_cookie_debug_columns
@@ -592,6 +592,22 @@ class acp_controller
                 $landing_url = '-';
             }
 
+            $download_only_session = $this->is_download_only_session($pages, $landing_url);
+            $session_ips = [];
+            foreach ($pages as $page_row) {
+                $page_ip = trim((string)($page_row['user_ip'] ?? ''));
+                if ($page_ip !== '') {
+                    $session_ips[$page_ip] = true;
+                }
+            }
+            $landing_ip = trim((string)($row['user_ip'] ?? ''));
+            if ($landing_ip !== '') {
+                $session_ips[$landing_ip] = true;
+            }
+            $session_ip_list = implode(', ', array_keys($session_ips));
+            $session_ip_count = count($session_ips);
+            $session_has_multi_ip = ($session_ip_count > 1);
+
             // Agrégation session complète:
             // - scroll = vrai si au moins une page de la session a un signal
             // - résolution cookie = dernière non vide vue dans la session
@@ -701,6 +717,11 @@ class acp_controller
                 $res_compare_label = $this->user->lang('STATS_RES_COMPARE_PARTIAL_AJAX_ONLY');
                 $res_compare_class = 'res-compare-mid';
             }
+            if ($download_only_session) {
+                $res_ajax_px = $this->user->lang('STATS_RES_AJAX_NOT_EXPECTED_DOWNLOAD');
+                $res_compare_label = $this->user->lang('STATS_RES_COMPARE_NOT_EXPECTED_DOWNLOAD');
+                $res_compare_class = 'res-compare-na';
+            }
 
             $visitor_cookie_present = $has_cookie_column && $this->is_valid_visitor_cookie_hash($visitor_cookie_hash);
             $cookie_status_label = $visitor_cookie_present
@@ -726,6 +747,9 @@ class acp_controller
             $cookie_ajax_mismatch = false;
             if (!$has_cookie_debug_columns) {
                 $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_UNAVAILABLE');
+                $cookie_ajax_class = 'diag-cookie-na';
+            } elseif ($download_only_session) {
+                $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_NOT_EXPECTED_DOWNLOAD');
                 $cookie_ajax_class = 'diag-cookie-na';
             } elseif ($visitor_cookie_ajax_state === 0) {
                 $cookie_ajax_label = $this->user->lang('STATS_VISITOR_COOKIE_AJAX_NONE_HINT');
@@ -810,6 +834,9 @@ class acp_controller
             if (!$has_reactions_probe_columns) {
                 $reactions_assets_label = $this->user->lang('STATS_REACTIONS_ASSETS_UNAVAILABLE');
                 $reactions_assets_class = 'diag-cookie-na';
+            } elseif ($download_only_session) {
+                $reactions_assets_label = $this->user->lang('STATS_REACTIONS_ASSETS_NOT_EXPECTED_DOWNLOAD');
+                $reactions_assets_class = 'diag-cookie-na';
             } else {
                 $reactions_expected = (int)($row['reactions_extension_expected'] ?? 0);
                 $reactions_css_seen = (int)($row['reactions_css_seen'] ?? 0);
@@ -846,6 +873,14 @@ class acp_controller
 
             if (!$has_apache_asset_columns) {
                 $apache_assets_label = $this->user->lang('STATS_APACHE_ASSETS_UNAVAILABLE');
+                $apache_assets_class = 'diag-cookie-na';
+                $apache_assets_ready = 0;
+                $apache_banner_hits = 0;
+                $apache_rank_hits = 0;
+                $apache_avatar_hits = 0;
+                $apache_asset_scan_label = '-';
+            } elseif ($download_only_session) {
+                $apache_assets_label = $this->user->lang('STATS_APACHE_ASSETS_NOT_EXPECTED_DOWNLOAD');
                 $apache_assets_class = 'diag-cookie-na';
                 $apache_assets_ready = 0;
                 $apache_banner_hits = 0;
@@ -988,10 +1023,19 @@ class acp_controller
             }
 
             $signals_class = $row['is_bot'] ? $this->classify_signals($row['signals'] ?? '') : ['type' => 'none', 'score' => 0];
+            $session_frame_class = 'session-state-ok';
+            if ((int)$row['is_bot'] === 1 && !$is_phpbb_bot) {
+                $session_frame_class = ($signals_class['type'] === 'strict')
+                    ? 'session-state-danger'
+                    : 'session-state-warning';
+            }
 
             $this->template->assign_block_vars('SESSIONS', [
                 'SESSION_ID'        => substr($session_id, 0, 8) . '...',
                 'IP'                => $row['user_ip'],
+                'HAS_MULTI_IP'      => $session_has_multi_ip ? 1 : 0,
+                'SESSION_IP_LIST'   => htmlspecialchars($session_ip_list, ENT_COMPAT, 'UTF-8'),
+                'SESSION_IP_COUNT'  => $session_ip_count,
                 'HOSTNAME'          => htmlspecialchars($hostname_display, ENT_COMPAT, 'UTF-8'),
                 'REVERSE_DNS_STATUS'=> $reverse_dns_status,
                 'FORWARD_DNS_STATUS'=> $forward_dns_status,
@@ -1043,6 +1087,7 @@ class acp_controller
                 'IS_GUEST'      => ($row['user_id'] <= 1 && !$row['is_bot']) ? 1 : 0,
                 'IS_BOT'        => (int)$row['is_bot'],
                 'BOT_CLASS'     => ($row['is_bot']) ? ($is_phpbb_bot ? 'phpbb-bot' : 'bot') : 'human',
+                'SESSION_FRAME_CLASS' => $session_frame_class,
                 'BOT_SOURCE'    => htmlspecialchars($bot_source, ENT_COMPAT, 'UTF-8'),
                 'SIGNALS'       => htmlspecialchars($row['signals'] ?? '', ENT_COMPAT, 'UTF-8'),
                 'SIGNALS_DESC'  => $this->format_signals_description($row['signals'] ?? ''),
@@ -1051,6 +1096,12 @@ class acp_controller
                 'START_TIME'    => $this->user->format_date((int)($row['visit_time'] ?? 0)),
                 'LANDING_PAGE'  => htmlspecialchars($landing_title, ENT_COMPAT, 'UTF-8'),
                 'LANDING_URL'   => htmlspecialchars($landing_url, ENT_COMPAT, 'UTF-8'),
+                'LANDING_TIME'  => $this->user->format_date((int)($row['visit_time'] ?? 0), 'H:i:s'),
+                'LANDING_DURATION' => $this->format_duration($row['duration'] ?? 0),
+                'LANDING_IP'    => htmlspecialchars($landing_ip, ENT_COMPAT, 'UTF-8'),
+                'LANDING_HAS_IP' => ($landing_ip !== '') ? 1 : 0,
+                'LANDING_REFERER' => trim((string)($row['referer'] ?? '')) !== '' ? $this->format_referer($row['referer']) : '',
+                'LANDING_HAS_REFERER' => trim((string)($row['referer'] ?? '')) !== '' ? 1 : 0,
                 'REFERER'       => $this->format_referer($row['referer']),
                 'REFERER_TYPE'  => htmlspecialchars($row['referer_type'] ?? 'Direct', ENT_COMPAT, 'UTF-8'),
                 'PAGE_COUNT'    => (int)$row['page_count'],
@@ -1089,18 +1140,26 @@ class acp_controller
             // Assigner les pages de la session (à partir de la 2ème)
             // Afficher 50 pages max dans la liste de la session (la page de landing est déjà affichée).
             // Au-delà, seul le compteur total (PAGE_COUNT) est pertinent.
+            $visible_pages = [];
             $first = true;
-            $page_index = 1;
-            $pages_shown = 0;
             foreach ($pages as $page) {
                 if ($first) {
                     $first = false;
-                    $page_index = 2;
                     continue; // Skip first page (already shown as landing)
                 }
-                if ($pages_shown >= 50) {
+                if (count($visible_pages) >= 50) {
                     break;
                 }
+                $visible_pages[] = $page;
+            }
+
+            $page_index = 2;
+            $visible_page_count = count($visible_pages);
+            $this->template->assign_block_vars('SESSIONS.LANDING_ROW', [
+                'FRAME_CLASS' => $session_frame_class,
+                'IS_LAST' => ($visible_page_count === 0) ? 1 : 0,
+            ]);
+            foreach ($visible_pages as $visible_index => $page) {
                 $page_title = trim((string)($page['page_title'] ?? ''));
                 if ($page_title === '') {
                     $page_title = '-';
@@ -1110,17 +1169,23 @@ class acp_controller
                     $page_url = '-';
                 }
                 $page_referer = trim((string)($page['referer'] ?? ''));
+                $page_ip = trim((string)($page['user_ip'] ?? ''));
+                $show_page_ip = ($page_ip !== '');
                 $this->template->assign_block_vars('SESSIONS.PAGES', [
                     'PAGE_INDEX' => $page_index,
                     'TITLE'     => htmlspecialchars($page_title, ENT_COMPAT, 'UTF-8'),
                     'URL'       => htmlspecialchars($page_url, ENT_COMPAT, 'UTF-8'),
                     'TIME'      => $this->user->format_date($page['visit_time'], 'H:i:s'),
                     'DURATION'  => $this->format_duration($page['duration']),
+                    'FRAME_CLASS' => $session_frame_class,
+                    'IS_LAST'   => ($visible_index === ($visible_page_count - 1)) ? 1 : 0,
+                    'HAS_IP'    => $show_page_ip ? 1 : 0,
+                    'IP'        => htmlspecialchars($page_ip, ENT_COMPAT, 'UTF-8'),
+                    'IP_CHANGED'=> ($page_ip !== '' && $page_ip !== $landing_ip) ? 1 : 0,
                     'HAS_REFERER' => ($page_referer !== '') ? 1 : 0,
                     'REFERER'   => ($page_referer !== '') ? $this->format_referer($page_referer) : '',
                 ]);
                 $page_index++;
-                $pages_shown++;
             }
         }
     }
@@ -1403,6 +1468,55 @@ class acp_controller
     private function get_apache_asset_idle_seconds()
     {
         return max(120, (int)\bastien59960\stats\cron\task\geo_async::APACHE_ASSET_IDLE_SECONDS);
+    }
+
+    /**
+     * Une session "download-only" ne contient que des hits `download/file.php`.
+     * Dans ce cas l'ACP doit éviter de présenter l'absence d'AJAX/CSS/JS comme un échec.
+     *
+     * @param array<int, array<string, mixed>> $pages
+     */
+    private function is_download_only_session(array $pages, $landing_url)
+    {
+        $urls = [];
+        foreach ($pages as $page) {
+            $url = trim((string)($page['page_url'] ?? ''));
+            if ($url !== '') {
+                $urls[] = $url;
+            }
+        }
+
+        $landing_url = trim((string)$landing_url);
+        if ($landing_url !== '' && $landing_url !== '-') {
+            $urls[] = $landing_url;
+        }
+
+        if (empty($urls)) {
+            return false;
+        }
+
+        foreach ($urls as $url) {
+            if (!$this->is_download_file_url($url)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function is_download_file_url($url)
+    {
+        $value = strtolower(trim((string)$url));
+        if ($value === '') {
+            return false;
+        }
+
+        $path = parse_url($value, PHP_URL_PATH);
+        if (!is_string($path) || $path === '') {
+            $path = $value;
+        }
+
+        return ($path === '/download/file.php' || $path === 'download/file.php');
     }
 
     /**
