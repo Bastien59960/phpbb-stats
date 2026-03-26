@@ -10,12 +10,14 @@ Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/)
 - Journalisation des téléchargements de pièces jointes `download/file.php` dans la timeline **Sessions** via le hook phpBB `core.download_file_send_to_browser_before`
 - Affichage ACP du referer pour chaque entrée de timeline et conservation de l'ordre chronologique stable `visit_time, log_id`
 - Backfill informatif par session dans `geo_async` à partir des logs Apache récents pour compter les chargements de bannière forum, images de rangs et avatars
+- Nouveau signal `direct_resource_page_fallback_no_bootstrap` dérivé des logs Apache pour le motif `ressource opaque directe -> fallback HTML -> aucun bootstrap`
 - Migration `release_1_16_0` avec colonnes `apache_banner_hits`, `apache_rank_hits`, `apache_avatar_hits`, `apache_asset_scan_time`
 
 ### Changed
 - L'ACP distingue désormais clairement `Reverse DNS en attente` (cron pas encore passé) de `Aucun nom d'hôte trouvé` (PTR absent après passage du cron)
 - Le bouton **Effacer les statistiques** et ses messages indiquent explicitement que le cache GeoIP / Reverse DNS est conservé
 - Les signaux `cursor_no_movement` et `cursor_no_clicks` ne s'appliquent plus aux terminaux non desktop
+- Les cas `direct_resource_page_fallback_no_bootstrap` restent en `_shadow` sur PTR résidentiel, puis passent en strict sur `view=print`, récidive IP, absence de PTR ou PTR non résidentiel
 
 ### Fixed
 - Le cron `geo_async` persiste correctement le hostname dans le cache GeoIP et retraitera aussi les lignes dont le pays est déjà connu mais dont le reverse DNS manque encore

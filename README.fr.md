@@ -79,6 +79,9 @@ Le `cron_lock` phpBB reste orphelin pendant toute cette durée.
 ### Bridge sécurité / Fail2ban
 
 - Écrit des lignes `PHPBB-SIGNAL` (signaux comportementaux) dans `security_audit.log`.
+- Le cron `geo_async` ajoute aussi le signal `direct_resource_page_fallback_no_bootstrap` à partir des logs Apache pour le motif `ressource opaque directe -> fallback HTML -> aucun bootstrap`.
+  - `_shadow` si le PTR ressemble à une IP résidentielle.
+  - strict si `view=print`, récidive IP, absence de PTR (`hostname='-'`) ou PTR non résidentiel.
 - Script CLI `bin/cross_ip_audit.php` pour détecter le téléchargement distribué cross-IP (`PHPBB-XIP`).
 - Snippets Fail2ban inclus: `fail2ban/phpbb-guest-cookie-clone.conf`, `fail2ban/phpbb-crossip-soft.conf`, `fail2ban/phpbb-crossip-hard.conf`, `fail2ban/jail.guest-cookie-clone.local.example`, `fail2ban/jail.crossip.local.example`.
 
@@ -125,6 +128,7 @@ Dans **Extensions > Réglages des Statistiques**:
 Checklist production:
 
 - Vérifier que le process PHP peut écrire dans le log sécurité.
+- Si le cron système tourne en CLI avec un autre utilisateur que le web, utiliser un chemin writable par les deux contextes pour `bastien59_stats_audit_log_path` (ex: `store/security_audit.log`).
 - Activer vos jails Fail2ban associées.
 - Vérifier que vos tâches cron phpBB tournent régulièrement.
 

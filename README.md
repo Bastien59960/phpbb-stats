@@ -62,6 +62,9 @@ Strict and observation signals depending on geo context:
 ### Security bridge / Fail2ban
 
 - Writes `PHPBB-SIGNAL` lines (behavior signals) to `security_audit.log`.
+- `geo_async` also emits the `direct_resource_page_fallback_no_bootstrap` signal from Apache logs for the pattern `opaque direct resource -> HTML fallback -> no browser bootstrap`.
+  - `_shadow` when the PTR looks residential.
+  - strict when `view=print`, the IP recurs, there is no PTR (`hostname='-'`), or the PTR is non-residential.
 - `bin/cross_ip_audit.php` detects distributed cross-IP attachment download patterns (`PHPBB-XIP`).
 - Included Fail2ban snippets: `fail2ban/phpbb-guest-cookie-clone.conf`, `fail2ban/phpbb-crossip-soft.conf`, `fail2ban/phpbb-crossip-hard.conf`, `fail2ban/jail.guest-cookie-clone.local.example`, `fail2ban/jail.crossip.local.example`.
 
@@ -108,6 +111,7 @@ In **Extensions > Stats Settings**:
 Production checklist:
 
 - Ensure PHP process can write to security log.
+- If system cron runs in CLI under a different user than the web server, point `bastien59_stats_audit_log_path` to a path writable by both contexts (for example `store/security_audit.log`).
 - Enable matching Fail2ban jails.
 - Ensure phpBB cron runs regularly.
 
