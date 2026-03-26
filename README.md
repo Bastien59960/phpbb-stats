@@ -18,7 +18,7 @@ As AI training demand grows, genuinely human-written forum content becomes more 
 ### Operations-focused ACP
 
 - Overview with human/bot counters, traffic sources, OS, devices, and screen resolutions.
-- **Sessions** tab with timeline, visited pages, cookie/AJAX diagnostics, signals, and country/flag display.
+- **Sessions** tab with timeline, visited pages, attachment downloads, cookie/AJAX diagnostics, signals, and country/flag display.
 - **Pages** tab (top pages + full referers).
 - **Map** tab (jVectorMap) for geographic distribution.
 - **Behavior** tab with members/guests/bots comparison, learned profiles, outlier signals, cursor capture health, and recent cases with SVG traces.
@@ -47,9 +47,17 @@ Strict and observation signals depending on geo context:
 - IP resolution via `ip-api.com` with DB caching.
 - IPv4 cache by full IP and by configurable prefix (default `/24`, key format `v4:a.b.c.n/24`) to avoid redundant live lookups while keeping good country precision.
 - Configurable cache TTL (default 45 days).
+- ACP now distinguishes **Reverse DNS pending** (cron has not processed the IP yet) from **no PTR found** (cron already ran and returned a negative result).
 - Safe throttling policy: 40 req/min target, 45 req/min service limit, fixed 5s inter-batch pause, additional quota-aware pauses.
 - On HTTP 429: live lookup loop stops early and remaining IPs are retried on next run.
 - CLI progress output for batch and global progression.
+- The same cron also backfills per-session Apache asset counters from `forum_access.log*` to count forum banner, rank image, and avatar loads.
+
+### Unified page + download timeline
+
+- `download/file.php` hits are logged into the same tracked session as HTML pages through the phpBB hook `core.download_file_send_to_browser_before`.
+- The ACP timeline keeps chronological `page -> downloads` ordering and exposes referer, UA, IP, geolocation, and hostname on those entries as well.
+- Downloads stay visible in **Sessions** but are excluded from HTML/JS-only behavior scoring (`page_count`, no-interaction style rules, previous page duration updates).
 
 ### Security bridge / Fail2ban
 
@@ -148,7 +156,7 @@ php ext/bastien59960/stats/bin/backfill_reactions_assets.php --apply --window=12
 
 Main tables:
 
-- `bastien59_stats`: sessions/pages, signals, AJAX, cookie hash, cursor metrics, diagnostics.
+- `bastien59_stats`: sessions/pages, signals, AJAX, cookie hash, cursor metrics, diagnostics, attachment downloads, and per-session Apache counters (`apache_*_hits`, `apache_asset_scan_time`).
 - `bastien59_stats_geo_cache`: geolocation cache + IPv4 subnet keys (`/24` by default, configurable in ACP).
 - `bastien59_stats_behavior_profile`: learned behavior profiles.
 - `bastien59_stats_behavior_seen`: dedup table for learned sessions.
@@ -165,6 +173,11 @@ Main tables:
 - Geo map relies on jVectorMap assets loaded from CDN.
 - Geolocation depends on `ip-api.com` availability.
 - Network blocking is delegated to Fail2ban (not performed directly by this extension).
+- Banner/rank/avatar Apache counters are informational only: they are reconstructed afterward from recent Apache logs and therefore do not cover history older than retained logs.
+
+## Operational note
+
+- The ACP **Clear Statistics** button only deletes `bastien59_stats`. The GeoIP / Reverse DNS cache table (`bastien59_stats_geo_cache`) is intentionally preserved.
 
 ## License
 

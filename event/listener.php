@@ -135,12 +135,37 @@ class listener implements EventSubscriberInterface
     {
         return [
             'core.page_header_after' => 'log_visit',
+            'core.download_file_send_to_browser_before' => 'log_attachment_download',
             'core.page_footer'       => 'inject_resolution_script',
             'core.obtain_users_online_string_modify' => 'split_online_users',
         ];
     }
 
     public function log_visit($event)
+    {
+        $this->log_request_entry([
+            'page_title' => isset($event['page_title']) ? (string)$event['page_title'] : '',
+            'page_name' => (string)($this->user->page['page_name'] ?? ''),
+            'allow_behavior_detection' => true,
+        ]);
+    }
+
+    public function log_attachment_download($event)
+    {
+        $attachment = (isset($event['attachment']) && is_array($event['attachment'])) ? $event['attachment'] : [];
+        $attach_id = (int)($event['attach_id'] ?? ($attachment['attach_id'] ?? 0));
+        $thumbnail = !empty($event['thumbnail']);
+        $mode = trim((string)($event['mode'] ?? ''));
+
+        $this->log_request_entry([
+            'page_title' => $this->build_attachment_page_title($attach_id, $attachment, $thumbnail, $mode),
+            'page_name' => 'download/file.php',
+            'allow_behavior_detection' => false,
+            'is_download' => true,
+        ]);
+    }
+
+    private function log_request_entry(array $context = [])
     {
         // Ne pas logger les requêtes AJAX
         if ($this->request->is_ajax()) {
@@ -152,6 +177,8 @@ class listener implements EventSubscriberInterface
             return;
         }
 
+        $allow_behavior_detection = !empty($context['allow_behavior_detection']);
+        $is_download = !empty($context['is_download']);
         $time_now = time();
         $user_ip = (string)$this->user->ip;
         $native_session_id = (string)($this->user->session_id ?? '');
@@ -167,7 +194,7 @@ class listener implements EventSubscriberInterface
                 FROM ' . $this->table_prefix . 'bastien59_stats
                 WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
                 AND user_ip = \'' . $this->db->sql_escape($user_ip) . '\'
-                ORDER BY visit_time DESC';
+                ORDER BY visit_time DESC, log_id DESC';
 
         $result = $this->db->sql_query_limit($sql, 1);
         $last_row = $this->db->sql_fetchrow($result);
@@ -187,41 +214,51 @@ class listener implements EventSubscriberInterface
             }
         }
 
-        // 2. Mise à jour de la durée de la page PRÉCÉDENTE (même IP, même session)
-        if ($last_row && isset($last_row['log_id']) && isset($last_row['visit_time'])) {
-            $duration = $time_now - (int)$last_row['visit_time'];
-            // Durée raisonnable (max = timeout + marge)
-            if ($duration >= 0 && $duration <= $session_timeout) {
-                $sql_update = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
-                               SET duration = ' . (int)$duration . '
-                               WHERE log_id = ' . (int)$last_row['log_id'];
-                $this->db->sql_query($sql_update);
+        // 2. Mise à jour de la durée de la dernière page HTML précédente.
+        // Les téléchargements de PJ ne doivent pas écraser la durée de consultation
+        // de la page qui les a déclenchés.
+        if (!$is_download) {
+            $sql_duration = 'SELECT log_id, visit_time
+                             FROM ' . $this->table_prefix . 'bastien59_stats
+                             WHERE session_id = \'' . $this->db->sql_escape($session_id) . '\'
+                             AND user_ip = \'' . $this->db->sql_escape($user_ip) . '\'
+                             AND LOWER(page_url) NOT LIKE \'%download/file.php%\'
+                             ORDER BY visit_time DESC, log_id DESC';
+            $result_duration = $this->db->sql_query_limit($sql_duration, 1);
+            $duration_row = $this->db->sql_fetchrow($result_duration);
+            $this->db->sql_freeresult($result_duration);
+
+            if ($duration_row && isset($duration_row['log_id']) && isset($duration_row['visit_time'])) {
+                $duration = $time_now - (int)$duration_row['visit_time'];
+                if ($duration >= 0 && $duration <= $session_timeout) {
+                    $sql_update = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
+                                   SET duration = ' . (int)$duration . '
+                                   WHERE log_id = ' . (int)$duration_row['log_id'];
+                    $this->db->sql_query($sql_update);
+                }
             }
         }
 
         // 3. Collecter les données
-        // raw_variable() retourne la valeur sans htmlspecialchars()
-        // (request->server() applique htmlspecialchars, transformant & en &amp;
-        //  ce qui causait des faux positifs sur html_entities_in_url)
-        $page_url = $this->request->raw_variable('REQUEST_URI', '', \phpbb\request\request_interface::SERVER);
-        $referer = $this->request->raw_variable('HTTP_REFERER', '', \phpbb\request\request_interface::SERVER);
+        $page_url = isset($context['page_url'])
+            ? (string)$context['page_url']
+            : $this->request->raw_variable('REQUEST_URI', '', \phpbb\request\request_interface::SERVER);
+        $referer = isset($context['referer'])
+            ? (string)$context['referer']
+            : $this->request->raw_variable('HTTP_REFERER', '', \phpbb\request\request_interface::SERVER);
 
         // Récupérer le vrai referer original passé via _r (redirect cross-domain)
         $original_ref = $this->request->variable('_r', '', true);
         if (!empty($original_ref)) {
             $referer = $original_ref;
-            // Nettoyer _r de l'URL stockée
             $page_url = preg_replace('/[?&]_r=[^&]*/', '', $page_url);
             $page_url = preg_replace('/\?&/', '?', $page_url);
             $page_url = rtrim($page_url, '?');
         }
 
-        // Récupérer le vrai titre de la page depuis l'événement
-        // (core.page_header_after fournit page_title dans $event)
-        $page_title = isset($event['page_title']) ? $event['page_title'] : '';
-        if (empty($page_title)) {
-            // Fallback : déduire le titre depuis l'URL
-            $page_name = $this->user->page['page_name'] ?? '';
+        $page_title = trim((string)($context['page_title'] ?? ''));
+        if ($page_title === '') {
+            $page_name = trim((string)($context['page_name'] ?? ''));
             $page_title = $this->get_page_title_from_url($page_name, $page_url);
         }
 
@@ -234,7 +271,6 @@ class listener implements EventSubscriberInterface
         // Couche 1 : Protection bots légitimes (phpBB natif + whitelist + vérif rDNS)
         // Couche 2 : Détection comportementale (signaux impossibles à voir via Apache)
 
-        // 1. Vérifier si bot légitime connu (phpBB natif + notre whitelist)
         $is_legit_bot = !empty($this->user->data['is_bot']);
         $claimed_bot = '';
         if (!$is_legit_bot) {
@@ -248,54 +284,47 @@ class listener implements EventSubscriberInterface
             }
         }
 
-        // 2. Si UA prétend être un bot légitime (whitelist) mais PAS reconnu par phpBB natif
-        //    → vérifier reverse DNS pour détecter les imposteurs en temps réel
         $fake_bot_signals = [];
         $rdns_fail_reason = '';
+        $hostname_check = null;
         if ($is_legit_bot && empty($this->user->data['is_bot'])) {
             $hostname_check = $this->get_cached_hostname($this->user->ip);
             if (!$this->verify_bot_rdns($claimed_bot, $hostname_check, $rdns_fail_reason)) {
-                // IMPOSTEUR ! UA prétend être un bot légitime mais rDNS ne correspond pas
                 $fake_bot_signals = ['fake_legit_bot'];
-                $is_legit_bot = false; // Pas un vrai bot légitime → continuer détection
+                $is_legit_bot = false;
             }
         }
 
-        // Géolocalisation de l'IP (seulement pour la première visite de session)
-        // Pré-calculée ici pour pouvoir appliquer des exclusions géographiques
-        // dans certaines détections comportementales.
         $geo_data = ['country_code' => '', 'country_name' => '', 'hostname' => ''];
         if ($is_first_visit) {
-            // Mode async: jamais d'appel réseau géoloc sur le thread web.
-            // La résolution IP est effectuée par la tâche cron dédiée.
             $geo_data = $this->geolocate_ip($this->user->ip, false);
         }
 
-        // 3. Détection UA + comportementale (seulement pour visiteurs non-bots-légitimes)
         $is_bot = $is_legit_bot ? 1 : 0;
         $bot_source = $is_legit_bot ? 'phpbb' : '';
         $all_signals = [];
         $actionable_signals = [];
 
         if (!$is_legit_bot) {
-            // Couche 2a : Détection par User-Agent (versions anciennes, patterns bots, anomalies)
             $ua_signals = $this->detect_bot($user_agent);
-            // no_browser_signature est réservé aux UA absents/inexploitables.
-            $strong_ua_signals = array_filter($ua_signals, function($s) { return $s !== 'no_browser_signature'; });
+            $strong_ua_signals = array_filter($ua_signals, function ($s) {
+                return $s !== 'no_browser_signature';
+            });
 
-            // Couche 2b : Détection comportementale (signaux impossibles à voir via Apache)
-            $behavior_signals = $this->detect_bot_behavior(
-                $page_url,
-                $referer,
-                $is_first_visit,
-                $screen_res,
-                $session_id,
-                $user_agent,
-                (string)($geo_data['country_code'] ?? ''),
-                $visitor_cookie_hash
-            );
+            $behavior_signals = [];
+            if ($allow_behavior_detection) {
+                $behavior_signals = $this->detect_bot_behavior(
+                    $page_url,
+                    $referer,
+                    $is_first_visit,
+                    $screen_res,
+                    $session_id,
+                    $user_agent,
+                    (string)($geo_data['country_code'] ?? ''),
+                    $visitor_cookie_hash
+                );
+            }
 
-            // Combiner : faux bot légitime + UA + comportementaux
             $all_signals = array_merge($fake_bot_signals, $ua_signals, $behavior_signals);
             $actionable_signals = array_values(array_filter($all_signals, function ($sig) {
                 return !preg_match('/_shadow$/', (string)$sig);
@@ -307,11 +336,8 @@ class listener implements EventSubscriberInterface
             }
         }
 
-        // Classification du referer
         $referer_type = $this->classify_referer($referer);
 
-        // 4. Reclassification rétroactive:
-        // si la session est désormais bot, marquer les lignes précédentes de cette session en bot.
         if ($is_bot === 1 && !empty($actionable_signals) && !$is_first_visit) {
             $sql_reclass = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
                             SET is_bot = 1,
@@ -325,14 +351,11 @@ class listener implements EventSubscriberInterface
             $this->db->sql_query($sql_reclass);
         }
 
-        // 5. Écriture security_audit.log (bridge vers fail2ban)
-        // Ne log que les bots avec signaux détectés (pas phpBB natifs légitimes)
         $audit_signals = $this->filter_security_audit_signals_by_country(
             $actionable_signals,
             (string)($geo_data['country_code'] ?? '')
         );
         if (!empty($audit_signals)) {
-            // Compter les pages dans la session pour le log
             $page_count = 0;
             if (!$is_first_visit) {
                 $sql_cnt = 'SELECT COUNT(*) as cnt FROM ' . $this->table_prefix . 'bastien59_stats
@@ -343,16 +366,20 @@ class listener implements EventSubscriberInterface
             }
 
             $this->write_security_audit(
-                $this->user->ip, $session_id,
+                $this->user->ip,
+                $session_id,
                 (int)$this->user->data['user_id'],
-                $audit_signals, $user_agent, $page_url,
-                $screen_res, $page_count,
+                $audit_signals,
+                $user_agent,
+                $page_url,
+                $screen_res,
+                $page_count,
                 $hostname_check ?? ($geo_data['hostname'] ?? ''),
-                $claimed_bot, $rdns_fail_reason
+                $claimed_bot,
+                $rdns_fail_reason
             );
         }
 
-        // 6. Enregistrement
         $sql_ary = [
             'session_id'     => $session_id,
             'user_id'        => (int)$this->user->data['user_id'],
@@ -407,23 +434,16 @@ class listener implements EventSubscriberInterface
         $this->db->sql_query($sql);
         $this->current_log_id = (int)$this->db->sql_nextid();
 
-        // Apprentissage comportemental:
-        // construit un profil de navigation normal à partir des membres connectés.
         if ((int)$this->user->data['user_id'] > 1 && (int)$is_bot === 0) {
             $this->learn_registered_behavior($session_id, $user_agent, $screen_res);
         }
 
-        // 7. Signal différé CN: pas d'interaction après 5 minutes.
-        // Sans cron: traité à chaque requête (petit lot), émission différée au prochain hit.
         $this->emit_cn_no_interaction_signals($time_now);
 
-        // 8. Nettoyage automatique (1 chance sur 100)
-        // Rétention différenciée : 5 jours pour les bots, 30 jours pour les humains
         if (mt_rand(1, 100) === 1) {
             $retention_humans = (int)($this->config['bastien59_stats_retention'] ?? 30);
             $retention_bots = (int)($this->config['bastien59_stats_retention_bots'] ?? 5);
 
-            // Supprimer les vieux bots (5 jours)
             if ($retention_bots > 0) {
                 $cutoff_bots = time() - ($retention_bots * 86400);
                 $sql_clean = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats
@@ -431,7 +451,6 @@ class listener implements EventSubscriberInterface
                 $this->db->sql_query($sql_clean);
             }
 
-            // Supprimer les vieux humains (30 jours)
             if ($retention_humans > 0) {
                 $cutoff_humans = time() - ($retention_humans * 86400);
                 $sql_clean = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats
@@ -1187,6 +1206,38 @@ HTML;
         return $page_name ?: 'Index';
     }
 
+    private function build_attachment_page_title($attach_id, array $attachment, $thumbnail = false, $mode = '')
+    {
+        $attach_id = max(0, (int)$attach_id);
+        $filename = trim((string)($attachment['real_filename'] ?? ''));
+
+        if ($filename !== '') {
+            return $thumbnail ? ($filename . ' [thumb]') : $filename;
+        }
+
+        if ($attach_id > 0) {
+            return 'download/file.php?id=' . $attach_id . ($thumbnail ? '&t=1' : '');
+        }
+
+        return ($mode !== '') ? ('download/file.php?mode=' . $mode) : 'download/file.php';
+    }
+
+    private function is_attachment_download_page_url($page_url)
+    {
+        $raw = trim((string)$page_url);
+        if ($raw === '') {
+            return false;
+        }
+
+        $path = parse_url($raw, PHP_URL_PATH);
+        if (!is_string($path) || $path === '') {
+            $path = $raw;
+        }
+
+        $path = strtolower($path);
+        return (substr($path, -18) === '/download/file.php' || $path === 'download/file.php');
+    }
+
     /**
      * Détection des bots par User-Agent (versions anciennes, patterns, anomalies)
      * @return array Liste des signaux UA détectés (vide = UA semble légitime)
@@ -1232,7 +1283,7 @@ HTML;
         foreach ($bot_keywords as $pattern) {
             if (strpos($ua_lower, $pattern) !== false) {
                 $clean_pattern = trim($pattern, '/;');
-                
+
                 // SI c'est un ami, on change le nom du signal
                 if ($is_friend) {
                     $signals[] = 'legit_ua_pattern:' . $clean_pattern;
@@ -1357,6 +1408,9 @@ HTML;
         }
 
         $page_lower = strtolower($page_url);
+        if ($this->is_attachment_download_page_url($page_lower)) {
+            return $signals;
+        }
         $snapshot = $this->get_session_behavior_snapshot($session_id);
         $page_count = (int)$snapshot['page_count'];
         $has_res_cookie = !empty($screen_res) || (int)$snapshot['has_screen_res'] === 1;
@@ -1797,7 +1851,7 @@ HTML;
         }
 
         $fields = [
-            'COUNT(*) AS page_count',
+            "SUM(CASE WHEN LOWER(page_url) LIKE '%download/file.php%' THEN 0 ELSE 1 END) AS page_count",
             "MAX(CASE WHEN screen_res <> '' THEN 1 ELSE 0 END) AS has_screen_res",
             "MAX(CASE WHEN country_code <> '' THEN UPPER(country_code) ELSE '' END) AS country_code_any",
         ];
@@ -2134,29 +2188,10 @@ HTML;
             return;
         }
 
-        $interaction_checks = [];
-        if ($this->has_ajax_telemetry_columns()) {
-            $interaction_checks[] = 's2.scroll_down_ajax = 1';
-        }
-        if ($this->has_ajax_advanced_columns()) {
-            $interaction_checks[] = 's2.ajax_interact_mask > 0';
-            $interaction_checks[] = 's2.ajax_scroll_events > 0';
-            $interaction_checks[] = 's2.ajax_first_scroll_ms > 0';
-        }
-        if ($this->has_cursor_columns()) {
-            $interaction_checks[] = 's2.cursor_track_points > 0';
-            $interaction_checks[] = 's2.cursor_click_count > 0';
-        }
-        if (empty($interaction_checks)) {
-            // Schéma trop ancien: impossible de qualifier "pas d'interaction" proprement.
-            return;
-        }
-
         $country_sql = [];
         foreach ($countries as $cc) {
             $country_sql[] = '\'' . $this->db->sql_escape($cc) . '\'';
         }
-        $interaction_sql = implode(' OR ', $interaction_checks);
         $stats_table = $this->table_prefix . 'bastien59_stats';
 
         $sql = 'SELECT s.log_id, s.session_id, s.user_ip, s.user_id, s.user_agent, s.page_url, s.screen_res, s.signals,
@@ -2176,12 +2211,16 @@ HTML;
                     WHERE sx.session_id = s.session_id
                     AND sx.is_first_visit = 1
                 )
+                AND (SELECT COUNT(*) FROM ' . $stats_table . ' s4b
+                     WHERE s4b.session_id = s.session_id
+                     AND s4b.log_id >= s.log_id) = 1
                 AND NOT EXISTS (
                     SELECT 1
-                    FROM ' . $stats_table . ' s2
-                    WHERE s2.session_id = s.session_id
-                    AND s2.log_id >= s.log_id
-                    AND (' . $interaction_sql . ')
+                    FROM ' . $stats_table . ' s5
+                    WHERE s5.user_ip = s.user_ip
+                    AND s5.session_id <> s.session_id
+                    AND s5.visit_time >= (s.visit_time - 86400)
+                    AND s5.visit_time < s.visit_time
                 )
                 AND NOT EXISTS (
                     SELECT 1
@@ -2194,27 +2233,35 @@ HTML;
 
         $result = $this->db->sql_query_limit($sql, (int) self::CN_NO_INTERACTION_BATCH_LIMIT);
         while ($row = $this->db->sql_fetchrow($result)) {
-            $this->write_security_audit(
-                (string)($row['user_ip'] ?? ''),
-                (string)($row['session_id'] ?? ''),
-                (int)($row['user_id'] ?? 0),
-                [$signal],
-                (string)($row['user_agent'] ?? ''),
-                (string)($row['page_url'] ?? ''),
-                (string)($row['screen_res'] ?? ''),
-                (int)($row['page_count'] ?? 1),
-                '',
-                '',
-                ''
-            );
-
             $existing_signals = (string)($row['signals'] ?? '');
             $updated_signals = $this->append_signal_once($existing_signals, $signal);
-            if ($updated_signals !== $existing_signals) {
-                $sql_update = 'UPDATE ' . $stats_table . '
-                               SET signals = \'' . $this->db->sql_escape(substr($updated_signals, 0, 255)) . '\'
-                               WHERE log_id = ' . (int)$row['log_id'];
-                $this->db->sql_query($sql_update);
+            if ($updated_signals === $existing_signals) {
+                continue; // signal déjà posé (sécurité)
+            }
+
+            // Mise à jour atomique : n'affecte la ligne que si le signal n'a pas encore été posé.
+            // Si deux workers ont sélectionné la même ligne, seul le premier UPDATE réussit (affectedrows > 0).
+            $sql_update = 'UPDATE ' . $stats_table . '
+                           SET signals = \'' . $this->db->sql_escape(substr($updated_signals, 0, 255)) . '\'
+                           WHERE log_id = ' . (int)$row['log_id'] . '
+                           AND (signals = \'\' OR signals NOT LIKE \'%' . $this->db->sql_escape($signal) . '%\')';
+            $this->db->sql_query($sql_update);
+
+            // N'émettre le signal audit que si le UPDATE a réellement posé la marque (pas de doublon).
+            if ($this->db->sql_affectedrows() > 0) {
+                $this->write_security_audit(
+                    (string)($row['user_ip'] ?? ''),
+                    (string)($row['session_id'] ?? ''),
+                    (int)($row['user_id'] ?? 0),
+                    [$signal],
+                    (string)($row['user_agent'] ?? ''),
+                    (string)($row['page_url'] ?? ''),
+                    (string)($row['screen_res'] ?? ''),
+                    (int)($row['page_count'] ?? 1),
+                    '',
+                    '',
+                    ''
+                );
             }
         }
         $this->db->sql_freeresult($result);

@@ -16,6 +16,14 @@ class geo_async extends \phpbb\cron\task\base
     const GEO_API_SAFE_PER_MIN = 40;
     /** Durée max d'un run (secondes) — libère le cron_lock avant la limite watchdog de 300s */
     const MAX_RUNTIME_SECONDS = 240;
+    /** Batch max de sessions à enrichir via logs Apache par run */
+    const APACHE_ASSET_SESSION_BATCH = 80;
+    /** Historique max exploitable, aligné sur les 3 derniers access.log utilisés */
+    const APACHE_ASSET_HISTORY_DAYS = 3;
+    /** Tolérance avant le début de session pour rattacher un asset au chargement initial */
+    const APACHE_ASSET_MATCH_LEAD_SECONDS = 45;
+    /** Tolérance après la dernière page pour capturer les assets tardifs (ex: vidéo bannière) */
+    const APACHE_ASSET_MATCH_TRAIL_SECONDS = 300;
 
     /** @var \phpbb\db\driver\driver_interface */
     protected $db;
@@ -52,6 +60,9 @@ class geo_async extends \phpbb\cron\task\base
 
     /** @var int|null */
     protected $geo_ipv6_prefix_len = null;
+
+    /** @var bool|null */
+    protected $has_apache_asset_columns = null;
 
     public function __construct(\phpbb\db\driver\driver_interface $db, \phpbb\config\config $config, $table_prefix)
     {
@@ -94,6 +105,13 @@ class geo_async extends \phpbb\cron\task\base
         $fail_hits_total = 0;
         $local_skips_total = 0;
         $deferred_live_total = 0;
+        $apache_asset_summary = [
+            'candidates' => 0,
+            'updated' => 0,
+            'events_matched' => 0,
+            'events_seen' => 0,
+            'aborted' => 0,
+        ];
         $pending_probe_total = $this->get_pending_ip_count($ttl_days);
         $pending_probe_window = count($this->get_pending_ips($batch * 4, $ttl_days));
         $start_ts = microtime(true);
@@ -179,6 +197,11 @@ class geo_async extends \phpbb\cron\task\base
                 $scanned_total++;
                 $cached = $this->get_geo_cache($ip, $ttl_days);
                 if ($cached !== false) {
+                    if (trim((string)($cached['hostname'] ?? '')) === '') {
+                        $resolved_hostname = trim((string)$this->resolve_hostname($ip));
+                        $cached['hostname'] = ($resolved_hostname !== '') ? substr($resolved_hostname, 0, 255) : '-';
+                        $this->set_geo_cache($ip, $cached);
+                    }
                     $this->backfill_stats_for_ip($ip, $cached, $ttl_days);
                     $this->process_deferred_country_signals_for_ip($ip, $cached, $ttl_days);
                     $processed_batch++;
@@ -222,6 +245,10 @@ class geo_async extends \phpbb\cron\task\base
                 // stocker 'ZZ' pour éviter les retentatives infinies à chaque run.
                 if (($geo['country_code'] ?? '') === '') {
                     $geo['country_code'] = 'ZZ';
+                }
+                $geo['hostname'] = trim((string)($geo['hostname'] ?? ''));
+                if ($geo['hostname'] === '') {
+                    $geo['hostname'] = '-';
                 }
                 $this->set_geo_cache($ip, $geo);
                 $this->backfill_stats_for_ip($ip, $geo, $ttl_days);
@@ -287,6 +314,7 @@ class geo_async extends \phpbb\cron\task\base
         }
 
         $this->cleanup_geo_cache($ttl_days);
+        $apache_asset_summary = $this->backfill_session_apache_assets($deadline);
 
         if ($this->is_cli_runtime()) {
             if ($this->cli_progress_active) {
@@ -296,7 +324,7 @@ class geo_async extends \phpbb\cron\task\base
             $duration = microtime(true) - $start_ts;
             $pending_left = $this->get_pending_ip_count($ttl_days);
             $this->cli_log(sprintf(
-                '[geo_async] Fin: loops=%d, ok=%d, scanned=%d, cache=%d, live=%d, fail=%d, deferred_live=%d, local_skip=%d, pending_left=%d, duree=%.1fs',
+                '[geo_async] Fin: loops=%d, ok=%d, scanned=%d, cache=%d, live=%d, fail=%d, deferred_live=%d, local_skip=%d, pending_left=%d, apache_sessions=%d, apache_updates=%d, apache_events=%d/%d, duree=%.1fs',
                 (int)$batch_index,
                 (int)$processed_total,
                 (int)$scanned_total,
@@ -306,6 +334,10 @@ class geo_async extends \phpbb\cron\task\base
                 (int)$deferred_live_total,
                 (int)$local_skips_total,
                 (int)$pending_left,
+                (int)($apache_asset_summary['candidates'] ?? 0),
+                (int)($apache_asset_summary['updated'] ?? 0),
+                (int)($apache_asset_summary['events_matched'] ?? 0),
+                (int)($apache_asset_summary['events_seen'] ?? 0),
                 (float)$duration
             ));
         }
@@ -329,7 +361,10 @@ class geo_async extends \phpbb\cron\task\base
                 FROM ' . $this->table_prefix . 'bastien59_stats
                 WHERE is_first_visit = 1
                 AND user_ip <> \'\'
-                AND country_code = \'\'
+                AND (
+                    country_code = \'\'
+                    OR hostname = \'\'
+                )
                 AND visit_time > ' . (int)$cutoff . '
                 GROUP BY user_ip
                 ORDER BY last_seen DESC';
@@ -355,7 +390,10 @@ class geo_async extends \phpbb\cron\task\base
                 FROM ' . $this->table_prefix . 'bastien59_stats
                 WHERE is_first_visit = 1
                 AND user_ip <> \'\'
-                AND country_code = \'\'
+                AND (
+                    country_code = \'\'
+                    OR hostname = \'\'
+                )
                 AND visit_time > ' . (int)$cutoff;
         $result = $this->db->sql_query_limit($sql, 1);
         $cnt = (int)$this->db->sql_fetchfield('cnt');
@@ -407,7 +445,7 @@ class geo_async extends \phpbb\cron\task\base
 
         $now = time();
         $ttl_sec = max(3600, (int)$ttl_days * 86400);
-        $sql = 'SELECT ip_address, country_code, country_name, city
+        $sql = 'SELECT ip_address, country_code, country_name, city, hostname
                 FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
                 WHERE ip_address IN (' . implode(',', $escaped) . ')
                 AND cached_time > ' . (int)($now - $ttl_sec) . '
@@ -429,6 +467,7 @@ class geo_async extends \phpbb\cron\task\base
                 'country_code' => (string)($r['country_code'] ?? ''),
                 'country_name' => (string)($r['country_name'] ?? ''),
                 'city' => (string)($r['city'] ?? ''),
+                'hostname' => (string)($r['hostname'] ?? ''),
                 '__cache_key' => (string)$key,
             ];
         }
@@ -446,6 +485,10 @@ class geo_async extends \phpbb\cron\task\base
         // Toujours une seule clé (sous-réseau IPv4 ou IPv6)
         $key = $keys[0];
         $now = time();
+        $hostname = trim((string)($geo['hostname'] ?? ''));
+        if ($hostname === '') {
+            $hostname = '-';
+        }
 
         $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
                 WHERE ip_address = \'' . $this->db->sql_escape($key) . '\'';
@@ -456,7 +499,7 @@ class geo_async extends \phpbb\cron\task\base
             'country_code' => substr((string)($geo['country_code'] ?? ''), 0, 5),
             'country_name' => substr((string)($geo['country_name'] ?? ''), 0, 100),
             'city'         => substr((string)($geo['city'] ?? ''), 0, 100),
-            'hostname'     => '',
+            'hostname'     => substr($hostname, 0, 255),
             'cached_time'  => $now,
         ];
 
@@ -475,44 +518,40 @@ class geo_async extends \phpbb\cron\task\base
             return;
         }
 
-        $set_parts = [];
-        if ($country_code !== '') {
-            $set_parts[] = 'country_code = \'' . $this->db->sql_escape($country_code) . '\'';
-        }
-        if ($country_name !== '') {
-            $set_parts[] = 'country_name = \'' . $this->db->sql_escape($country_name) . '\'';
-        }
-        if ($hostname !== '') {
-            $set_parts[] = 'hostname = CASE WHEN hostname = \'\' THEN \'' . $this->db->sql_escape($hostname) . '\' ELSE hostname END';
-        }
-
-        if (empty($set_parts)) {
-            return;
-        }
-
         $cutoff = time() - (max(1, (int)$ttl_days) * 86400);
         $subnet_meta = $this->get_ipv4_subnet_meta($ip);
+        $scope_sql = ($subnet_meta !== false)
+            ? 'AND user_ip LIKE \'' . $this->db->sql_escape((string)$subnet_meta['prefix_hint']) . '%\'
+               AND user_ip NOT LIKE \'%:%\'
+               AND INET_ATON(user_ip) BETWEEN ' . (int)$subnet_meta['start'] . ' AND ' . (int)$subnet_meta['end']
+            : 'AND user_ip = \'' . $this->db->sql_escape($ip) . '\'';
 
-        if ($subnet_meta !== false) {
+        $geo_set_parts = [];
+        if ($country_code !== '') {
+            $geo_set_parts[] = 'country_code = \'' . $this->db->sql_escape($country_code) . '\'';
+        }
+        if ($country_name !== '') {
+            $geo_set_parts[] = 'country_name = \'' . $this->db->sql_escape($country_name) . '\'';
+        }
+        if (!empty($geo_set_parts)) {
             $sql = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
-                    SET ' . implode(', ', $set_parts) . '
+                    SET ' . implode(', ', $geo_set_parts) . '
                     WHERE country_code = \'\'
                     AND is_first_visit = 1
                     AND visit_time > ' . (int)$cutoff . '
-                    AND user_ip LIKE \'' . $this->db->sql_escape((string)$subnet_meta['prefix_hint']) . '%\'
-                    AND user_ip NOT LIKE \'%:%\'
-                    AND INET_ATON(user_ip) BETWEEN ' . (int)$subnet_meta['start'] . ' AND ' . (int)$subnet_meta['end'];
+                    ' . $scope_sql;
             $this->db->sql_query($sql);
-            return;
         }
 
-        $sql = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
-                SET ' . implode(', ', $set_parts) . '
-                WHERE country_code = \'\'
-                AND is_first_visit = 1
-                AND visit_time > ' . (int)$cutoff . '
-                AND user_ip = \'' . $this->db->sql_escape($ip) . '\'';
-        $this->db->sql_query($sql);
+        if ($hostname !== '') {
+            $sql = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
+                    SET hostname = \'' . $this->db->sql_escape($hostname) . '\'
+                    WHERE hostname = \'\'
+                    AND is_first_visit = 1
+                    AND visit_time > ' . (int)$cutoff . '
+                    ' . $scope_sql;
+            $this->db->sql_query($sql);
+        }
     }
 
     /**
@@ -643,6 +682,477 @@ class geo_async extends \phpbb\cron\task\base
         $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
                 WHERE cached_time < ' . (int)$cutoff;
         $this->db->sql_query($sql);
+    }
+
+    private function backfill_session_apache_assets($deadline)
+    {
+        $summary = [
+            'candidates' => 0,
+            'updated' => 0,
+            'events_seen' => 0,
+            'events_matched' => 0,
+            'aborted' => 0,
+        ];
+
+        if (!$this->has_apache_asset_columns()) {
+            return $summary;
+        }
+
+        if (microtime(true) >= ((float)$deadline - 5.0)) {
+            if ($this->is_cli_runtime()) {
+                $this->cli_log('[geo_async] Apache assets: ignore (budget temps insuffisant).');
+            }
+            return $summary;
+        }
+
+        $settle_seconds = max(
+            120,
+            (int)($this->config['bastien59_stats_session_timeout'] ?? 900)
+        );
+        $targets = $this->get_pending_apache_asset_sessions(
+            self::APACHE_ASSET_SESSION_BATCH,
+            self::APACHE_ASSET_HISTORY_DAYS,
+            $settle_seconds
+        );
+        $summary['candidates'] = count($targets);
+        if (empty($targets)) {
+            return $summary;
+        }
+
+        $target_sessions = [];
+        $ips = [];
+        $from_ts = 0;
+        $to_ts = 0;
+        foreach ($targets as $row) {
+            $sid = (string)($row['session_id'] ?? '');
+            if (!preg_match('/^[A-Za-z0-9]{32}$/', $sid)) {
+                continue;
+            }
+
+            $target_sessions[$sid] = [
+                'log_id' => (int)($row['log_id'] ?? 0),
+                'session_id' => $sid,
+                'user_ip' => (string)($row['user_ip'] ?? ''),
+                'start_time' => (int)($row['start_time'] ?? 0),
+                'end_time' => (int)($row['end_time'] ?? 0),
+            ];
+            $ip = trim((string)($row['user_ip'] ?? ''));
+            if ($ip !== '') {
+                $ips[$ip] = true;
+            }
+            $row_from = max(0, (int)($row['start_time'] ?? 0) - self::APACHE_ASSET_MATCH_LEAD_SECONDS);
+            $row_to = (int)($row['end_time'] ?? 0) + self::APACHE_ASSET_MATCH_TRAIL_SECONDS;
+            if ($from_ts <= 0 || ($row_from > 0 && $row_from < $from_ts)) {
+                $from_ts = $row_from;
+            }
+            if ($row_to > $to_ts) {
+                $to_ts = $row_to;
+            }
+        }
+
+        $summary['candidates'] = count($target_sessions);
+
+        if (empty($target_sessions) || empty($ips) || $from_ts <= 0 || $to_ts <= 0 || $from_ts > $to_ts) {
+            return $summary;
+        }
+
+        if ($this->is_cli_runtime()) {
+            $this->cli_log(sprintf(
+                '[geo_async] Apache assets: %d session(s) a enrichir, fenetre=%s -> %s',
+                (int)count($target_sessions),
+                date('Y-m-d H:i:s', (int)$from_ts),
+                date('Y-m-d H:i:s', (int)$to_ts)
+            ));
+        }
+
+        $sessions_by_ip = $this->load_session_windows_for_ips(array_keys($ips), $from_ts, $to_ts);
+        $counts = [];
+        foreach ($target_sessions as $sid => $meta) {
+            $counts[$sid] = ['banner' => 0, 'rank' => 0, 'avatar' => 0];
+        }
+
+        $this->scan_apache_asset_events(
+            $sessions_by_ip,
+            $target_sessions,
+            $counts,
+            $from_ts,
+            $to_ts,
+            $deadline,
+            $summary
+        );
+
+        if (!empty($summary['aborted'])) {
+            if ($this->is_cli_runtime()) {
+                $this->cli_log('[geo_async] Apache assets: scan interrompu, report au prochain run.');
+            }
+            $summary['updated'] = 0;
+            return $summary;
+        }
+
+        $scan_time = time();
+        foreach ($target_sessions as $sid => $meta) {
+            $log_id = (int)($meta['log_id'] ?? 0);
+            if ($log_id <= 0) {
+                continue;
+            }
+
+            $metric = $counts[$sid] ?? ['banner' => 0, 'rank' => 0, 'avatar' => 0];
+            $sql = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
+                    SET apache_banner_hits = ' . (int)$metric['banner'] . ',
+                        apache_rank_hits = ' . (int)$metric['rank'] . ',
+                        apache_avatar_hits = ' . (int)$metric['avatar'] . ',
+                        apache_asset_scan_time = ' . (int)$scan_time . '
+                    WHERE log_id = ' . $log_id;
+            $this->db->sql_query($sql);
+            $summary['updated']++;
+        }
+
+        return $summary;
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function get_pending_apache_asset_sessions($limit, $history_days, $settle_seconds)
+    {
+        $limit = max(1, (int)$limit);
+        $history_cutoff = time() - (max(1, (int)$history_days) * 86400);
+        $settled_cutoff = time() - max(60, (int)$settle_seconds);
+
+        $sql = 'SELECT landing.log_id, landing.session_id, landing.user_ip, landing.user_agent,
+                       landing.visit_time AS start_time, MAX(s.visit_time) AS end_time
+                FROM ' . $this->table_prefix . 'bastien59_stats landing
+                INNER JOIN ' . $this->table_prefix . 'bastien59_stats s
+                    ON s.session_id = landing.session_id
+                WHERE landing.is_first_visit = 1
+                AND landing.apache_asset_scan_time = 0
+                AND landing.user_ip <> \'\'
+                AND landing.visit_time >= ' . (int)$history_cutoff . '
+                AND landing.session_id REGEXP \'^[A-Za-z0-9]{32}$\'
+                GROUP BY landing.log_id, landing.session_id, landing.user_ip, landing.user_agent, landing.visit_time
+                HAVING MAX(s.visit_time) <= ' . (int)$settled_cutoff . '
+                ORDER BY end_time DESC';
+
+        $rows = [];
+        $result = $this->db->sql_query_limit($sql, $limit);
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $rows[] = $row;
+        }
+        $this->db->sql_freeresult($result);
+
+        return $rows;
+    }
+
+    /**
+     * @param string[] $ips
+     * @return array<string, array<int, array<string, mixed>>>
+     */
+    private function load_session_windows_for_ips(array $ips, $from_ts, $to_ts)
+    {
+        $sessions_by_ip = [];
+        if (empty($ips) || $from_ts <= 0 || $to_ts <= 0 || $from_ts > $to_ts) {
+            return $sessions_by_ip;
+        }
+
+        foreach (array_chunk($ips, 500) as $chunk) {
+            $quoted = [];
+            foreach ($chunk as $ip) {
+                $ip = trim((string)$ip);
+                if ($ip === '') {
+                    continue;
+                }
+                $quoted[] = '\'' . $this->db->sql_escape($ip) . '\'';
+            }
+            if (empty($quoted)) {
+                continue;
+            }
+
+            $sql = 'SELECT user_ip, session_id, MAX(user_agent) AS user_agent,
+                           MIN(visit_time) AS start_time, MAX(visit_time) AS end_time
+                    FROM ' . $this->table_prefix . 'bastien59_stats
+                    WHERE user_ip IN (' . implode(',', $quoted) . ')
+                    AND visit_time BETWEEN ' . (int)$from_ts . ' AND ' . (int)$to_ts . '
+                    AND session_id REGEXP \'^[A-Za-z0-9]{32}$\'
+                    GROUP BY user_ip, session_id
+                    ORDER BY user_ip ASC, start_time ASC';
+
+            $result = $this->db->sql_query($sql);
+            while ($row = $this->db->sql_fetchrow($result)) {
+                $ip = (string)($row['user_ip'] ?? '');
+                if ($ip === '') {
+                    continue;
+                }
+                if (!isset($sessions_by_ip[$ip])) {
+                    $sessions_by_ip[$ip] = [];
+                }
+                $sessions_by_ip[$ip][] = [
+                    'session_id' => (string)($row['session_id'] ?? ''),
+                    'start_time' => (int)($row['start_time'] ?? 0),
+                    'end_time' => (int)($row['end_time'] ?? 0),
+                    'ua_norm' => $this->normalize_user_agent_for_match((string)($row['user_agent'] ?? '')),
+                ];
+            }
+            $this->db->sql_freeresult($result);
+        }
+
+        return $sessions_by_ip;
+    }
+
+    /**
+     * @param array<string, array<int, array<string, mixed>>> $sessions_by_ip
+     * @param array<string, array<string, mixed>> $target_sessions
+     * @param array<string, array<string, int>> $counts
+     * @param array<string, int> $summary
+     */
+    private function scan_apache_asset_events(array $sessions_by_ip, array $target_sessions, array &$counts, $from_ts, $to_ts, $deadline, array &$summary)
+    {
+        if (empty($sessions_by_ip) || empty($target_sessions)) {
+            return;
+        }
+
+        $target_session_ids = array_fill_keys(array_keys($target_sessions), true);
+        $logs = [
+            '/var/log/apache2/forum_access.log.2.gz',
+            '/var/log/apache2/forum_access.log.1',
+            '/var/log/apache2/forum_access.log',
+        ];
+        $line_regex = '~^(\S+) \S+ \S+ \[([^\]]+)\] "([A-Z]+) ([^" ]+) [^"]*" (\d{3}) \S+ "([^"]*)" "([^"]*)"~';
+
+        foreach ($logs as $log_file) {
+            if (microtime(true) >= ((float)$deadline - 2.0)) {
+                $summary['aborted'] = 1;
+                if ($this->is_cli_runtime()) {
+                    $this->cli_log('[geo_async] Apache assets: arret anticipe (budget temps atteint).');
+                }
+                break;
+            }
+            if (!is_file($log_file)) {
+                continue;
+            }
+
+            $is_gz = (substr($log_file, -3) === '.gz');
+            $fh = $is_gz ? @gzopen($log_file, 'rb') : @fopen($log_file, 'rb');
+            if (!$fh) {
+                continue;
+            }
+
+            while (true) {
+                if (microtime(true) >= ((float)$deadline - 2.0)) {
+                    $summary['aborted'] = 1;
+                    break;
+                }
+
+                $line = $is_gz ? gzgets($fh) : fgets($fh);
+                if ($line === false) {
+                    break;
+                }
+                if (!preg_match($line_regex, $line, $m)) {
+                    continue;
+                }
+
+                $ts = $this->parse_apache_log_ts((string)$m[2]);
+                if ($ts <= 0 || $ts < $from_ts || $ts > $to_ts) {
+                    continue;
+                }
+
+                $method = strtoupper((string)$m[3]);
+                if ($method !== 'GET' && $method !== 'HEAD') {
+                    continue;
+                }
+
+                $status = (int)$m[5];
+                if ($status < 200 || $status >= 400) {
+                    continue;
+                }
+
+                $asset_type = $this->classify_apache_asset_uri((string)$m[4]);
+                if ($asset_type === '') {
+                    continue;
+                }
+
+                $referer = (string)$m[6];
+                if (!$this->is_forum_page_referer($referer)) {
+                    continue;
+                }
+
+                $summary['events_seen']++;
+
+                $ip = (string)$m[1];
+                if (!isset($sessions_by_ip[$ip])) {
+                    continue;
+                }
+
+                $sid = $this->match_apache_asset_to_session(
+                    $sessions_by_ip[$ip],
+                    $ts,
+                    $this->normalize_user_agent_for_match((string)$m[7])
+                );
+                if ($sid === '' || !isset($target_session_ids[$sid])) {
+                    continue;
+                }
+
+                $counts[$sid][$asset_type]++;
+                $summary['events_matched']++;
+            }
+
+            if ($is_gz) {
+                @gzclose($fh);
+            } else {
+                @fclose($fh);
+            }
+        }
+    }
+
+    private function has_apache_asset_columns()
+    {
+        if ($this->has_apache_asset_columns !== null) {
+            return $this->has_apache_asset_columns;
+        }
+
+        $sql = 'SELECT apache_banner_hits, apache_rank_hits, apache_avatar_hits, apache_asset_scan_time
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_apache_asset_columns = !$has_error;
+        return $this->has_apache_asset_columns;
+    }
+
+    private function parse_apache_log_ts($raw)
+    {
+        static $cache = [];
+        $key = (string)$raw;
+        if (isset($cache[$key])) {
+            return $cache[$key];
+        }
+
+        $dt = \DateTime::createFromFormat('d/M/Y:H:i:s O', $key);
+        $cache[$key] = $dt ? (int)$dt->getTimestamp() : 0;
+        return $cache[$key];
+    }
+
+    private function classify_apache_asset_uri($uri)
+    {
+        $raw = trim((string)$uri);
+        if ($raw === '') {
+            return '';
+        }
+
+        $path = parse_url($raw, PHP_URL_PATH);
+        if (!is_string($path) || $path === '') {
+            return '';
+        }
+        $path = strtolower($path);
+
+        if (preg_match('~^/images/bannieres/forumbanniere[^/?]*\.(?:jpe?g|png|gif|webp|mp4)$~i', $path)) {
+            return 'banner';
+        }
+        if (preg_match('~^/images/ranks/[^/?]+\.(?:jpe?g|png|gif|webp)$~i', $path)) {
+            return 'rank';
+        }
+        if (preg_match('~^/images/avatars/.+$~i', $path)) {
+            return 'avatar';
+        }
+        if ($path === '/download/file.php') {
+            $query = parse_url($raw, PHP_URL_QUERY);
+            if (is_string($query) && preg_match('/(?:^|&)avatar=/', $query)) {
+                return 'avatar';
+            }
+        }
+
+        return '';
+    }
+
+    private function is_forum_page_referer($referer)
+    {
+        $raw = trim((string)$referer);
+        if ($raw === '' || $raw === '-') {
+            return false;
+        }
+
+        $path = parse_url($raw, PHP_URL_PATH);
+        if (!is_string($path)) {
+            return false;
+        }
+        if ($path === '') {
+            $path = '/';
+        }
+
+        if ($path === '/') {
+            return true;
+        }
+
+        return (bool)preg_match(
+            '~^/(?:index\.php|viewtopic\.php|viewforum\.php|memberlist\.php|search\.php|posting\.php|ucp\.php|mcp\.php)(?:$|[/?])~i',
+            $path
+        ) || (bool)preg_match('~^/app\.php(?:/[^?]*)?$~i', $path);
+    }
+
+    private function normalize_user_agent_for_match($user_agent)
+    {
+        return strtolower(substr(trim((string)$user_agent), 0, 254));
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $sessions
+     */
+    private function match_apache_asset_to_session(array $sessions, $ts, $ua_norm)
+    {
+        $ua_norm = $this->normalize_user_agent_for_match($ua_norm);
+        $matching_exact = [];
+        $matching_fallback = [];
+
+        foreach ($sessions as $session) {
+            $start_time = (int)($session['start_time'] ?? 0);
+            $end_time = (int)($session['end_time'] ?? 0);
+            if ($start_time <= 0 || $end_time <= 0) {
+                continue;
+            }
+            if ($ts < ($start_time - self::APACHE_ASSET_MATCH_LEAD_SECONDS)) {
+                continue;
+            }
+            if ($ts > ($end_time + self::APACHE_ASSET_MATCH_TRAIL_SECONDS)) {
+                continue;
+            }
+
+            $session_ua = (string)($session['ua_norm'] ?? '');
+            if ($ua_norm !== '' && $session_ua !== '' && $ua_norm === $session_ua) {
+                $matching_exact[] = $session;
+            } else {
+                $matching_fallback[] = $session;
+            }
+        }
+
+        $candidates = !empty($matching_exact) ? $matching_exact : $matching_fallback;
+        if (empty($candidates)) {
+            return '';
+        }
+
+        $best_sid = '';
+        $best_start = -1;
+        $best_end = -1;
+        foreach ($candidates as $session) {
+            $sid = (string)($session['session_id'] ?? '');
+            $start_time = (int)($session['start_time'] ?? 0);
+            $end_time = (int)($session['end_time'] ?? 0);
+            if (!preg_match('/^[A-Za-z0-9]{32}$/', $sid)) {
+                continue;
+            }
+            if ($start_time > $best_start || ($start_time === $best_start && $end_time > $best_end)) {
+                $best_sid = $sid;
+                $best_start = $start_time;
+                $best_end = $end_time;
+            }
+        }
+
+        return $best_sid;
     }
 
     private function count_session_pages($session_id)

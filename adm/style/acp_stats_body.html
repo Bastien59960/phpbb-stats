@@ -296,6 +296,7 @@ body.cursor-modal-open { overflow: hidden; }
                 {S_FORM_TOKEN}
             </form>
         </div>
+        <div style="margin:-5px 0 12px; color:#666; font-size:11px;">{L_STATS_CLEAR_KEEP_GEO_CACHE}</div>
 
         <table class="sessions-table" id="sessions-table">
             <thead>
@@ -407,7 +408,7 @@ body.cursor-modal-open { overflow: hidden; }
                     <td colspan="5" style="padding: 10px 20px 10px 40px; background: #fdfdfd; font-size: 12px; line-height: 1.7; border-bottom: 1px solid #eee;">
                         <div style="max-width: 90%;">
                             <strong style="color: #105289;">Informations de Diagnostic</strong><br>
-                            <strong>Reverse DNS :</strong> <!-- IF SESSIONS.HOSTNAME -->{SESSIONS.HOSTNAME}<!-- ELSE --><span style="color:#999;">Aucun nom d'hôte trouvé.</span><!-- ENDIF --><br>
+                            <strong>Reverse DNS :</strong> {SESSIONS.REVERSE_DNS_STATUS}<br>
                             <strong>Forward DNS :</strong> {SESSIONS.FORWARD_DNS_STATUS}<!-- IF SESSIONS.FORWARD_DNS_IPS --> (IPs: {SESSIONS.FORWARD_DNS_IPS})<!-- ENDIF --><br>
                             <strong>{L_STATS_SCROLL_LABEL}</strong> <span class="badge {SESSIONS.SCROLL_CLASS}">{SESSIONS.SCROLL_LABEL}</span><br>
                             <!-- IF SESSIONS.RES_BOTH_MISSING -->
@@ -424,7 +425,14 @@ body.cursor-modal-open { overflow: hidden; }
                             <!-- IF SESSIONS.VISITOR_COOKIE_CROSSIP_IPS --><br><small style="color:#666;">{SESSIONS.VISITOR_COOKIE_CROSSIP_IPS}</small><!-- ENDIF --><br>
                             <strong>{L_STATS_VISITOR_COOKIE_RISK_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_RISK_CLASS}">{SESSIONS.VISITOR_COOKIE_RISK_LABEL}</span><br>
                             <strong>{L_STATS_VISITOR_COOKIE_FAIL2BAN_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_FAIL2BAN_CLASS}">{SESSIONS.VISITOR_COOKIE_FAIL2BAN_LABEL}</span><br>
-                            <strong>{L_STATS_REACTIONS_ASSETS_LABEL}</strong> <span class="{SESSIONS.REACTIONS_ASSETS_STATUS_CLASS}">{SESSIONS.REACTIONS_ASSETS_STATUS_LABEL}</span>
+                            <strong>{L_STATS_REACTIONS_ASSETS_LABEL}</strong> <span class="{SESSIONS.REACTIONS_ASSETS_STATUS_CLASS}">{SESSIONS.REACTIONS_ASSETS_STATUS_LABEL}</span><br>
+                            <strong>{L_STATS_APACHE_ASSETS_LABEL}</strong> <span class="{SESSIONS.APACHE_ASSETS_STATUS_CLASS}">{SESSIONS.APACHE_ASSETS_STATUS_LABEL}</span>
+                            <!-- IF SESSIONS.APACHE_ASSETS_READY -->
+                                <br><strong>{L_STATS_APACHE_BANNER_LABEL}</strong> {SESSIONS.APACHE_BANNER_HITS}
+                                <br><strong>{L_STATS_APACHE_RANK_LABEL}</strong> {SESSIONS.APACHE_RANK_HITS}
+                                <br><strong>{L_STATS_APACHE_AVATAR_LABEL}</strong> {SESSIONS.APACHE_AVATAR_HITS}
+                                <br><strong>{L_STATS_APACHE_SCAN_LABEL}</strong> {SESSIONS.APACHE_ASSET_SCAN_LABEL}
+                            <!-- ENDIF -->
 
                             <!-- IF SESSIONS.IS_BOT -->
                                 <br><br>
@@ -432,13 +440,25 @@ body.cursor-modal-open { overflow: hidden; }
                                 <ul style="margin: 5px 0 0 20px; padding: 0; list-style-type: square;">
                                     <!-- IF SESSIONS.BOT_SOURCE == 'phpbb' -->
                                         <li><strong>Source :</strong> Liste de bots phpBB / whitelist extension</li>
-                                        <li><strong>Verdict :</strong> <span style="color:#27ae60;">Bot légitime reconnu. Non signalé, non bloqué.</span></li>
+                                        <li><strong>Verdict :</strong> <span style="color:#27ae60;">Bot légitime reconnu — non signalé, non bloqué.</span></li>
                                     <!-- ELSEIF SESSIONS.BOT_SOURCE == 'extension' -->
-                                        <li><strong>Source :</strong> Détection UA (analyse du User-Agent)</li>
-                                        <li><strong>Verdict :</strong> <span style="color:#c0392b;">Bot détecté par signature UA → signalé à fail2ban (ban immédiat)</span></li>
+                                        <li><strong>Source :</strong> Détection UA (signature User-Agent)</li>
+                                        <!-- IF SESSIONS.BOT_VERDICT_TYPE == 'strict' -->
+                                            <li><strong>Verdict :</strong> <span style="color:#c0392b;">Signal strict → <strong>banni immédiatement</strong> (indépendant du score)</span></li>
+                                        <!-- ELSE -->
+                                            <li><strong>Verdict :</strong> <span style="color:#c0392b;">Signature UA → <strong>signalé à fail2ban</strong> (ban immédiat)</span></li>
+                                        <!-- ENDIF -->
                                     <!-- ELSEIF SESSIONS.BOT_SOURCE == 'behavior' -->
                                         <li><strong>Source :</strong> Détection comportementale</li>
-                                        <li><strong>Verdict :</strong> <span style="color:#e67e22;">Comportement non-humain détecté → signalé à fail2ban</span></li>
+                                        <!-- IF SESSIONS.BOT_VERDICT_TYPE == 'strict' -->
+                                            <li><strong>Verdict :</strong> <span style="color:#c0392b;">Signal strict → <strong>banni immédiatement</strong> (indépendant du score)</span></li>
+                                        <!-- ELSEIF SESSIONS.BOT_VERDICT_TYPE == 'observation' -->
+                                            <li><strong>Verdict :</strong> <span style="color:#888;">Signaux d'observation uniquement — <strong>non signalé à fail2ban</strong>, enregistré en base uniquement</span></li>
+                                        <!-- ELSEIF SESSIONS.BOT_SCORE >= 50 -->
+                                            <li><strong>Verdict :</strong> <span style="color:#e67e22;">Score comportemental : <strong>{SESSIONS.BOT_SCORE} pts</strong> (≥ 50 pts → <strong>signalé à fail2ban</strong>)</span></li>
+                                        <!-- ELSE -->
+                                            <li><strong>Verdict :</strong> <span style="color:#888;">Score comportemental : <strong>{SESSIONS.BOT_SCORE} pts</strong> (&lt; 50 pts → <strong>non signalé à fail2ban</strong> si signaux seuls)</span></li>
+                                        <!-- ENDIF -->
                                     <!-- ELSE -->
                                         <li><strong>Source :</strong> Inconnue</li>
                                     <!-- ENDIF -->
@@ -460,6 +480,7 @@ body.cursor-modal-open { overflow: hidden; }
                     <td colspan="3">
                         <strong>{SESSIONS.PAGES.TITLE}</strong><br>
                         <a href="{SESSIONS.PAGES.URL}" target="_blank" style="font-size:11px; color:#888; word-break:break-all;">{SESSIONS.PAGES.URL}</a>
+                        <!-- IF SESSIONS.PAGES.HAS_REFERER --><br><span style="font-size:11px; color:#666;">Referer: {SESSIONS.PAGES.REFERER}</span><!-- ENDIF -->
                     </td>
                 </tr>
                 <!-- END PAGES -->

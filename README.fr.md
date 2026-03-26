@@ -18,7 +18,7 @@
 ### ACP orienté exploitation
 
 - Vue d'ensemble avec compteurs humains/bots, sources, OS, appareils, résolutions.
-- Onglet **Sessions** avec timeline, pages, diagnostics cookie/AJAX, signaux et aperçu pays/drapeau.
+- Onglet **Sessions** avec timeline, pages, téléchargements de pièces jointes, diagnostics cookie/AJAX, signaux et aperçu pays/drapeau.
 - Onglet **Pages** (top pages + referers complets).
 - Onglet **Carte** (jVectorMap) pour la répartition géographique.
 - Onglet **Comportements** avec comparaison membres/invités/bots, profils appris, outliers invités, santé capture curseur et cas récents avec SVG.
@@ -48,9 +48,17 @@ Signaux stricts ou d'observation selon contexte géographique:
 - Cache IPv4 par IP **et par préfixe configurable** (défaut `/24`, format de clé `v4:a.b.c.n/24`) pour limiter les appels redondants tout en gardant une bonne précision pays.
 - TTL cache configurable (défaut 45 jours). Le cron supprime automatiquement les entrées expirées.
 - Code `ZZ` pour les IPs résolues sans pays (non géolocalisables) : évite les retentatives infinies.
+- Distinction ACP entre **Reverse DNS en attente** (cron non encore passé) et **aucun PTR trouvé** (cron déjà passé, résultat négatif).
 - Throttling avec marge de sécurité: cible 40 requêtes/min, limite service 45/min, pause inter-batch fixe 5s, pauses quota selon headers.
 - En cas de HTTP 429: arrêt anticipé du run live, IP laissées non traitées pour le prochain lancement.
 - Progression CLI batch + globale.
+- Même cron: backfill informatif par session à partir des logs Apache (`forum_access.log*`) pour compter les chargements de bannière forum, images de rangs et avatars.
+
+### Timeline unifiée page + téléchargements
+
+- Les hits `download/file.php` sont enregistrés dans la même session que les pages HTML via le hook phpBB `core.download_file_send_to_browser_before`.
+- La timeline ACP conserve l'ordre chronologique `page -> téléchargements`, avec referer, UA, IP, géoloc et hostname sur les lignes concernées.
+- Les téléchargements restent visibles dans **Sessions**, mais ils sont exclus des heuristiques purement "page HTML + JS" (`page_count`, signaux absence d'interaction, durée de la page précédente).
 
 ### Aucun DNS synchrone sur le thread web
 
@@ -171,7 +179,7 @@ php ext/bastien59960/stats/bin/backfill_reactions_assets.php --apply --window=12
 
 Tables principales:
 
-- `bastien59_stats`: sessions/pages, signaux, AJAX, cookie hash, curseur, diagnostics.
+- `bastien59_stats`: sessions/pages, signaux, AJAX, cookie hash, curseur, diagnostics, téléchargements de PJ et compteurs Apache par session (`apache_*_hits`, `apache_asset_scan_time`).
 - `bastien59_stats_geo_cache`: cache géolocalisation IP + clé de sous-réseau IPv4 (`/24` par défaut, configurable en ACP).
 - `bastien59_stats_behavior_profile`: profils appris (membres).
 - `bastien59_stats_behavior_seen`: sessions déjà intégrées à l'apprentissage.
@@ -188,8 +196,13 @@ Tables principales:
 - La carte géographique dépend des assets jVectorMap chargés depuis CDN.
 - La géolocalisation dépend de la disponibilité de `ip-api.com`.
 - Le blocage réseau n'est pas fait par l'extension elle-même: il est délégué à Fail2ban.
+- Les compteurs Apache bannière/rangs/avatars sont informatifs: ils sont reconstruits après coup depuis les logs Apache récents et ne couvrent pas l'historique déjà expiré des logs.
 - La vérification rDNS des bots légitimes est différée si le hostname n'est pas encore en cache (premier passage du cron `geo_async` nécessaire). Un bot imposteur peut donc passer lors de sa toute première visite.
 - `gethostbynamel()` et `dns_get_record()` dans `verify_bot_rdns()` peuvent bloquer quelques secondes si le DNS est lent (pas de timeout PHP natif), mais sans PI mutex → pas de blocage en cascade.
+
+## Remarques d'exploitation
+
+- Le bouton ACP **Effacer les statistiques** vide uniquement `bastien59_stats`. Le cache GeoIP / Reverse DNS (`bastien59_stats_geo_cache`) est conservé.
 
 ## Licence
 

@@ -20,6 +20,7 @@ class acp_controller
     protected $has_ajax_advanced_columns = null;
     protected $has_cursor_columns = null;
     protected $has_reactions_probe_columns = null;
+    protected $has_apache_asset_columns = null;
     protected $has_visitor_cookie_column = null;
     protected $has_visitor_cookie_debug_columns = null;
     protected $has_behavior_learning_tables = null;
@@ -44,8 +45,8 @@ class acp_controller
                 trigger_error('FORM_INVALID');
             }
 
-            $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats';
-            $this->db->sql_query($sql);
+            // Only clear session/page statistics. Keep GeoIP/rDNS cache warm.
+            $this->clear_statistics_rows();
 
             trigger_error($this->user->lang('STATS_CLEARED') . adm_back_link($u_action));
         }
@@ -104,6 +105,12 @@ class acp_controller
             'SHOW_BOTS'       => $show_bots,
             'DISPLAY_LIMIT'   => $display_limit,
         ]);
+    }
+
+    private function clear_statistics_rows()
+    {
+        $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats';
+        $this->db->sql_query($sql);
     }
 
     /**
@@ -322,6 +329,7 @@ class acp_controller
         $has_cookie_column = $this->has_visitor_cookie_column();
         $has_cookie_debug_columns = $this->has_visitor_cookie_debug_columns();
         $has_reactions_probe_columns = $this->has_reactions_probe_columns();
+        $has_apache_asset_columns = $this->has_apache_asset_columns();
         $extra_ajax_columns = $this->has_ajax_telemetry_columns()
             ? ', screen_res_ajax, scroll_down_ajax, ajax_seen_time'
             : '';
@@ -346,7 +354,7 @@ class acp_controller
                     . $extra_cursor_columns . '
                       FROM ' . $this->table_prefix . 'bastien59_stats
                       WHERE session_id IN (' . implode(',', $session_ids) . ')
-                      ORDER BY visit_time ASC';
+                      ORDER BY visit_time ASC, log_id ASC';
         $result_pages = $this->db->sql_query_limit($sql_pages, $pages_query_limit);
         while ($page = $this->db->sql_fetchrow($result_pages)) {
             $page_session_key = $this->build_session_bucket_key(
@@ -487,6 +495,15 @@ class acp_controller
             if ($hostname === '') {
                 $hostname = trim((string)($row['hostname'] ?? ''));
             }
+            $hostname_pending = ($hostname === '');
+            $hostname_display = ($hostname === '-' || $hostname_pending) ? '' : $hostname;
+            if ($hostname_pending) {
+                $reverse_dns_status = '<span style="color:#999;">' . htmlspecialchars($this->user->lang('STATS_RDNS_PENDING'), ENT_COMPAT, 'UTF-8') . '</span>';
+            } elseif ($hostname === '-') {
+                $reverse_dns_status = '<span style="color:#999;">' . htmlspecialchars($this->user->lang('STATS_RDNS_NONE'), ENT_COMPAT, 'UTF-8') . '</span>';
+            } else {
+                $reverse_dns_status = htmlspecialchars($hostname_display, ENT_COMPAT, 'UTF-8');
+            }
 
             // Forward DNS : résoudre le hostname vers IP(s) pour vérification
             $forward_dns_status = '';
@@ -529,8 +546,10 @@ class acp_controller
                         $forward_dns_status = '<span style="color:#999;">Indisponible (résolution échouée)</span>';
                     }
                 }
-            } elseif (empty($hostname) || $hostname === '-') {
-                $forward_dns_status = '<span style="color:#999;">N/A (pas de Reverse DNS)</span>';
+            } elseif ($hostname_pending) {
+                $forward_dns_status = '<span style="color:#999;">' . htmlspecialchars($this->user->lang('STATS_FDNS_PENDING'), ENT_COMPAT, 'UTF-8') . '</span>';
+            } elseif ($hostname === '-') {
+                $forward_dns_status = '<span style="color:#999;">' . htmlspecialchars($this->user->lang('STATS_FDNS_NO_PTR'), ENT_COMPAT, 'UTF-8') . '</span>';
             }
 
             $pages = $pages_by_session[$session_key] ?? [];
@@ -825,6 +844,33 @@ class acp_controller
                 }
             }
 
+            if (!$has_apache_asset_columns) {
+                $apache_assets_label = $this->user->lang('STATS_APACHE_ASSETS_UNAVAILABLE');
+                $apache_assets_class = 'diag-cookie-na';
+                $apache_assets_ready = 0;
+                $apache_banner_hits = 0;
+                $apache_rank_hits = 0;
+                $apache_avatar_hits = 0;
+                $apache_asset_scan_label = '-';
+            } else {
+                $apache_asset_scan_time = (int)($row['apache_asset_scan_time'] ?? 0);
+                $apache_banner_hits = max(0, (int)($row['apache_banner_hits'] ?? 0));
+                $apache_rank_hits = max(0, (int)($row['apache_rank_hits'] ?? 0));
+                $apache_avatar_hits = max(0, (int)($row['apache_avatar_hits'] ?? 0));
+
+                if ($apache_asset_scan_time <= 0) {
+                    $apache_assets_label = $this->user->lang('STATS_APACHE_ASSETS_PENDING');
+                    $apache_assets_class = 'diag-cookie-mid';
+                    $apache_assets_ready = 0;
+                    $apache_asset_scan_label = '-';
+                } else {
+                    $apache_assets_label = $this->user->lang('STATS_APACHE_ASSETS_SCANNED');
+                    $apache_assets_class = 'diag-cookie-ok';
+                    $apache_assets_ready = 1;
+                    $apache_asset_scan_label = $this->user->format_date($apache_asset_scan_time, 'd M Y H:i:s');
+                }
+            }
+
             $scroll_label = $scroll_done ? $this->user->lang('STATS_SCROLL_DONE') : $this->user->lang('STATS_SCROLL_NONE');
             $scroll_class = $scroll_done ? 'badge-scroll-yes' : 'badge-scroll-no';
 
@@ -929,7 +975,8 @@ class acp_controller
             $this->template->assign_block_vars('SESSIONS', [
                 'SESSION_ID'        => substr($session_id, 0, 8) . '...',
                 'IP'                => $row['user_ip'],
-                'HOSTNAME'          => htmlspecialchars($hostname, ENT_COMPAT, 'UTF-8'),
+                'HOSTNAME'          => htmlspecialchars($hostname_display, ENT_COMPAT, 'UTF-8'),
+                'REVERSE_DNS_STATUS'=> $reverse_dns_status,
                 'FORWARD_DNS_STATUS'=> $forward_dns_status,
                 'FORWARD_DNS_IPS'   => htmlspecialchars($forward_dns_ips, ENT_COMPAT, 'UTF-8'),
                 'COUNTRY'           => $country_display,
@@ -962,6 +1009,13 @@ class acp_controller
                 'VISITOR_COOKIE_FAIL2BAN_CLASS' => $cookie_fail2ban_class,
                 'REACTIONS_ASSETS_STATUS_LABEL' => htmlspecialchars($reactions_assets_label, ENT_COMPAT, 'UTF-8'),
                 'REACTIONS_ASSETS_STATUS_CLASS' => $reactions_assets_class,
+                'APACHE_ASSETS_STATUS_LABEL' => htmlspecialchars($apache_assets_label, ENT_COMPAT, 'UTF-8'),
+                'APACHE_ASSETS_STATUS_CLASS' => $apache_assets_class,
+                'APACHE_ASSETS_READY' => $apache_assets_ready,
+                'APACHE_BANNER_HITS' => $apache_banner_hits,
+                'APACHE_RANK_HITS' => $apache_rank_hits,
+                'APACHE_AVATAR_HITS' => $apache_avatar_hits,
+                'APACHE_ASSET_SCAN_LABEL' => htmlspecialchars($apache_asset_scan_label, ENT_COMPAT, 'UTF-8'),
                 'SCROLL_DONE'   => $scroll_done,
                 'SCROLL_LABEL'  => htmlspecialchars($scroll_label, ENT_COMPAT, 'UTF-8'),
                 'SCROLL_CLASS'  => $scroll_class,
@@ -1030,12 +1084,23 @@ class acp_controller
                 if ($pages_shown >= 50) {
                     break;
                 }
+                $page_title = trim((string)($page['page_title'] ?? ''));
+                if ($page_title === '') {
+                    $page_title = '-';
+                }
+                $page_url = trim((string)($page['page_url'] ?? ''));
+                if ($page_url === '') {
+                    $page_url = '-';
+                }
+                $page_referer = trim((string)($page['referer'] ?? ''));
                 $this->template->assign_block_vars('SESSIONS.PAGES', [
                     'PAGE_INDEX' => $page_index,
-                    'TITLE'     => htmlspecialchars($page['page_title'], ENT_COMPAT, 'UTF-8'),
-                    'URL'       => htmlspecialchars($page['page_url'], ENT_COMPAT, 'UTF-8'),
+                    'TITLE'     => htmlspecialchars($page_title, ENT_COMPAT, 'UTF-8'),
+                    'URL'       => htmlspecialchars($page_url, ENT_COMPAT, 'UTF-8'),
                     'TIME'      => $this->user->format_date($page['visit_time'], 'H:i:s'),
                     'DURATION'  => $this->format_duration($page['duration']),
+                    'HAS_REFERER' => ($page_referer !== '') ? 1 : 0,
+                    'REFERER'   => ($page_referer !== '') ? $this->format_referer($page_referer) : '',
                 ]);
                 $page_index++;
                 $pages_shown++;
@@ -1288,6 +1353,31 @@ class acp_controller
 
         $this->has_reactions_probe_columns = !$has_error;
         return $this->has_reactions_probe_columns;
+    }
+
+    /**
+     * Détecte si les colonnes de comptage d'assets Apache sont disponibles.
+     */
+    private function has_apache_asset_columns()
+    {
+        if ($this->has_apache_asset_columns !== null) {
+            return $this->has_apache_asset_columns;
+        }
+
+        $sql = 'SELECT apache_banner_hits, apache_rank_hits, apache_avatar_hits, apache_asset_scan_time
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_apache_asset_columns = !$has_error;
+        return $this->has_apache_asset_columns;
     }
 
     /**

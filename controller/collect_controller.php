@@ -691,10 +691,10 @@ class collect_controller
         $linearity = (int)($features['linearity'] ?? 0);
         $clicks = (int)($features['click_count'] ?? 0);
 
-        if ($duration >= 2800 && $points <= 1) {
+        if ($duration >= 2800 && $points <= 1 && $device === 'desktop') {
             $signals[] = 'cursor_no_movement';
         }
-        if ($duration >= 2800 && $distance > 0 && $clicks === 0) {
+        if ($duration >= 2800 && $distance > 0 && $clicks === 0 && $device === 'desktop') {
             $signals[] = 'cursor_no_clicks';
         }
         if ($avg_speed >= 2600 && $dir_changes <= 2 && $points >= 8) {
