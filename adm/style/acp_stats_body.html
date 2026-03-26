@@ -525,11 +525,11 @@ body.cursor-modal-open { overflow: hidden; }
                 </tr>
                 <!-- BEGIN LANDING_ROW -->
                 <tr class="page-row session-{SESSIONS.BOT_CLASS} {SESSIONS.LANDING_ROW.FRAME_CLASS}<!-- IF SESSIONS.LANDING_ROW.IS_LAST --> last-row<!-- ENDIF -->" data-type="{SESSIONS.BOT_CLASS}">
-                    <td style="text-align:right; color:#888;">
-                        <span class="session-page-index">{SESSIONS.LANDING_PAGE_INDEX}</span>&#8627; {SESSIONS.LANDING_TIME}
-                    </td>
                     <td style="color:#888; font-size:11px;">
-                        <!-- IF SESSIONS.LANDING_HAS_IP --><span class="row-side-meta row-side-ip ip-same">{SESSIONS.LANDING_IP}</span><span class="row-side-sep">-</span><!-- ENDIF --><span class="row-side-duration">{SESSIONS.LANDING_DURATION}</span>
+                        <!-- IF SESSIONS.LANDING_HAS_IP --><span class="row-side-meta row-side-ip ip-same">{SESSIONS.LANDING_IP}</span><span class="row-side-sep">-</span><!-- ENDIF --><span class="row-side-duration">{SESSIONS.LANDING_ROW.DURATION}</span>
+                    </td>
+                    <td style="text-align:right; color:#888;">
+                        <span class="session-page-index">{SESSIONS.LANDING_PAGE_INDEX}</span>&#8627; {SESSIONS.LANDING_ROW.TIME}
                     </td>
                     <td colspan="3">
                         <strong>{SESSIONS.LANDING_PAGE}</strong><br>
@@ -540,11 +540,11 @@ body.cursor-modal-open { overflow: hidden; }
                 <!-- END LANDING_ROW -->
                 <!-- BEGIN PAGES -->
                 <tr class="page-row session-{SESSIONS.BOT_CLASS} {SESSIONS.PAGES.FRAME_CLASS}<!-- IF SESSIONS.PAGES.IS_LAST --> last-row<!-- ENDIF -->" data-type="{SESSIONS.BOT_CLASS}">
-                    <td style="text-align:right; color:#888;">
-                        <span class="session-page-index">{SESSIONS.PAGES.PAGE_INDEX}</span>&#8627; {SESSIONS.PAGES.TIME}
-                    </td>
                     <td style="color:#888; font-size:11px;">
                         <!-- IF SESSIONS.PAGES.HAS_IP --><span class="row-side-meta row-side-ip <!-- IF SESSIONS.PAGES.IP_CHANGED -->ip-changed<!-- ELSE -->ip-same<!-- ENDIF -->">{SESSIONS.PAGES.IP}</span><span class="row-side-sep">-</span><!-- ENDIF --><span class="row-side-duration">{SESSIONS.PAGES.DURATION}</span>
+                    </td>
+                    <td style="text-align:right; color:#888;">
+                        <span class="session-page-index">{SESSIONS.PAGES.PAGE_INDEX}</span>&#8627; {SESSIONS.PAGES.TIME}
                     </td>
                     <td colspan="3">
                         <strong>{SESSIONS.PAGES.TITLE}</strong><br>

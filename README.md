@@ -58,7 +58,8 @@ Strict and observation signals depending on geo context:
 
 - `download/file.php` hits are logged into the same tracked session as HTML pages through the phpBB hook `core.download_file_send_to_browser_before`.
 - The ACP timeline keeps chronological `page -> downloads` ordering and exposes referer, UA, IP, geolocation, and hostname on those entries as well.
-- The landing request is also rendered inside the chronology as row `#1`, then every sub-row shows `IP - duration` so IP switches stay visible inside the same session.
+- The landing request is also rendered inside the chronology as row `#1`, then every sub-row shows `IP - elapsed time` so IP switches stay visible inside the same session.
+- Timeline duration is computed chronologically between successive rows; same-second bursts stay visible as `0s` instead of a plain `-`.
 - Downloads stay visible in **Sessions** but are excluded from HTML/JS-only behavior scoring (`page_count`, no-interaction style rules, previous page duration updates).
 - Sessions made only of direct downloads now show explicit `N/A` labels for AJAX, reactions CSS/JS, and Apache asset diagnostics instead of a misleading "missing" state.
 - ACP session cards now use a visual frame by verdict: green (OK or legitimate phpBB bot), orange (suspicion), red (strict signal).

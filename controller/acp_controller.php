@@ -1153,11 +1153,34 @@ class acp_controller
                 $visible_pages[] = $page;
             }
 
+            $timeline_duration_labels = [];
+            $page_count_total = count($pages);
+            foreach ($pages as $timeline_index => $timeline_row) {
+                $current_log_id = (int)($timeline_row['log_id'] ?? 0);
+                if ($current_log_id <= 0) {
+                    continue;
+                }
+                $next_visit_time = null;
+                if (isset($pages[$timeline_index + 1])) {
+                    $next_visit_time = (int)($pages[$timeline_index + 1]['visit_time'] ?? 0);
+                }
+                $timeline_duration_labels[$current_log_id] = $this->format_timeline_duration(
+                    (int)($timeline_row['visit_time'] ?? 0),
+                    $next_visit_time,
+                    (int)($timeline_row['duration'] ?? 0)
+                );
+            }
+
+            $landing_duration_label = $timeline_duration_labels[$landing_log_id]
+                ?? $this->format_timeline_duration((int)($row['visit_time'] ?? 0), null, (int)($row['duration'] ?? 0));
+
             $page_index = 2;
             $visible_page_count = count($visible_pages);
             $this->template->assign_block_vars('SESSIONS.LANDING_ROW', [
                 'FRAME_CLASS' => $session_frame_class,
                 'IS_LAST' => ($visible_page_count === 0) ? 1 : 0,
+                'TIME' => $this->user->format_date((int)($row['visit_time'] ?? 0), 'H:i:s'),
+                'DURATION' => $landing_duration_label,
             ]);
             foreach ($visible_pages as $visible_index => $page) {
                 $page_title = trim((string)($page['page_title'] ?? ''));
@@ -1176,7 +1199,8 @@ class acp_controller
                     'TITLE'     => htmlspecialchars($page_title, ENT_COMPAT, 'UTF-8'),
                     'URL'       => htmlspecialchars($page_url, ENT_COMPAT, 'UTF-8'),
                     'TIME'      => $this->user->format_date($page['visit_time'], 'H:i:s'),
-                    'DURATION'  => $this->format_duration($page['duration']),
+                    'DURATION'  => $timeline_duration_labels[(int)($page['log_id'] ?? 0)]
+                        ?? $this->format_timeline_duration((int)($page['visit_time'] ?? 0), null, (int)($page['duration'] ?? 0)),
                     'FRAME_CLASS' => $session_frame_class,
                     'IS_LAST'   => ($visible_index === ($visible_page_count - 1)) ? 1 : 0,
                     'HAS_IP'    => $show_page_ip ? 1 : 0,
@@ -1331,6 +1355,42 @@ class acp_controller
         if ($seconds < 3600) {
             return floor($seconds / 60) . 'm ' . ($seconds % 60) . 's';
         }
+        return floor($seconds / 3600) . 'h ' . floor(($seconds % 3600) / 60) . 'm';
+    }
+
+    /**
+     * Formate le temps écoulé entre deux lignes de timeline.
+     * Contrairement à format_duration(), une durée nulle explicite doit rester visible (`0s`).
+     */
+    private function format_timeline_duration($visit_time, $next_visit_time = null, $stored_duration = 0)
+    {
+        $current = (int)$visit_time;
+        $next = ($next_visit_time === null) ? null : (int)$next_visit_time;
+        $stored = (int)$stored_duration;
+
+        if ($next !== null && $current > 0 && $next >= $current) {
+            return $this->format_explicit_duration($next - $current);
+        }
+        if ($stored > 0) {
+            return $this->format_explicit_duration($stored);
+        }
+
+        return '-';
+    }
+
+    /**
+     * Variante timeline: garde `0s` au lieu de `-` pour les rafales dans la même seconde.
+     */
+    private function format_explicit_duration($seconds)
+    {
+        $seconds = max(0, (int)$seconds);
+        if ($seconds < 60) {
+            return $seconds . 's';
+        }
+        if ($seconds < 3600) {
+            return floor($seconds / 60) . 'm ' . ($seconds % 60) . 's';
+        }
+
         return floor($seconds / 3600) . 'h ' . floor(($seconds % 3600) / 60) . 'm';
     }
 
