@@ -17,9 +17,11 @@ class geo_async extends \phpbb\cron\task\base
     /** Durée max d'un run (secondes) — libère le cron_lock avant la limite watchdog de 300s */
     const MAX_RUNTIME_SECONDS = 240;
     /** Batch max de sessions à enrichir via logs Apache par run */
-    const APACHE_ASSET_SESSION_BATCH = 80;
+    const APACHE_ASSET_SESSION_BATCH = 240;
     /** Historique max exploitable, aligné sur les 3 derniers access.log utilisés */
     const APACHE_ASSET_HISTORY_DAYS = 3;
+    /** Inactivité minimale avant d'analyser ou de rafraîchir une session côté Apache */
+    const APACHE_ASSET_IDLE_SECONDS = 300;
     /** Tolérance avant le début de session pour rattacher un asset au chargement initial */
     const APACHE_ASSET_MATCH_LEAD_SECONDS = 45;
     /** Tolérance après la dernière page pour capturer les assets tardifs (ex: vidéo bannière) */
@@ -815,9 +817,13 @@ class geo_async extends \phpbb\cron\task\base
             return $summary;
         }
 
+        // Les assets HTTP arrivent dans les secondes qui suivent le rendu HTML, pas 30 min plus tard.
+        // On découple donc l'inactivité Apache du timeout logique de session pour éviter
+        // l'état "En attente" quasi permanent dans l'ACP.
         $settle_seconds = max(
             120,
-            (int)($this->config['bastien59_stats_session_timeout'] ?? 900)
+            self::APACHE_ASSET_IDLE_SECONDS,
+            self::APACHE_ASSET_MATCH_TRAIL_SECONDS
         );
         $targets = $this->get_pending_apache_asset_sessions(
             self::APACHE_ASSET_SESSION_BATCH,
@@ -881,27 +887,21 @@ class geo_async extends \phpbb\cron\task\base
             $counts[$sid] = ['banner' => 0, 'rank' => 0, 'avatar' => 0];
         }
 
-        $this->scan_apache_asset_events(
+        $direct_resource_candidates = $this->prepare_direct_resource_signal_candidates($target_sessions);
+        $summary['resource_signal_candidates'] = count($direct_resource_candidates);
+        $direct_resource_events = [];
+
+        $this->scan_apache_session_events(
             $sessions_by_ip,
             $target_sessions,
             $counts,
+            $direct_resource_candidates,
+            $direct_resource_events,
             $from_ts,
             $to_ts,
             $deadline,
             $summary
         );
-
-        if (empty($summary['aborted'])) {
-            $this->backfill_direct_resource_fallback_signals(
-                $sessions_by_ip,
-                $target_sessions,
-                $counts,
-                $from_ts,
-                $to_ts,
-                $deadline,
-                $summary
-            );
-        }
 
         if (!empty($summary['aborted'])) {
             if ($this->is_cli_runtime()) {
@@ -929,6 +929,13 @@ class geo_async extends \phpbb\cron\task\base
             $summary['updated']++;
         }
 
+        $this->apply_direct_resource_signal_candidates(
+            $direct_resource_candidates,
+            $direct_resource_events,
+            $counts,
+            $summary
+        );
+
         return $summary;
     }
 
@@ -942,18 +949,25 @@ class geo_async extends \phpbb\cron\task\base
         $settled_cutoff = time() - max(60, (int)$settle_seconds);
 
         $sql = 'SELECT landing.log_id, landing.session_id, landing.user_ip, landing.user_agent,
+                       landing.apache_asset_scan_time,
                        landing.visit_time AS start_time, MAX(s.visit_time) AS end_time
                 FROM ' . $this->table_prefix . 'bastien59_stats landing
                 INNER JOIN ' . $this->table_prefix . 'bastien59_stats s
                     ON s.session_id = landing.session_id
                 WHERE landing.is_first_visit = 1
-                AND landing.apache_asset_scan_time = 0
                 AND landing.user_ip <> \'\'
                 AND landing.visit_time >= ' . (int)$history_cutoff . '
                 AND landing.session_id REGEXP \'^[A-Za-z0-9]{32}$\'
-                GROUP BY landing.log_id, landing.session_id, landing.user_ip, landing.user_agent, landing.visit_time
+                GROUP BY landing.log_id, landing.session_id, landing.user_ip, landing.user_agent,
+                         landing.apache_asset_scan_time, landing.visit_time
                 HAVING MAX(s.visit_time) <= ' . (int)$settled_cutoff . '
-                ORDER BY end_time DESC';
+                   AND (
+                        landing.apache_asset_scan_time = 0
+                        OR MAX(s.visit_time) > landing.apache_asset_scan_time
+                   )
+                ORDER BY
+                    CASE WHEN landing.apache_asset_scan_time = 0 THEN 0 ELSE 1 END ASC,
+                    end_time ASC';
 
         $rows = [];
         $result = $this->db->sql_query_limit($sql, $limit);
@@ -1026,13 +1040,14 @@ class geo_async extends \phpbb\cron\task\base
      * @param array<string, array<string, int>> $counts
      * @param array<string, int> $summary
      */
-    private function scan_apache_asset_events(array $sessions_by_ip, array $target_sessions, array &$counts, $from_ts, $to_ts, $deadline, array &$summary)
+    private function scan_apache_session_events(array $sessions_by_ip, array $target_sessions, array &$counts, array $direct_resource_candidates, array &$direct_resource_events, $from_ts, $to_ts, $deadline, array &$summary)
     {
         if (empty($sessions_by_ip) || empty($target_sessions)) {
             return;
         }
 
         $target_session_ids = array_fill_keys(array_keys($target_sessions), true);
+        $direct_resource_ids = array_fill_keys(array_keys($direct_resource_candidates), true);
         $logs = [
             '/var/log/apache2/forum_access.log.2.gz',
             '/var/log/apache2/forum_access.log.1',
@@ -1082,23 +1097,6 @@ class geo_async extends \phpbb\cron\task\base
                     continue;
                 }
 
-                $status = (int)$m[5];
-                if ($status < 200 || $status >= 400) {
-                    continue;
-                }
-
-                $asset_type = $this->classify_apache_asset_uri((string)$m[4]);
-                if ($asset_type === '') {
-                    continue;
-                }
-
-                $referer = (string)$m[6];
-                if (!$this->is_forum_page_referer($referer)) {
-                    continue;
-                }
-
-                $summary['events_seen']++;
-
                 $ip = (string)$m[1];
                 if (!isset($sessions_by_ip[$ip])) {
                     continue;
@@ -1113,6 +1111,38 @@ class geo_async extends \phpbb\cron\task\base
                     continue;
                 }
 
+                $raw_uri = (string)$m[4];
+                if (isset($direct_resource_ids[$sid])) {
+                    $url = $this->normalize_relative_target($raw_uri);
+                    if ($url !== '') {
+                        if (!isset($direct_resource_events[$sid])) {
+                            $direct_resource_events[$sid] = [];
+                        }
+                        $direct_resource_events[$sid][] = [
+                            'ts' => $ts,
+                            'url' => $url,
+                            'status' => (int)$m[5],
+                            'referer' => $this->normalize_relative_target((string)$m[6]),
+                        ];
+                    }
+                }
+
+                $asset_type = $this->classify_apache_asset_uri($raw_uri);
+                if ($asset_type === '') {
+                    continue;
+                }
+
+                $status = (int)$m[5];
+                if ($status < 200 || $status >= 400) {
+                    continue;
+                }
+
+                $referer = (string)$m[6];
+                if (!$this->is_forum_page_referer($referer)) {
+                    continue;
+                }
+
+                $summary['events_seen']++;
                 $counts[$sid][$asset_type]++;
                 $summary['events_matched']++;
             }
@@ -1126,75 +1156,34 @@ class geo_async extends \phpbb\cron\task\base
     }
 
     /**
-     * Détecte le motif:
+     * Prépare les sessions candidates au motif:
      * ressource directe opaque -> fallback HTML immédiat -> aucun bootstrap navigateur.
      *
-     * Le signal strict est réservé aux cas les plus solides:
-     * - fallback `view=print`
-     * - IP déjà vue sur ce motif
-     * - PTR absent (`hostname = '-'`)
-     * - PTR non résidentiel
+     * Cette étape ne fait qu'extraire le contexte minimal par session avant
+     * le scan Apache unique du batch.
      *
-     * Les PTR résidentiels restent en observation `_shadow`.
-     *
-     * @param array<string, array<int, array<string, mixed>>> $sessions_by_ip
      * @param array<string, array<string, mixed>> $target_sessions
-     * @param array<string, array<string, int>> $counts
-     * @param array<string, int> $summary
+     * @return array<string, array<string, mixed>>
      */
-    private function backfill_direct_resource_fallback_signals(array $sessions_by_ip, array $target_sessions, array $counts, $from_ts, $to_ts, $deadline, array &$summary)
+    private function prepare_direct_resource_signal_candidates(array $target_sessions)
     {
         if (empty($target_sessions)) {
-            return;
+            return [];
         }
 
-        if (microtime(true) >= ((float)$deadline - 2.0)) {
-            $summary['aborted'] = 1;
-            return;
-        }
-
-        $session_ids = array_keys($target_sessions);
-        $rows_by_session = $this->load_session_rows_for_sessions($session_ids);
-        $snapshots = $this->load_session_bootstrap_snapshots($session_ids);
+        $rows_by_session = $this->load_session_rows_for_sessions(array_keys($target_sessions));
         $candidates = [];
-
         foreach ($target_sessions as $sid => $session_meta) {
             $candidate = $this->build_direct_resource_signal_candidate(
                 $session_meta,
-                $rows_by_session[$sid] ?? [],
-                $snapshots[$sid] ?? [],
-                $counts[$sid] ?? ['banner' => 0, 'rank' => 0, 'avatar' => 0]
+                $rows_by_session[$sid] ?? []
             );
-            if ($candidate === false) {
-                continue;
+            if ($candidate !== false) {
+                $candidates[$sid] = $candidate;
             }
-            $candidates[$sid] = $candidate;
         }
 
-        $summary['resource_signal_candidates'] = count($candidates);
-        if (empty($candidates)) {
-            return;
-        }
-
-        $matches = $this->scan_apache_direct_resource_candidates(
-            $sessions_by_ip,
-            $candidates,
-            $from_ts,
-            $to_ts,
-            $deadline,
-            $summary
-        );
-
-        if (empty($matches)) {
-            return;
-        }
-
-        foreach ($matches as $sid => $_matched) {
-            if (!isset($candidates[$sid])) {
-                continue;
-            }
-            $this->persist_direct_resource_signal_candidate($candidates[$sid], $summary);
-        }
+        return $candidates;
     }
 
     /**
@@ -1215,14 +1204,45 @@ class geo_async extends \phpbb\cron\task\base
             return $rows_by_session;
         }
 
+        $fields = [
+            'session_id',
+            'log_id',
+            'user_id',
+            'user_ip',
+            'user_agent',
+            'hostname',
+            'country_code',
+            'bot_source',
+            'visit_time',
+            'page_url',
+            'referer',
+            'screen_res',
+            'signals',
+        ];
+        if ($this->has_ajax_telemetry_columns()) {
+            $fields[] = 'screen_res_ajax';
+            $fields[] = 'scroll_down_ajax';
+        }
+        if ($this->has_ajax_advanced_columns()) {
+            $fields[] = 'ajax_interact_mask';
+            $fields[] = 'ajax_scroll_events';
+        }
+        if ($this->has_cursor_columns()) {
+            $fields[] = 'cursor_track_points';
+        }
+        if ($this->has_reactions_probe_columns()) {
+            $fields[] = 'reactions_css_seen';
+            $fields[] = 'reactions_js_seen';
+        }
+        $fields = array_values(array_unique($fields));
+
         foreach (array_chunk($valid_ids, 400) as $chunk) {
             $quoted = [];
             foreach ($chunk as $sid) {
                 $quoted[] = '\'' . $this->db->sql_escape($sid) . '\'';
             }
 
-            $sql = 'SELECT session_id, log_id, user_id, user_ip, user_agent, hostname, country_code,
-                           bot_source, visit_time, page_url, referer, screen_res, signals
+            $sql = 'SELECT ' . implode(', ', $fields) . '
                     FROM ' . $this->table_prefix . 'bastien59_stats
                     WHERE session_id IN (' . implode(',', $quoted) . ')
                     ORDER BY session_id ASC, visit_time ASC, log_id ASC';
@@ -1245,106 +1265,11 @@ class geo_async extends \phpbb\cron\task\base
     }
 
     /**
-     * @param string[] $session_ids
-     * @return array<string, array<string, int>>
-     */
-    private function load_session_bootstrap_snapshots(array $session_ids)
-    {
-        $snapshots = [];
-        $valid_ids = [];
-        foreach ($session_ids as $sid) {
-            $sid = trim((string)$sid);
-            if (preg_match('/^[A-Za-z0-9]{32}$/', $sid)) {
-                $valid_ids[] = $sid;
-                $snapshots[$sid] = [
-                    'row_count' => 0,
-                    'has_screen_res' => 0,
-                    'has_screen_res_ajax' => 0,
-                    'scroll_down' => 0,
-                    'ajax_interact_mask' => 0,
-                    'ajax_scroll_events' => 0,
-                    'cursor_track_points' => 0,
-                    'reactions_css_seen' => 0,
-                    'reactions_js_seen' => 0,
-                ];
-            }
-        }
-        if (empty($valid_ids)) {
-            return $snapshots;
-        }
-
-        $fields = [
-            'session_id',
-            'COUNT(*) AS row_count',
-            "MAX(CASE WHEN screen_res <> '' THEN 1 ELSE 0 END) AS has_screen_res",
-        ];
-        if ($this->has_ajax_telemetry_columns()) {
-            $fields[] = "MAX(CASE WHEN screen_res_ajax <> '' THEN 1 ELSE 0 END) AS has_screen_res_ajax";
-            $fields[] = 'MAX(scroll_down_ajax) AS scroll_down';
-        }
-        if ($this->has_ajax_advanced_columns()) {
-            $fields[] = 'MAX(ajax_interact_mask) AS ajax_interact_mask';
-            $fields[] = 'MAX(ajax_scroll_events) AS ajax_scroll_events';
-        }
-        if ($this->has_cursor_columns()) {
-            $fields[] = 'MAX(cursor_track_points) AS cursor_track_points';
-        }
-        if ($this->has_reactions_probe_columns()) {
-            $fields[] = 'MAX(reactions_css_seen) AS reactions_css_seen';
-            $fields[] = 'MAX(reactions_js_seen) AS reactions_js_seen';
-        }
-
-        foreach (array_chunk($valid_ids, 400) as $chunk) {
-            $quoted = [];
-            foreach ($chunk as $sid) {
-                $quoted[] = '\'' . $this->db->sql_escape($sid) . '\'';
-            }
-
-            $sql = 'SELECT ' . implode(', ', $fields) . '
-                    FROM ' . $this->table_prefix . 'bastien59_stats
-                    WHERE session_id IN (' . implode(',', $quoted) . ')
-                    GROUP BY session_id';
-
-            $this->db->sql_return_on_error(true);
-            $result = $this->db->sql_query($sql);
-            $has_error = (bool)$this->db->get_sql_error_triggered();
-            $this->db->sql_return_on_error(false);
-            if ($has_error || $result === false) {
-                if ($result !== false) {
-                    $this->db->sql_freeresult($result);
-                }
-                continue;
-            }
-
-            while ($row = $this->db->sql_fetchrow($result)) {
-                $sid = (string)($row['session_id'] ?? '');
-                if ($sid === '' || !isset($snapshots[$sid])) {
-                    continue;
-                }
-                $snapshots[$sid]['row_count'] = (int)($row['row_count'] ?? 0);
-                $snapshots[$sid]['has_screen_res'] = (int)($row['has_screen_res'] ?? 0);
-                $snapshots[$sid]['has_screen_res_ajax'] = (int)($row['has_screen_res_ajax'] ?? 0);
-                $snapshots[$sid]['scroll_down'] = (int)($row['scroll_down'] ?? 0);
-                $snapshots[$sid]['ajax_interact_mask'] = (int)($row['ajax_interact_mask'] ?? 0);
-                $snapshots[$sid]['ajax_scroll_events'] = (int)($row['ajax_scroll_events'] ?? 0);
-                $snapshots[$sid]['cursor_track_points'] = (int)($row['cursor_track_points'] ?? 0);
-                $snapshots[$sid]['reactions_css_seen'] = (int)($row['reactions_css_seen'] ?? 0);
-                $snapshots[$sid]['reactions_js_seen'] = (int)($row['reactions_js_seen'] ?? 0);
-            }
-            $this->db->sql_freeresult($result);
-        }
-
-        return $snapshots;
-    }
-
-    /**
      * @param array<string, mixed> $session_meta
      * @param array<int, array<string, mixed>> $rows
-     * @param array<string, int> $snapshot
-     * @param array<string, int> $asset_counts
      * @return array<string, mixed>|false
      */
-    private function build_direct_resource_signal_candidate(array $session_meta, array $rows, array $snapshot, array $asset_counts)
+    private function build_direct_resource_signal_candidate(array $session_meta, array $rows)
     {
         if (count($rows) !== 2) {
             return false;
@@ -1377,34 +1302,31 @@ class geo_async extends \phpbb\cron\task\base
             return false;
         }
 
-        if ((int)($snapshot['row_count'] ?? 0) !== 2) {
-            return false;
+        $has_screen_res = 0;
+        $has_screen_res_ajax = 0;
+        $scroll_down = 0;
+        $ajax_interact_mask = 0;
+        $ajax_scroll_events = 0;
+        $cursor_track_points = 0;
+        $reactions_css_seen = 0;
+        $reactions_js_seen = 0;
+
+        foreach ($rows as $row) {
+            if (trim((string)($row['screen_res'] ?? '')) !== '') {
+                $has_screen_res = 1;
+            }
+            if (trim((string)($row['screen_res_ajax'] ?? '')) !== '') {
+                $has_screen_res_ajax = 1;
+            }
+            $scroll_down = max($scroll_down, (int)($row['scroll_down_ajax'] ?? 0));
+            $ajax_interact_mask = max($ajax_interact_mask, (int)($row['ajax_interact_mask'] ?? 0));
+            $ajax_scroll_events = max($ajax_scroll_events, (int)($row['ajax_scroll_events'] ?? 0));
+            $cursor_track_points = max($cursor_track_points, (int)($row['cursor_track_points'] ?? 0));
+            $reactions_css_seen = max($reactions_css_seen, (int)($row['reactions_css_seen'] ?? 0));
+            $reactions_js_seen = max($reactions_js_seen, (int)($row['reactions_js_seen'] ?? 0));
         }
-        if ((int)($snapshot['has_screen_res'] ?? 0) !== 0) {
-            return false;
-        }
-        if ((int)($snapshot['has_screen_res_ajax'] ?? 0) !== 0) {
-            return false;
-        }
-        if ((int)($snapshot['scroll_down'] ?? 0) !== 0) {
-            return false;
-        }
-        if ((int)($snapshot['ajax_interact_mask'] ?? 0) !== 0) {
-            return false;
-        }
-        if ((int)($snapshot['ajax_scroll_events'] ?? 0) !== 0) {
-            return false;
-        }
-        if ((int)($snapshot['cursor_track_points'] ?? 0) !== 0) {
-            return false;
-        }
-        if ((int)($snapshot['reactions_css_seen'] ?? 0) !== 0) {
-            return false;
-        }
-        if ((int)($snapshot['reactions_js_seen'] ?? 0) !== 0) {
-            return false;
-        }
-        if ((int)($asset_counts['banner'] ?? 0) !== 0 || (int)($asset_counts['rank'] ?? 0) !== 0 || (int)($asset_counts['avatar'] ?? 0) !== 0) {
+
+        if ($has_screen_res || $has_screen_res_ajax || $scroll_down || $ajax_interact_mask || $ajax_scroll_events || $cursor_track_points || $reactions_css_seen || $reactions_js_seen) {
             return false;
         }
 
@@ -1428,117 +1350,33 @@ class geo_async extends \phpbb\cron\task\base
     }
 
     /**
-     * @param array<string, array<int, array<string, mixed>>> $sessions_by_ip
+     * Finalise les candidats déjà préparés après le scan Apache unique du batch.
+     *
      * @param array<string, array<string, mixed>> $candidates
+     * @param array<string, array<int, array<string, mixed>>> $events_by_session
+     * @param array<string, array<string, int>> $counts
      * @param array<string, int> $summary
-     * @return array<string, bool>
      */
-    private function scan_apache_direct_resource_candidates(array $sessions_by_ip, array $candidates, $from_ts, $to_ts, $deadline, array &$summary)
+    private function apply_direct_resource_signal_candidates(array $candidates, array $events_by_session, array $counts, array &$summary)
     {
-        $matches = [];
-        if (empty($candidates) || empty($sessions_by_ip)) {
-            return $matches;
-        }
-
-        $candidate_ids = array_fill_keys(array_keys($candidates), true);
-        $events_by_session = [];
-        $logs = [
-            '/var/log/apache2/forum_access.log.2.gz',
-            '/var/log/apache2/forum_access.log.1',
-            '/var/log/apache2/forum_access.log',
-        ];
-        $line_regex = '~^(\S+) \S+ \S+ \[([^\]]+)\] "([A-Z]+) ([^" ]+) [^"]*" (\d{3}) \S+ "([^"]*)" "([^"]*)"~';
-
-        foreach ($logs as $log_file) {
-            if (microtime(true) >= ((float)$deadline - 2.0)) {
-                $summary['aborted'] = 1;
-                break;
-            }
-            if (!is_file($log_file)) {
-                continue;
-            }
-
-            $is_gz = (substr($log_file, -3) === '.gz');
-            $fh = $is_gz ? @gzopen($log_file, 'rb') : @fopen($log_file, 'rb');
-            if (!$fh) {
-                continue;
-            }
-
-            while (true) {
-                if (microtime(true) >= ((float)$deadline - 2.0)) {
-                    $summary['aborted'] = 1;
-                    break;
-                }
-
-                $line = $is_gz ? gzgets($fh) : fgets($fh);
-                if ($line === false) {
-                    break;
-                }
-                if (!preg_match($line_regex, $line, $m)) {
-                    continue;
-                }
-
-                $ts = $this->parse_apache_log_ts((string)$m[2]);
-                if ($ts <= 0 || $ts < $from_ts || $ts > $to_ts) {
-                    continue;
-                }
-
-                $method = strtoupper((string)$m[3]);
-                if ($method !== 'GET' && $method !== 'HEAD') {
-                    continue;
-                }
-
-                $ip = (string)$m[1];
-                if (!isset($sessions_by_ip[$ip])) {
-                    continue;
-                }
-
-                $sid = $this->match_apache_asset_to_session(
-                    $sessions_by_ip[$ip],
-                    $ts,
-                    $this->normalize_user_agent_for_match((string)$m[7])
-                );
-                if ($sid === '' || !isset($candidate_ids[$sid])) {
-                    continue;
-                }
-
-                $url = $this->normalize_relative_target((string)$m[4]);
-                if ($url === '') {
-                    continue;
-                }
-
-                if (!isset($events_by_session[$sid])) {
-                    $events_by_session[$sid] = [];
-                }
-                $events_by_session[$sid][] = [
-                    'ts' => $ts,
-                    'url' => $url,
-                    'status' => (int)$m[5],
-                    'referer' => $this->normalize_relative_target((string)$m[6]),
-                ];
-            }
-
-            if ($is_gz) {
-                @gzclose($fh);
-            } else {
-                @fclose($fh);
-            }
-        }
-
-        if (!empty($summary['aborted'])) {
-            return $matches;
+        if (empty($candidates)) {
+            return;
         }
 
         foreach ($candidates as $sid => $candidate) {
+            $asset_counts = $counts[$sid] ?? ['banner' => 0, 'rank' => 0, 'avatar' => 0];
+            if ((int)$asset_counts['banner'] !== 0 || (int)$asset_counts['rank'] !== 0 || (int)$asset_counts['avatar'] !== 0) {
+                continue;
+            }
+
             $events = $events_by_session[$sid] ?? [];
             if (!$this->evaluate_direct_resource_apache_sequence($candidate, $events)) {
                 continue;
             }
-            $matches[$sid] = true;
-            $summary['resource_signal_confirmed']++;
-        }
 
-        return $matches;
+            $summary['resource_signal_confirmed']++;
+            $this->persist_direct_resource_signal_candidate($candidate, $summary);
+        }
     }
 
     /**
@@ -1550,15 +1388,6 @@ class geo_async extends \phpbb\cron\task\base
         if (empty($events)) {
             return false;
         }
-
-        usort($events, function ($a, $b) {
-            $ats = (int)($a['ts'] ?? 0);
-            $bts = (int)($b['ts'] ?? 0);
-            if ($ats === $bts) {
-                return strcmp((string)($a['url'] ?? ''), (string)($b['url'] ?? ''));
-            }
-            return ($ats < $bts) ? -1 : 1;
-        });
 
         $landing_url = (string)($candidate['page_url'] ?? '');
         $fallback_url = (string)($candidate['fallback_url'] ?? '');
@@ -1784,99 +1613,60 @@ class geo_async extends \phpbb\cron\task\base
 
     private function has_apache_asset_columns()
     {
-        if ($this->has_apache_asset_columns !== null) {
-            return $this->has_apache_asset_columns;
-        }
-
-        $sql = 'SELECT apache_banner_hits, apache_rank_hits, apache_avatar_hits, apache_asset_scan_time
-                FROM ' . $this->table_prefix . 'bastien59_stats
-                WHERE 1 = 0';
-
-        $this->db->sql_return_on_error(true);
-        $result = $this->db->sql_query_limit($sql, 1);
-        $has_error = (bool)$this->db->get_sql_error_triggered();
-        if ($result !== false) {
-            $this->db->sql_freeresult($result);
-        }
-        $this->db->sql_return_on_error(false);
-
-        $this->has_apache_asset_columns = !$has_error;
-        return $this->has_apache_asset_columns;
+        return $this->probe_stats_columns(
+            $this->has_apache_asset_columns,
+            ['apache_banner_hits', 'apache_rank_hits', 'apache_avatar_hits', 'apache_asset_scan_time']
+        );
     }
 
     private function has_ajax_telemetry_columns()
     {
-        if ($this->has_ajax_telemetry_columns !== null) {
-            return $this->has_ajax_telemetry_columns;
-        }
-
-        $sql = 'SELECT screen_res_ajax, scroll_down_ajax, ajax_seen_time
-                FROM ' . $this->table_prefix . 'bastien59_stats
-                WHERE 1 = 0';
-
-        $this->db->sql_return_on_error(true);
-        $result = $this->db->sql_query_limit($sql, 1);
-        $has_error = (bool)$this->db->get_sql_error_triggered();
-        if ($result !== false) {
-            $this->db->sql_freeresult($result);
-        }
-        $this->db->sql_return_on_error(false);
-
-        $this->has_ajax_telemetry_columns = !$has_error;
-        return $this->has_ajax_telemetry_columns;
+        return $this->probe_stats_columns(
+            $this->has_ajax_telemetry_columns,
+            ['screen_res_ajax', 'scroll_down_ajax', 'ajax_seen_time']
+        );
     }
 
     private function has_ajax_advanced_columns()
     {
-        if ($this->has_ajax_advanced_columns !== null) {
-            return $this->has_ajax_advanced_columns;
-        }
-
-        $sql = 'SELECT ajax_interact_mask, ajax_scroll_events
-                FROM ' . $this->table_prefix . 'bastien59_stats
-                WHERE 1 = 0';
-
-        $this->db->sql_return_on_error(true);
-        $result = $this->db->sql_query_limit($sql, 1);
-        $has_error = (bool)$this->db->get_sql_error_triggered();
-        if ($result !== false) {
-            $this->db->sql_freeresult($result);
-        }
-        $this->db->sql_return_on_error(false);
-
-        $this->has_ajax_advanced_columns = !$has_error;
-        return $this->has_ajax_advanced_columns;
+        return $this->probe_stats_columns(
+            $this->has_ajax_advanced_columns,
+            ['ajax_interact_mask', 'ajax_scroll_events']
+        );
     }
 
     private function has_cursor_columns()
     {
-        if ($this->has_cursor_columns !== null) {
-            return $this->has_cursor_columns;
-        }
-
-        $sql = 'SELECT cursor_track_points
-                FROM ' . $this->table_prefix . 'bastien59_stats
-                WHERE 1 = 0';
-
-        $this->db->sql_return_on_error(true);
-        $result = $this->db->sql_query_limit($sql, 1);
-        $has_error = (bool)$this->db->get_sql_error_triggered();
-        if ($result !== false) {
-            $this->db->sql_freeresult($result);
-        }
-        $this->db->sql_return_on_error(false);
-
-        $this->has_cursor_columns = !$has_error;
-        return $this->has_cursor_columns;
+        return $this->probe_stats_columns(
+            $this->has_cursor_columns,
+            ['cursor_track_points']
+        );
     }
 
     private function has_reactions_probe_columns()
     {
-        if ($this->has_reactions_probe_columns !== null) {
-            return $this->has_reactions_probe_columns;
+        return $this->probe_stats_columns(
+            $this->has_reactions_probe_columns,
+            ['reactions_extension_expected', 'reactions_css_seen', 'reactions_js_seen']
+        );
+    }
+
+    /**
+     * Sonde la présence d'un groupe de colonnes optionnelles dans `bastien59_stats`.
+     *
+     * Le résultat est mis en cache par propriété appelante pour éviter de refaire
+     * les mêmes requêtes de schéma pendant le même run cron.
+     *
+     * @param bool|null $cache
+     * @param string[] $columns
+     */
+    private function probe_stats_columns(&$cache, array $columns)
+    {
+        if ($cache !== null) {
+            return $cache;
         }
 
-        $sql = 'SELECT reactions_extension_expected, reactions_css_seen, reactions_js_seen
+        $sql = 'SELECT ' . implode(', ', $columns) . '
                 FROM ' . $this->table_prefix . 'bastien59_stats
                 WHERE 1 = 0';
 
@@ -1888,8 +1678,8 @@ class geo_async extends \phpbb\cron\task\base
         }
         $this->db->sql_return_on_error(false);
 
-        $this->has_reactions_probe_columns = !$has_error;
-        return $this->has_reactions_probe_columns;
+        $cache = !$has_error;
+        return $cache;
     }
 
     private function parse_apache_log_ts($raw)

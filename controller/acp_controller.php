@@ -853,13 +853,30 @@ class acp_controller
                 $apache_avatar_hits = 0;
                 $apache_asset_scan_label = '-';
             } else {
+                $apache_asset_idle_seconds = $this->get_apache_asset_idle_seconds();
+                $session_last_visit_time = max(
+                    (int)($row['last_visit_time'] ?? 0),
+                    (int)($row['visit_time'] ?? 0)
+                );
                 $apache_asset_scan_time = (int)($row['apache_asset_scan_time'] ?? 0);
                 $apache_banner_hits = max(0, (int)($row['apache_banner_hits'] ?? 0));
                 $apache_rank_hits = max(0, (int)($row['apache_rank_hits'] ?? 0));
                 $apache_avatar_hits = max(0, (int)($row['apache_avatar_hits'] ?? 0));
+                $apache_asset_needs_refresh = (
+                    $apache_asset_scan_time <= 0
+                    || ($session_last_visit_time > 0 && $session_last_visit_time > $apache_asset_scan_time)
+                );
 
-                if ($apache_asset_scan_time <= 0) {
-                    $apache_assets_label = $this->user->lang('STATS_APACHE_ASSETS_PENDING');
+                if ($apache_asset_needs_refresh) {
+                    $is_session_still_cooling = (
+                        $session_last_visit_time > 0
+                        && time() < ($session_last_visit_time + $apache_asset_idle_seconds)
+                    );
+                    $apache_assets_label = $this->user->lang(
+                        $is_session_still_cooling
+                            ? 'STATS_APACHE_ASSETS_PENDING_SESSION'
+                            : 'STATS_APACHE_ASSETS_PENDING_QUEUE'
+                    );
                     $apache_assets_class = 'diag-cookie-mid';
                     $apache_assets_ready = 0;
                     $apache_asset_scan_label = '-';
@@ -1378,6 +1395,14 @@ class acp_controller
 
         $this->has_apache_asset_columns = !$has_error;
         return $this->has_apache_asset_columns;
+    }
+
+    /**
+     * Garde l'ACP aligné sur la fenêtre d'inactivité utilisée par le cron Apache.
+     */
+    private function get_apache_asset_idle_seconds()
+    {
+        return max(120, (int)\bastien59960\stats\cron\task\geo_async::APACHE_ASSET_IDLE_SECONDS);
     }
 
     /**
