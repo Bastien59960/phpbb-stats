@@ -3094,8 +3094,7 @@ HTML;
         $sql = 'SELECT ip_address, country_code, country_name, city, hostname
                 FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
                 WHERE ip_address IN (' . implode(',', $escaped) . ')
-                AND cached_time > ' . (time() - $this->get_geo_cache_ttl_sec()) . '
-                AND country_code <> \'\'';
+                AND cached_time > ' . (time() - $this->get_geo_cache_ttl_sec());
 
         $result = $this->db->sql_query($sql);
         $rows = [];
@@ -3104,51 +3103,105 @@ HTML;
         }
         $this->db->sql_freeresult($result);
 
-        foreach ($keys as $key) {
-            if (!isset($rows[$key])) {
-                continue;
-            }
-            $row = $rows[$key];
-            return [
-                'country_code' => $row['country_code'],
-                'country_name' => $row['country_name'],
-                'city'         => $row['city'] ?? '',
-                'hostname'     => $row['hostname'] ?? '',
-            ];
+        $exact_key = $this->build_geo_cache_exact_key($ip);
+        $scope_key = $this->build_geo_cache_scope_key($ip);
+        $exact_row = ($exact_key !== '' && isset($rows[$exact_key])) ? $rows[$exact_key] : null;
+        $scope_row = ($scope_key !== '' && isset($rows[$scope_key])) ? $rows[$scope_key] : null;
+
+        $data = [
+            'country_code' => '',
+            'country_name' => '',
+            'city'         => '',
+            'hostname'     => '',
+        ];
+
+        if ($scope_row !== null) {
+            $data['country_code'] = (string)($scope_row['country_code'] ?? '');
+            $data['country_name'] = (string)($scope_row['country_name'] ?? '');
+            $data['city'] = (string)($scope_row['city'] ?? '');
         }
 
-        return false;
+        if ($exact_row !== null) {
+            if ($data['country_code'] === '') {
+                $data['country_code'] = (string)($exact_row['country_code'] ?? '');
+            }
+            if ($data['country_name'] === '') {
+                $data['country_name'] = (string)($exact_row['country_name'] ?? '');
+            }
+            if ($data['city'] === '') {
+                $data['city'] = (string)($exact_row['city'] ?? '');
+            }
+            $data['hostname'] = (string)($exact_row['hostname'] ?? '');
+        }
+
+        if (
+            $data['country_code'] === ''
+            && $data['country_name'] === ''
+            && $data['city'] === ''
+            && $data['hostname'] === ''
+        ) {
+            return false;
+        }
+
+        return $data;
     }
 
     /**
-     * Stocke les données géo en cache (clé sous-réseau uniquement, pas d'IP exacte)
+     * Stocke la géoloc par sous-réseau et le rDNS par IP exacte.
      */
     private function set_geo_cache($ip, $data)
     {
-        $keys = $this->build_geo_cache_keys($ip);
-        if (empty($keys)) {
+        $scope_key = $this->build_geo_cache_scope_key($ip);
+        $exact_key = $this->build_geo_cache_exact_key($ip);
+        if ($scope_key === '' && $exact_key === '') {
             return;
         }
 
-        // Toujours une seule clé (sous-réseau IPv4 ou IPv6)
-        $key = $keys[0];
+        $country_code = substr((string)($data['country_code'] ?? ''), 0, 5);
+        $country_name = substr((string)($data['country_name'] ?? ''), 0, 100);
+        $city = substr((string)($data['city'] ?? ''), 0, 100);
+        $hostname = substr(trim((string)($data['hostname'] ?? '')), 0, 255);
+        if ($country_code === '' && $country_name === '' && $city === '' && $hostname === '') {
+            return;
+        }
 
-        $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
-                WHERE ip_address = \'' . $this->db->sql_escape($key) . '\'';
-        $this->db->sql_query($sql);
+        if ($scope_key !== '') {
+            $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
+                    WHERE ip_address = \'' . $this->db->sql_escape($scope_key) . '\'';
+            $this->db->sql_query($sql);
 
-        $sql_ary = [
-            'ip_address'   => $key,
-            'country_code' => substr((string)($data['country_code'] ?? ''), 0, 5),
-            'country_name' => substr((string)($data['country_name'] ?? ''), 0, 100),
-            'city'         => substr((string)($data['city'] ?? ''), 0, 100),
-            'hostname'     => '',
-            'cached_time'  => time(),
-        ];
+            $sql_ary = [
+                'ip_address'   => $scope_key,
+                'country_code' => $country_code,
+                'country_name' => $country_name,
+                'city'         => $city,
+                'hostname'     => '',
+                'cached_time'  => time(),
+            ];
 
-        $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_geo_cache ' .
-            $this->db->sql_build_array('INSERT', $sql_ary);
-        $this->db->sql_query($sql);
+            $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_geo_cache ' .
+                $this->db->sql_build_array('INSERT', $sql_ary);
+            $this->db->sql_query($sql);
+        }
+
+        if ($exact_key !== '') {
+            $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
+                    WHERE ip_address = \'' . $this->db->sql_escape($exact_key) . '\'';
+            $this->db->sql_query($sql);
+
+            $sql_ary = [
+                'ip_address'   => $exact_key,
+                'country_code' => $country_code,
+                'country_name' => $country_name,
+                'city'         => $city,
+                'hostname'     => $hostname,
+                'cached_time'  => time(),
+            ];
+
+            $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_geo_cache ' .
+                $this->db->sql_build_array('INSERT', $sql_ary);
+            $this->db->sql_query($sql);
+        }
     }
 
     private function get_geo_cache_ttl_sec()
@@ -3163,24 +3216,54 @@ HTML;
      */
     private function build_geo_cache_keys($ip)
     {
+        $keys = [];
+        $exact_key = $this->build_geo_cache_exact_key($ip);
+        $scope_key = $this->build_geo_cache_scope_key($ip);
+
+        if ($exact_key !== '') {
+            $keys[] = $exact_key;
+        }
+        if ($scope_key !== '') {
+            $keys[] = $scope_key;
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    private function build_geo_cache_exact_key($ip)
+    {
         $clean_ip = trim((string)$ip);
         if ($clean_ip === '') {
-            return [];
+            return '';
+        }
+
+        if (filter_var($clean_ip, FILTER_VALIDATE_IP) === false) {
+            return '';
+        }
+
+        return $clean_ip;
+    }
+
+    private function build_geo_cache_scope_key($ip)
+    {
+        $clean_ip = trim((string)$ip);
+        if ($clean_ip === '') {
+            return '';
         }
 
         // IPv4 : clé sous-réseau uniquement (ex: v4:1.2.3.0/24)
         $subnet = $this->get_ipv4_subnet_key($clean_ip);
         if ($subnet !== '') {
-            return ['v4:' . $subnet];
+            return 'v4:' . $subnet;
         }
 
         // IPv6 : clé sous-réseau uniquement (ex: v6:2001:db8::/48)
         $v6 = $this->get_ipv6_subnet_key($clean_ip);
         if ($v6 !== '') {
-            return ['v6:' . $v6];
+            return 'v6:' . $v6;
         }
 
-        return [];
+        return '';
     }
 
     private function get_ipv6_subnet_key($ip)

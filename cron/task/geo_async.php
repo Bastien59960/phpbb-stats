@@ -357,16 +357,31 @@ class geo_async extends \phpbb\cron\task\base
         $limit = max(1, (int)$limit);
         $cutoff = time() - ($ttl_days * 86400);
 
-        $sql = 'SELECT user_ip, MAX(visit_time) AS last_seen
-                FROM ' . $this->table_prefix . 'bastien59_stats
-                WHERE is_first_visit = 1
-                AND user_ip <> \'\'
+        $sql = 'SELECT stats.user_ip, MAX(stats.visit_time) AS last_seen
+                FROM ' . $this->table_prefix . 'bastien59_stats stats
+                WHERE stats.is_first_visit = 1
+                AND stats.user_ip <> \'\'
                 AND (
-                    country_code = \'\'
-                    OR hostname = \'\'
+                    stats.country_code = \'\'
+                    OR stats.hostname = \'\'
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache host_cache
+                        WHERE host_cache.ip_address = stats.user_ip
+                        AND host_cache.cached_time > ' . (int)$cutoff . '
+                        AND host_cache.hostname <> \'\'
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache host_cache
+                        WHERE host_cache.ip_address = stats.user_ip
+                        AND host_cache.cached_time > ' . (int)$cutoff . '
+                        AND host_cache.hostname <> \'\'
+                        AND host_cache.hostname <> stats.hostname
+                    )
                 )
-                AND visit_time > ' . (int)$cutoff . '
-                GROUP BY user_ip
+                AND stats.visit_time > ' . (int)$cutoff . '
+                GROUP BY stats.user_ip
                 ORDER BY last_seen DESC';
 
         $result = $this->db->sql_query_limit($sql, $limit);
@@ -386,15 +401,30 @@ class geo_async extends \phpbb\cron\task\base
     private function get_pending_ip_count($ttl_days)
     {
         $cutoff = time() - (max(1, (int)$ttl_days) * 86400);
-        $sql = 'SELECT COUNT(DISTINCT user_ip) AS cnt
-                FROM ' . $this->table_prefix . 'bastien59_stats
-                WHERE is_first_visit = 1
-                AND user_ip <> \'\'
+        $sql = 'SELECT COUNT(DISTINCT stats.user_ip) AS cnt
+                FROM ' . $this->table_prefix . 'bastien59_stats stats
+                WHERE stats.is_first_visit = 1
+                AND stats.user_ip <> \'\'
                 AND (
-                    country_code = \'\'
-                    OR hostname = \'\'
+                    stats.country_code = \'\'
+                    OR stats.hostname = \'\'
+                    OR NOT EXISTS (
+                        SELECT 1
+                        FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache host_cache
+                        WHERE host_cache.ip_address = stats.user_ip
+                        AND host_cache.cached_time > ' . (int)$cutoff . '
+                        AND host_cache.hostname <> \'\'
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                        FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache host_cache
+                        WHERE host_cache.ip_address = stats.user_ip
+                        AND host_cache.cached_time > ' . (int)$cutoff . '
+                        AND host_cache.hostname <> \'\'
+                        AND host_cache.hostname <> stats.hostname
+                    )
                 )
-                AND visit_time > ' . (int)$cutoff;
+                AND stats.visit_time > ' . (int)$cutoff;
         $result = $this->db->sql_query_limit($sql, 1);
         $cnt = (int)$this->db->sql_fetchfield('cnt');
         $this->db->sql_freeresult($result);
@@ -448,8 +478,7 @@ class geo_async extends \phpbb\cron\task\base
         $sql = 'SELECT ip_address, country_code, country_name, city, hostname
                 FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
                 WHERE ip_address IN (' . implode(',', $escaped) . ')
-                AND cached_time > ' . (int)($now - $ttl_sec) . '
-                AND country_code <> \'\'';
+                AND cached_time > ' . (int)($now - $ttl_sec);
 
         $result = $this->db->sql_query($sql);
         $rows = [];
@@ -458,54 +487,104 @@ class geo_async extends \phpbb\cron\task\base
         }
         $this->db->sql_freeresult($result);
 
-        foreach ($keys as $key) {
-            if (!isset($rows[$key])) {
-                continue;
-            }
-            $r = $rows[$key];
-            return [
-                'country_code' => (string)($r['country_code'] ?? ''),
-                'country_name' => (string)($r['country_name'] ?? ''),
-                'city' => (string)($r['city'] ?? ''),
-                'hostname' => (string)($r['hostname'] ?? ''),
-                '__cache_key' => (string)$key,
-            ];
+        $exact_key = $this->build_geo_cache_exact_key($ip);
+        $scope_key = $this->build_geo_cache_scope_key($ip);
+        $exact_row = ($exact_key !== '' && isset($rows[$exact_key])) ? $rows[$exact_key] : null;
+        $scope_row = ($scope_key !== '' && isset($rows[$scope_key])) ? $rows[$scope_key] : null;
+
+        $data = [
+            'country_code' => '',
+            'country_name' => '',
+            'city' => '',
+            'hostname' => '',
+        ];
+
+        if ($scope_row !== null) {
+            $data['country_code'] = (string)($scope_row['country_code'] ?? '');
+            $data['country_name'] = (string)($scope_row['country_name'] ?? '');
+            $data['city'] = (string)($scope_row['city'] ?? '');
         }
 
-        return false;
+        if ($exact_row !== null) {
+            if ($data['country_code'] === '') {
+                $data['country_code'] = (string)($exact_row['country_code'] ?? '');
+            }
+            if ($data['country_name'] === '') {
+                $data['country_name'] = (string)($exact_row['country_name'] ?? '');
+            }
+            if ($data['city'] === '') {
+                $data['city'] = (string)($exact_row['city'] ?? '');
+            }
+            $data['hostname'] = (string)($exact_row['hostname'] ?? '');
+        }
+
+        if (
+            $data['country_code'] === ''
+            && $data['country_name'] === ''
+            && $data['city'] === ''
+            && $data['hostname'] === ''
+        ) {
+            return false;
+        }
+
+        $data['__cache_key'] = ($scope_row !== null) ? (string)$scope_key : (string)$exact_key;
+        return $data;
     }
 
     private function set_geo_cache($ip, array $geo)
     {
-        $keys = $this->build_geo_cache_keys($ip);
-        if (empty($keys)) {
+        $scope_key = $this->build_geo_cache_scope_key($ip);
+        $exact_key = $this->build_geo_cache_exact_key($ip);
+        if ($scope_key === '' && $exact_key === '') {
             return;
         }
 
-        // Toujours une seule clé (sous-réseau IPv4 ou IPv6)
-        $key = $keys[0];
         $now = time();
+        $country_code = substr((string)($geo['country_code'] ?? ''), 0, 5);
+        $country_name = substr((string)($geo['country_name'] ?? ''), 0, 100);
+        $city = substr((string)($geo['city'] ?? ''), 0, 100);
         $hostname = trim((string)($geo['hostname'] ?? ''));
-        if ($hostname === '') {
-            $hostname = '-';
+        if ($country_code === '' && $country_name === '' && $city === '' && $hostname === '') {
+            return;
+        }
+        if ($scope_key !== '') {
+            $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
+                    WHERE ip_address = \'' . $this->db->sql_escape($scope_key) . '\'';
+            $this->db->sql_query($sql);
+
+            $sql_ary = [
+                'ip_address'   => $scope_key,
+                'country_code' => $country_code,
+                'country_name' => $country_name,
+                'city'         => $city,
+                // Le reverse DNS doit rester lié à l'IP exacte, jamais au /24 ou /48.
+                'hostname'     => '',
+                'cached_time'  => $now,
+            ];
+
+            $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_geo_cache '
+                . $this->db->sql_build_array('INSERT', $sql_ary);
+            $this->db->sql_query($sql);
         }
 
-        $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
-                WHERE ip_address = \'' . $this->db->sql_escape($key) . '\'';
-        $this->db->sql_query($sql);
+        if ($exact_key !== '') {
+            $sql = 'DELETE FROM ' . $this->table_prefix . 'bastien59_stats_geo_cache
+                    WHERE ip_address = \'' . $this->db->sql_escape($exact_key) . '\'';
+            $this->db->sql_query($sql);
 
-        $sql_ary = [
-            'ip_address'   => $key,
-            'country_code' => substr((string)($geo['country_code'] ?? ''), 0, 5),
-            'country_name' => substr((string)($geo['country_name'] ?? ''), 0, 100),
-            'city'         => substr((string)($geo['city'] ?? ''), 0, 100),
-            'hostname'     => substr($hostname, 0, 255),
-            'cached_time'  => $now,
-        ];
+            $sql_ary = [
+                'ip_address'   => $exact_key,
+                'country_code' => $country_code,
+                'country_name' => $country_name,
+                'city'         => $city,
+                'hostname'     => substr($hostname, 0, 255),
+                'cached_time'  => $now,
+            ];
 
-        $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_geo_cache '
-            . $this->db->sql_build_array('INSERT', $sql_ary);
-        $this->db->sql_query($sql);
+            $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats_geo_cache '
+                . $this->db->sql_build_array('INSERT', $sql_ary);
+            $this->db->sql_query($sql);
+        }
     }
 
     private function backfill_stats_for_ip($ip, array $geo, $ttl_days)
@@ -520,11 +599,12 @@ class geo_async extends \phpbb\cron\task\base
 
         $cutoff = time() - (max(1, (int)$ttl_days) * 86400);
         $subnet_meta = $this->get_ipv4_subnet_meta($ip);
-        $scope_sql = ($subnet_meta !== false)
+        $geo_scope_sql = ($subnet_meta !== false)
             ? 'AND user_ip LIKE \'' . $this->db->sql_escape((string)$subnet_meta['prefix_hint']) . '%\'
                AND user_ip NOT LIKE \'%:%\'
                AND INET_ATON(user_ip) BETWEEN ' . (int)$subnet_meta['start'] . ' AND ' . (int)$subnet_meta['end']
             : 'AND user_ip = \'' . $this->db->sql_escape($ip) . '\'';
+        $hostname_scope_sql = 'AND user_ip = \'' . $this->db->sql_escape($ip) . '\'';
 
         $geo_set_parts = [];
         if ($country_code !== '') {
@@ -539,17 +619,17 @@ class geo_async extends \phpbb\cron\task\base
                     WHERE country_code = \'\'
                     AND is_first_visit = 1
                     AND visit_time > ' . (int)$cutoff . '
-                    ' . $scope_sql;
+                    ' . $geo_scope_sql;
             $this->db->sql_query($sql);
         }
 
         if ($hostname !== '') {
             $sql = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
                     SET hostname = \'' . $this->db->sql_escape($hostname) . '\'
-                    WHERE hostname = \'\'
+                    WHERE hostname <> \'' . $this->db->sql_escape($hostname) . '\'
                     AND is_first_visit = 1
                     AND visit_time > ' . (int)$cutoff . '
-                    ' . $scope_sql;
+                    ' . $hostname_scope_sql;
             $this->db->sql_query($sql);
         }
     }
@@ -1597,24 +1677,54 @@ class geo_async extends \phpbb\cron\task\base
      */
     private function build_geo_cache_keys($ip)
     {
+        $keys = [];
+        $exact_key = $this->build_geo_cache_exact_key($ip);
+        $scope_key = $this->build_geo_cache_scope_key($ip);
+
+        if ($exact_key !== '') {
+            $keys[] = $exact_key;
+        }
+        if ($scope_key !== '') {
+            $keys[] = $scope_key;
+        }
+
+        return array_values(array_unique($keys));
+    }
+
+    private function build_geo_cache_exact_key($ip)
+    {
         $ip = trim((string)$ip);
         if ($ip === '') {
-            return [];
+            return '';
+        }
+
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false) {
+            return '';
+        }
+
+        return $ip;
+    }
+
+    private function build_geo_cache_scope_key($ip)
+    {
+        $ip = trim((string)$ip);
+        if ($ip === '') {
+            return '';
         }
 
         // IPv4 : clé sous-réseau uniquement (ex: v4:1.2.3.0/24)
         $v4_key = $this->get_ipv4_subnet_key($ip);
         if ($v4_key !== '') {
-            return ['v4:' . $v4_key];
+            return 'v4:' . $v4_key;
         }
 
         // IPv6 : clé sous-réseau uniquement (ex: v6:2001:db8::/48)
         $v6_key = $this->get_ipv6_subnet_key($ip);
         if ($v6_key !== '') {
-            return ['v6:' . $v6_key];
+            return 'v6:' . $v6_key;
         }
 
-        return [];
+        return '';
     }
 
     private function get_ipv4_subnet_key($ip)
