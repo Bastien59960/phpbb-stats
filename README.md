@@ -21,7 +21,8 @@ As AI training demand grows, genuinely human-written forum content becomes more 
 - **Sessions** tab with timeline, visited pages, attachment downloads, cookie/AJAX diagnostics, signals, and country/flag display.
 - **Pages** tab (top pages + full referers).
 - **Map** tab (jVectorMap) for geographic distribution.
-- **Behavior** tab with members/guests/bots comparison, learned profiles, outlier signals, cursor capture health, and recent cases with SVG traces.
+- **Behavior** tab with members/guests/bots comparison, learned profiles, outlier signals, cursor capture health, `view=print` usage, and recent cases with SVG traces.
+- ACP probability block inside **Sessions** with a human/gray-zone/bot donut, score buckets, signals pushing toward bot or human, and a `P(bot)` badge on each non-excluded session.
 
 ### Multi-signal bot detection
 
@@ -61,19 +62,20 @@ Strict and observation signals depending on geo context:
 - `download/file.php` hits are logged into the same tracked session as HTML pages through the phpBB hook `core.download_file_send_to_browser_before`.
 - The ACP timeline keeps chronological `page -> downloads` ordering and exposes referer, UA, IP, geolocation, and hostname on those entries as well.
 - The landing request is also rendered inside the chronology as row `#1`, then every sub-row shows `IP - elapsed time` so IP switches stay visible inside the same session.
-- Timeline duration is computed chronologically between successive rows; same-second bursts stay visible as `0s` instead of a plain `-`.
+- Timeline duration is shown as **cumulative time since session entry**; same-second bursts stay visible as `0s` instead of a plain `-`.
 - The last timeline column now shows a shortened hash of the signed `b59_vid` cookie together with its **server-side proof** for that row, without ever exposing the raw cookie value:
   - `HTTP` = cookie actually seen in the HTTP request of that row
   - `AJAX` = cookie replayed later via `/stats/px` for a real forum HTML page
   - `Set` = cookie emitted on that response, but not yet proven back in HTTP
   - `Mismatch`, `Missing`, `N/A` = negative or unavailable diagnostics
 - The session header now exposes `IP multi-cookie` and `Cookie multi-IP` badges, with the full 24h correlation details available in the diagnostic panel.
-- An ACP `Correlations` filter can isolate `Cookie multi-IP`, `IP multi-cookie`, or all correlations without disabling the existing `Humans / Legit bots / Detected bots` filters.
+- An ACP `Correlations` filter can isolate `Cookie multi-IP`, `IP multi-cookie`, or all correlations without disabling the existing `Humans / Registered members / Legit bots / Detected bots` filters.
 - Downloads stay visible in **Sessions** but are excluded from HTML/JS-only behavior scoring (`page_count`, no-interaction style rules, previous page duration updates).
 - Sessions made only of direct downloads now show explicit `N/A` labels for AJAX, reactions CSS/JS, and Apache asset diagnostics instead of a misleading "missing" state.
 - Non-HTML URLs are now explicitly classified in the timeline (`Attachment`, `Attachment thumb`, `Media`, `app.php asset`, etc.). Missing direct paths are flagged as `Path not found` instead of being rendered like a normal HTML page.
 - Failed login rows now expose `Failed login`, the **submitted login**, and the **auth error code** captured server-side through `core.login_box_failed`. Passwords are never stored.
 - ACP session cards now use a visual frame by verdict: green (OK or legitimate phpBB bot), orange (suspicion), red (strict signal).
+- To avoid ACP memory exhaustion, the **Sessions** view is now capped at `1000` displayed groups per load. The `2000` and `5000` UI options were removed.
 
 ### Security bridge / Fail2ban
 
@@ -178,6 +180,7 @@ Main tables:
 
 - `bastien59_stats`: sessions/pages, signals, AJAX, cookie hash, `HTTP/AJAX/Set` cookie proof diagnostics, failed login attempts (`login_attempt_*`), cursor metrics, attachment downloads, and per-session Apache counters (`apache_*_hits`, `apache_asset_scan_time`).
 - `bastien59_stats_geo_cache`: geolocation cache + IPv4 subnet keys (`/24` by default, configurable in ACP).
+- `bastien59_stats_probability_model`: persistent probability model by factor, scope, and profile.
 - `bastien59_stats_behavior_profile`: learned behavior profiles.
 - `bastien59_stats_behavior_seen`: dedup table for learned sessions.
 

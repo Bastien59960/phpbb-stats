@@ -16,6 +16,7 @@ class acp_controller
     protected $user;
     protected $config;
     protected $table_prefix;
+    protected $session_probability_model;
     protected $has_ajax_telemetry_columns = null;
     protected $has_ajax_advanced_columns = null;
     protected $has_cursor_columns = null;
@@ -27,7 +28,7 @@ class acp_controller
     protected $has_behavior_learning_tables = null;
     protected $session_url_analysis_cache = [];
 
-    public function __construct($db, $template, $request, $user, $config, $table_prefix)
+    public function __construct($db, $template, $request, $user, $config, $table_prefix, $session_probability_model = null)
     {
         $this->db = $db;
         $this->template = $template;
@@ -35,6 +36,7 @@ class acp_controller
         $this->user = $user;
         $this->config = $config;
         $this->table_prefix = $table_prefix;
+        $this->session_probability_model = $session_probability_model;
     }
 
     public function display($u_action)
@@ -64,9 +66,11 @@ class acp_controller
         $bot_filter = ($show_bots) ? '' : ' AND is_bot = 0';
 
         // Limite d'affichage (500 par défaut)
+        // L'ACP sessions rend beaucoup de sous-lignes et de diagnostics par session.
+        // Au-delà de 1000 sessions, Twig finit par dépasser la mémoire PHP.
         $display_limit = $this->request->variable('limit', 500);
         if ($display_limit < 10) $display_limit = 10;
-        if ($display_limit > 5000) $display_limit = 5000;
+        if ($display_limit > 1000) $display_limit = 1000;
 
         // ================================================================
         // 1. STATISTIQUES GLOBALES
@@ -161,6 +165,7 @@ class acp_controller
         $this->assign_behavior_profiles($min_samples, $profile_limit);
         $this->assign_behavior_group_comparison($start_time);
         $this->assign_behavior_telemetry_focus_comparison($start_time);
+        $this->assign_behavior_view_print_usage($start_time);
         $this->assign_behavior_cursor_capture_health($start_time);
         $this->assign_behavior_outlier_signals($start_time);
         $this->assign_recent_behavior_cases($start_time, 200);
@@ -233,7 +238,7 @@ class acp_controller
      * Liste des sessions avec pages visitées
      * Optimisé : 2 requêtes au lieu de N+1 (plus de boucle de requêtes par session)
      */
-    private function assign_sessions($start_time, $bot_filter, $limit = 5000)
+    private function assign_sessions($start_time, $bot_filter, $limit = 1000)
     {
         $has_ajax_telemetry_columns = $this->has_ajax_telemetry_columns();
         $has_cursor_columns = $this->has_cursor_columns();
@@ -555,6 +560,26 @@ class acp_controller
                 }
             }
         }
+
+        $probability_summary = [
+            'total' => 0,
+            'human_like' => 0,
+            'uncertain' => 0,
+            'bot_like' => 0,
+            'buckets' => [
+                '0-24' => 0,
+                '25-49' => 0,
+                '50-74' => 0,
+                '75-89' => 0,
+                '90-100' => 0,
+            ],
+            'human_sum' => 0,
+            'human_count' => 0,
+            'bot_sum' => 0,
+            'bot_count' => 0,
+            'bot_factor_counts' => [],
+            'human_factor_counts' => [],
+        ];
 
         // Assigner les sessions au template
         foreach ($sessions as $row) {
@@ -992,6 +1017,72 @@ class acp_controller
                 $correlation_type = 'ip-multi-cookie';
             }
 
+            $bot_probability_assessment = (!$is_phpbb_bot && $this->session_probability_model)
+                ? $this->session_probability_model->assess_session($row, $pages, [
+                        'has_ip_multi_cookie' => $has_ip_multi_cookie,
+                        'has_cookie_multi_ip' => $has_cookie_multi_ip,
+                    ])
+                : null;
+            $bot_probability = $this->build_session_probability_view(
+                $bot_probability_assessment,
+                $is_phpbb_bot
+            );
+
+            if (!$is_phpbb_bot && is_array($bot_probability_assessment)) {
+                $probability_pct = max(0, min(100, (int)($bot_probability_assessment['probability_pct'] ?? 0)));
+                $probability_summary['total']++;
+                if ($probability_pct >= 75) {
+                    $probability_summary['bot_like']++;
+                } elseif ($probability_pct >= 25) {
+                    $probability_summary['uncertain']++;
+                } else {
+                    $probability_summary['human_like']++;
+                }
+
+                if ($probability_pct >= 90) {
+                    $probability_summary['buckets']['90-100']++;
+                } elseif ($probability_pct >= 75) {
+                    $probability_summary['buckets']['75-89']++;
+                } elseif ($probability_pct >= 50) {
+                    $probability_summary['buckets']['50-74']++;
+                } elseif ($probability_pct >= 25) {
+                    $probability_summary['buckets']['25-49']++;
+                } else {
+                    $probability_summary['buckets']['0-24']++;
+                }
+
+                if ((int)($row['is_bot'] ?? 0) === 1) {
+                    $probability_summary['bot_sum'] += $probability_pct;
+                    $probability_summary['bot_count']++;
+                } else {
+                    $probability_summary['human_sum'] += $probability_pct;
+                    $probability_summary['human_count']++;
+                }
+
+                foreach ((array)($bot_probability_assessment['factors'] ?? []) as $factor) {
+                    $factor_code = trim((string)($factor['code'] ?? ''));
+                    if ($factor_code === '') {
+                        continue;
+                    }
+                    $observed = !empty($factor['observed']) ? 1 : 0;
+                    if ($observed !== 1) {
+                        continue;
+                    }
+                    $delta = (float)($factor['delta'] ?? 0);
+                    if ($delta > 0) {
+                        if (!isset($probability_summary['bot_factor_counts'][$factor_code])) {
+                            $probability_summary['bot_factor_counts'][$factor_code] = 0;
+                        }
+                        $probability_summary['bot_factor_counts'][$factor_code]++;
+                    } elseif ($delta < 0) {
+                        if (!isset($probability_summary['human_factor_counts'][$factor_code])) {
+                            $probability_summary['human_factor_counts'][$factor_code] = 0;
+                        }
+                        $probability_summary['human_factor_counts'][$factor_code]++;
+                    }
+                }
+            }
+
             $cookie_risk_label = $this->user->lang('STATS_VISITOR_COOKIE_RISK_LOW');
             $cookie_risk_class = 'diag-cookie-ok';
             if ($cookie_ajax_fail || $cookie_ajax_mismatch) {
@@ -1215,6 +1306,10 @@ class acp_controller
                 $session_frame_class = ($signals_class['type'] === 'strict')
                     ? 'session-state-danger'
                     : 'session-state-warning';
+            } elseif (!$is_phpbb_bot && (int)($bot_probability['pct'] ?? 0) >= 90) {
+                $session_frame_class = 'session-state-danger';
+            } elseif (!$is_phpbb_bot && (int)($bot_probability['pct'] ?? 0) >= 75) {
+                $session_frame_class = 'session-state-warning';
             }
 
             $this->template->assign_block_vars('SESSIONS', [
@@ -1259,6 +1354,15 @@ class acp_controller
                 'HAS_IP_MULTI_COOKIE' => $has_ip_multi_cookie ? 1 : 0,
                 'IP_MULTI_COOKIE_TITLE' => htmlspecialchars($ip_multi_cookie_details !== '' ? $ip_multi_cookie_details : $ip_multi_cookie_label, ENT_COMPAT, 'UTF-8'),
                 'CORRELATION_TYPE' => htmlspecialchars($correlation_type, ENT_COMPAT, 'UTF-8'),
+                'BOT_PROBA_LABEL' => htmlspecialchars((string)$bot_probability['label'], ENT_COMPAT, 'UTF-8'),
+                'BOT_PROBA_BADGE_LABEL' => htmlspecialchars((string)$bot_probability['badge_label'], ENT_COMPAT, 'UTF-8'),
+                'BOT_PROBA_BADGE_CLASS' => (string)$bot_probability['badge_class'],
+                'BOT_PROBA_DIAG_CLASS' => (string)$bot_probability['diag_class'],
+                'BOT_PROBA_SCOPE_LABEL' => htmlspecialchars((string)$bot_probability['scope_label'], ENT_COMPAT, 'UTF-8'),
+                'BOT_PROBA_HUMAN_SAMPLES' => number_format((int)($bot_probability['human_samples'] ?? 0), 0, ',', ' '),
+                'BOT_PROBA_BOT_SAMPLES' => number_format((int)($bot_probability['bot_samples'] ?? 0), 0, ',', ' '),
+                'HAS_BOT_PROBA_BADGE' => !empty($bot_probability['has_badge']) ? 1 : 0,
+                'BOT_PROBA_PCT' => (int)($bot_probability['pct'] ?? 0),
                 'VISITOR_COOKIE_RISK_LABEL' => htmlspecialchars($cookie_risk_label, ENT_COMPAT, 'UTF-8'),
                 'VISITOR_COOKIE_RISK_CLASS' => $cookie_risk_class,
                 'VISITOR_COOKIE_FAIL2BAN_LABEL' => htmlspecialchars($cookie_fail2ban_label, ENT_COMPAT, 'UTF-8'),
@@ -1280,6 +1384,7 @@ class acp_controller
                 'IS_PHPBB_BOT'  => $is_phpbb_bot,
                 'USERNAME'      => ($row['user_id'] > 1) ? $this->get_username($row['user_id']) : $this->user->lang('STATS_GUEST'),
                 'IS_GUEST'      => ($row['user_id'] <= 1 && !$row['is_bot']) ? 1 : 0,
+                'IS_MEMBER'     => ($row['user_id'] > 1 && !$row['is_bot']) ? 1 : 0,
                 'IS_BOT'        => (int)$row['is_bot'],
                 'BOT_CLASS'     => ($row['is_bot']) ? ($is_phpbb_bot ? 'phpbb-bot' : 'bot') : 'human',
                 'SESSION_FRAME_CLASS' => $session_frame_class,
@@ -1309,6 +1414,10 @@ class acp_controller
                 'CURSOR_DEVICE_LABEL' => htmlspecialchars($cursor_preview_device_label, ENT_COMPAT, 'UTF-8'),
                 'CURSOR_VIEWPORT_LABEL' => htmlspecialchars($cursor_preview_viewport_label, ENT_COMPAT, 'UTF-8'),
             ]);
+
+            foreach ((array)($bot_probability['factors'] ?? []) as $factor_row) {
+                $this->template->assign_block_vars('SESSIONS.PROBA_FACTORS', $factor_row);
+            }
 
             foreach ($cursor_page_blocks as $idx => $cursor_block) {
                 $this->template->assign_block_vars('SESSIONS.CURSOR_PAGES', [
@@ -1350,18 +1459,15 @@ class acp_controller
 
             $timeline_duration_labels = [];
             $page_count_total = count($pages);
+            $timeline_origin_visit_time = (int)($pages[0]['visit_time'] ?? 0);
             foreach ($pages as $timeline_index => $timeline_row) {
                 $current_log_id = (int)($timeline_row['log_id'] ?? 0);
                 if ($current_log_id <= 0) {
                     continue;
                 }
-                $previous_visit_time = null;
-                if (isset($pages[$timeline_index - 1])) {
-                    $previous_visit_time = (int)($pages[$timeline_index - 1]['visit_time'] ?? 0);
-                }
                 $timeline_duration_labels[$current_log_id] = $this->format_timeline_duration(
                     (int)($timeline_row['visit_time'] ?? 0),
-                    $previous_visit_time,
+                    $timeline_origin_visit_time,
                     (int)($timeline_row['duration'] ?? 0),
                     ($page_count_total === 1 && $timeline_index === 0)
                 );
@@ -1370,7 +1476,7 @@ class acp_controller
             $landing_duration_label = $timeline_duration_labels[$landing_log_id]
                 ?? $this->format_timeline_duration(
                     $landing_visit_time,
-                    null,
+                    $landing_visit_time,
                     (int)($landing_page_row['duration'] ?? ($row['duration'] ?? 0)),
                     ($page_count_total === 1)
                 );
@@ -1420,7 +1526,7 @@ class acp_controller
                     'URL'       => htmlspecialchars($page_url, ENT_COMPAT, 'UTF-8'),
                     'TIME'      => $this->user->format_date($page['visit_time'], 'H:i:s'),
                     'DURATION'  => $timeline_duration_labels[(int)($page['log_id'] ?? 0)]
-                        ?? $this->format_timeline_duration((int)($page['visit_time'] ?? 0), null, (int)($page['duration'] ?? 0)),
+                        ?? $this->format_timeline_duration((int)($page['visit_time'] ?? 0), $landing_visit_time, (int)($page['duration'] ?? 0)),
                     'FRAME_CLASS' => $session_frame_class,
                     'IS_LAST'   => ($visible_index === ($visible_page_count - 1)) ? 1 : 0,
                     'HAS_IP'    => $show_page_ip ? 1 : 0,
@@ -1447,6 +1553,71 @@ class acp_controller
                 ]);
                 $page_index++;
             }
+        }
+
+        if ($probability_summary['total'] > 0) {
+            $human_like_pct = (int)round(($probability_summary['human_like'] * 100) / max(1, $probability_summary['total']));
+            $uncertain_pct = (int)round(($probability_summary['uncertain'] * 100) / max(1, $probability_summary['total']));
+            $bot_like_pct = max(0, 100 - $human_like_pct - $uncertain_pct);
+            $probability_donut = 'conic-gradient('
+                . '#27ae60 0 ' . $human_like_pct . '%, '
+                . '#95a5a6 ' . $human_like_pct . '% ' . ($human_like_pct + $uncertain_pct) . '%, '
+                . '#c0392b ' . ($human_like_pct + $uncertain_pct) . '% 100%)';
+
+            $avg_human = ($probability_summary['human_count'] > 0)
+                ? (int)round($probability_summary['human_sum'] / $probability_summary['human_count'])
+                : 0;
+            $avg_bot = ($probability_summary['bot_count'] > 0)
+                ? (int)round($probability_summary['bot_sum'] / $probability_summary['bot_count'])
+                : 0;
+
+            $this->template->assign_vars([
+                'HAS_PROBABILITY_SUMMARY' => 1,
+                'PROBABILITY_SUMMARY_TOTAL' => number_format((int)$probability_summary['total'], 0, ',', ' '),
+                'PROBABILITY_SUMMARY_HUMAN_LIKE' => number_format((int)$probability_summary['human_like'], 0, ',', ' '),
+                'PROBABILITY_SUMMARY_UNCERTAIN' => number_format((int)$probability_summary['uncertain'], 0, ',', ' '),
+                'PROBABILITY_SUMMARY_BOT_LIKE' => number_format((int)$probability_summary['bot_like'], 0, ',', ' '),
+                'PROBABILITY_SUMMARY_HUMAN_LIKE_PCT' => $human_like_pct,
+                'PROBABILITY_SUMMARY_UNCERTAIN_PCT' => $uncertain_pct,
+                'PROBABILITY_SUMMARY_BOT_LIKE_PCT' => $bot_like_pct,
+                'PROBABILITY_SUMMARY_DONUT_STYLE' => $probability_donut,
+                'PROBABILITY_SUMMARY_AVG_HUMAN' => $avg_human,
+                'PROBABILITY_SUMMARY_AVG_BOT' => $avg_bot,
+            ]);
+
+            foreach ($probability_summary['buckets'] as $bucket_label => $bucket_count) {
+                $this->template->assign_block_vars('PROBABILITY_BUCKETS', [
+                    'LABEL' => htmlspecialchars($bucket_label . '%', ENT_COMPAT, 'UTF-8'),
+                    'COUNT' => number_format((int)$bucket_count, 0, ',', ' '),
+                    'PERCENT' => (int)round(((int)$bucket_count * 100) / max(1, (int)$probability_summary['total'])),
+                ]);
+            }
+
+            arsort($probability_summary['bot_factor_counts']);
+            $top_bot_factors = array_slice($probability_summary['bot_factor_counts'], 0, 6, true);
+            foreach ($top_bot_factors as $factor_code => $factor_count) {
+                $factor_label = $this->user->lang($this->get_session_probability_factor_lang_key((string)$factor_code));
+                $this->template->assign_block_vars('PROBABILITY_TOP_BOT_FACTORS', [
+                    'LABEL' => htmlspecialchars($factor_label, ENT_COMPAT, 'UTF-8'),
+                    'COUNT' => number_format((int)$factor_count, 0, ',', ' '),
+                    'PERCENT' => (int)round(((int)$factor_count * 100) / max(1, (int)$probability_summary['total'])),
+                ]);
+            }
+
+            arsort($probability_summary['human_factor_counts']);
+            $top_human_factors = array_slice($probability_summary['human_factor_counts'], 0, 6, true);
+            foreach ($top_human_factors as $factor_code => $factor_count) {
+                $factor_label = $this->user->lang($this->get_session_probability_factor_lang_key((string)$factor_code));
+                $this->template->assign_block_vars('PROBABILITY_TOP_HUMAN_FACTORS', [
+                    'LABEL' => htmlspecialchars($factor_label, ENT_COMPAT, 'UTF-8'),
+                    'COUNT' => number_format((int)$factor_count, 0, ',', ' '),
+                    'PERCENT' => (int)round(((int)$factor_count * 100) / max(1, (int)$probability_summary['total'])),
+                ]);
+            }
+        } else {
+            $this->template->assign_vars([
+                'HAS_PROBABILITY_SUMMARY' => 0,
+            ]);
         }
     }
 
@@ -2335,17 +2506,17 @@ class acp_controller
     }
 
     /**
-     * Formate le temps écoulé depuis la ligne précédente dans la timeline.
+     * Formate le temps écoulé depuis l'entrée de la session affichée.
      * Contrairement à format_duration(), une durée nulle explicite doit rester visible (`0s`).
      */
-    private function format_timeline_duration($visit_time, $previous_visit_time = null, $stored_duration = 0, $allow_stored_fallback = false)
+    private function format_timeline_duration($visit_time, $origin_visit_time = null, $stored_duration = 0, $allow_stored_fallback = false)
     {
         $current = (int)$visit_time;
-        $previous = ($previous_visit_time === null) ? null : (int)$previous_visit_time;
+        $origin = ($origin_visit_time === null) ? null : (int)$origin_visit_time;
         $stored = (int)$stored_duration;
 
-        if ($previous !== null && $current > 0 && $current >= $previous) {
-            return $this->format_explicit_duration($current - $previous);
+        if ($origin !== null && $current > 0 && $current > $origin) {
+            return $this->format_explicit_duration($current - $origin);
         }
         if ($allow_stored_fallback && $stored > 0) {
             return $this->format_explicit_duration($stored);
@@ -2751,6 +2922,173 @@ class acp_controller
             'error_label' => $this->user->lang('STATS_SESSION_LOGIN_ATTEMPT_ERROR'),
             'error' => $error_code,
         ];
+    }
+
+    /**
+     * Transforme une évaluation probabiliste brute en vue ACP prête à afficher.
+     */
+    private function build_session_probability_view($assessment, $is_phpbb_bot = false)
+    {
+        if ($is_phpbb_bot) {
+            return [
+                'label' => $this->user->lang('STATS_BOT_PROBA_NA_PHPBB'),
+                'badge_label' => '',
+                'badge_class' => 'badge-proba-na',
+                'diag_class' => 'diag-cookie-na',
+                'scope_label' => $this->user->lang('STATS_BOT_PROBA_SCOPE_EXCLUDED'),
+                'human_samples' => 0,
+                'bot_samples' => 0,
+                'factors' => [],
+                'has_badge' => 0,
+                'pct' => 0,
+                'class' => 'na',
+            ];
+        }
+
+        if (!is_array($assessment) || !isset($assessment['probability_pct'])) {
+            return [
+                'label' => $this->user->lang('STATS_BOT_PROBA_UNAVAILABLE'),
+                'badge_label' => '',
+                'badge_class' => 'badge-proba-na',
+                'diag_class' => 'diag-cookie-na',
+                'scope_label' => $this->user->lang('STATS_BOT_PROBA_SCOPE_UNAVAILABLE'),
+                'human_samples' => 0,
+                'bot_samples' => 0,
+                'factors' => [],
+                'has_badge' => 0,
+                'pct' => 0,
+                'class' => 'na',
+            ];
+        }
+
+        $pct = max(0, min(100, (int)($assessment['probability_pct'] ?? 0)));
+        $class = (string)($assessment['class'] ?? 'low');
+        $scope = (string)($assessment['scope'] ?? 'global');
+        $human_samples = max(0, (int)($assessment['human_samples'] ?? 0));
+        $bot_samples = max(0, (int)($assessment['bot_samples'] ?? 0));
+
+        $badge_class = 'badge-proba-low';
+        $diag_class = 'diag-cookie-ok';
+        if ($class === 'very-high') {
+            $badge_class = 'badge-proba-very-high';
+            $diag_class = 'diag-cookie-bad';
+        } elseif ($class === 'high') {
+            $badge_class = 'badge-proba-high';
+            $diag_class = 'diag-cookie-bad';
+        } elseif ($class === 'medium') {
+            $badge_class = 'badge-proba-medium';
+            $diag_class = 'diag-cookie-mid';
+        }
+
+        $factor_rows = [];
+        foreach ((array)($assessment['factors'] ?? []) as $factor) {
+            $factor_rows[] = $this->build_session_probability_factor_view($factor);
+        }
+
+        return [
+            'label' => sprintf($this->user->lang('STATS_BOT_PROBA_LABEL'), $pct),
+            'badge_label' => sprintf($this->user->lang('STATS_BOT_PROBA_BADGE'), $pct),
+            'badge_class' => $badge_class,
+            'diag_class' => $diag_class,
+            'scope_label' => $this->user->lang(
+                ($scope === 'profile') ? 'STATS_BOT_PROBA_SCOPE_PROFILE' : 'STATS_BOT_PROBA_SCOPE_GLOBAL'
+            ),
+            'human_samples' => $human_samples,
+            'bot_samples' => $bot_samples,
+            'factors' => $factor_rows,
+            'has_badge' => 1,
+            'pct' => $pct,
+            'class' => $class,
+        ];
+    }
+
+    /**
+     * Traduit un facteur probabiliste en libellé/détail ACP lisible.
+     */
+    private function build_session_probability_factor_view(array $factor)
+    {
+        $code = trim((string)($factor['code'] ?? ''));
+        $delta = (float)($factor['delta'] ?? 0);
+        $class = 'diag-cookie-ok';
+        if ($delta > 0.85) {
+            $class = 'diag-cookie-bad';
+        } elseif ($delta > 0.0) {
+            $class = 'diag-cookie-mid';
+        }
+
+        $label_key = $this->get_session_probability_factor_lang_key($code);
+        $label = $this->user->lang($label_key);
+        $detail = '';
+
+        if (
+            $code === 'has_missing_expected_media'
+            || $code === 'has_loaded_expected_media'
+            || $code === 'has_human_media_bundle'
+        ) {
+            $detail = sprintf(
+                $this->user->lang('STATS_BOT_PROBA_FACTOR_MEDIA_COUNTS'),
+                max(0, (int)($factor['expected_media_count'] ?? 0)),
+                max(0, (int)($factor['loaded_media_count'] ?? 0))
+            );
+        } elseif ($code === 'has_missing_media_path') {
+            $detail = sprintf(
+                $this->user->lang('STATS_BOT_PROBA_FACTOR_MISSING_MEDIA_PATH_COUNT'),
+                max(0, (int)($factor['missing_media_path_count'] ?? 0))
+            );
+        } elseif ($code === 'has_cookie_set_burst' || $code === 'has_cookie_stable_issue') {
+            $detail = sprintf(
+                $this->user->lang('STATS_BOT_PROBA_FACTOR_COOKIE_SET_COUNT'),
+                max(0, (int)($factor['cookie_set_count'] ?? 0))
+            );
+        }
+
+        if ($detail === '') {
+            $detail = sprintf(
+                $this->user->lang(($delta >= 0) ? 'STATS_BOT_PROBA_FACTOR_PUSH_BOT' : 'STATS_BOT_PROBA_FACTOR_PUSH_HUMAN'),
+                abs((int)round($delta * 100))
+            );
+        }
+
+        return [
+            'LABEL' => htmlspecialchars($label, ENT_COMPAT, 'UTF-8'),
+            'DETAIL' => htmlspecialchars($detail, ENT_COMPAT, 'UTF-8'),
+            'CLASS' => $class,
+        ];
+    }
+
+    private function get_session_probability_factor_lang_key($code)
+    {
+        $label_map = [
+            'has_screen_res' => 'STATS_BOT_PROBA_FACTOR_SCREEN_RES',
+            'has_ajax' => 'STATS_BOT_PROBA_FACTOR_AJAX',
+            'has_scroll' => 'STATS_BOT_PROBA_FACTOR_SCROLL',
+            'has_interact' => 'STATS_BOT_PROBA_FACTOR_INTERACT',
+            'has_preexisting_cookie' => 'STATS_BOT_PROBA_FACTOR_COOKIE_HTTP',
+            'has_ajax_cookie_ok' => 'STATS_BOT_PROBA_FACTOR_COOKIE_AJAX',
+            'has_referer' => 'STATS_BOT_PROBA_FACTOR_REFERER',
+            'has_view_print' => 'STATS_BOT_PROBA_FACTOR_VIEW_PRINT',
+            'has_reactions_missing' => 'STATS_BOT_PROBA_FACTOR_REACTIONS_MISSING',
+            'has_apache_ui_assets' => 'STATS_BOT_PROBA_FACTOR_APACHE_ASSETS',
+            'has_multi_page' => 'STATS_BOT_PROBA_FACTOR_MULTI_PAGE',
+            'has_cursor' => 'STATS_BOT_PROBA_FACTOR_CURSOR',
+            'has_ip_multi_cookie' => 'STATS_BOT_PROBA_FACTOR_IP_MULTI_COOKIE',
+            'has_cookie_multi_ip' => 'STATS_BOT_PROBA_FACTOR_COOKIE_MULTI_IP',
+            'has_ua_switch' => 'STATS_BOT_PROBA_FACTOR_UA_SWITCH',
+            'has_consistent_ua' => 'STATS_BOT_PROBA_FACTOR_UA_CONSISTENT',
+            'has_missing_path' => 'STATS_BOT_PROBA_FACTOR_MISSING_PATH',
+            'has_missing_media_path' => 'STATS_BOT_PROBA_FACTOR_MISSING_MEDIA_PATH',
+            'has_missing_expected_media' => 'STATS_BOT_PROBA_FACTOR_MISSING_EXPECTED_MEDIA',
+            'has_loaded_expected_media' => 'STATS_BOT_PROBA_FACTOR_LOADED_EXPECTED_MEDIA',
+            'has_human_media_bundle' => 'STATS_BOT_PROBA_FACTOR_HUMAN_MEDIA_BUNDLE',
+            'has_multi_loaded_media' => 'STATS_BOT_PROBA_FACTOR_MULTI_LOADED_MEDIA',
+            'has_human_scroll_bundle' => 'STATS_BOT_PROBA_FACTOR_HUMAN_SCROLL_BUNDLE',
+            'has_verified_rdns' => 'STATS_BOT_PROBA_FACTOR_RDNS_VERIFIED',
+            'has_missing_rdns' => 'STATS_BOT_PROBA_FACTOR_RDNS_MISSING',
+            'has_cookie_set_burst' => 'STATS_BOT_PROBA_FACTOR_COOKIE_SET_BURST',
+            'has_cookie_stable_issue' => 'STATS_BOT_PROBA_FACTOR_COOKIE_STABLE_ISSUE',
+        ];
+
+        return isset($label_map[$code]) ? $label_map[$code] : 'STATS_BOT_PROBA_FACTOR_GENERIC';
     }
 
     /**
@@ -3163,6 +3501,69 @@ class acp_controller
                 'RES_AJAX_RATE' => number_format($res_ajax_pct, 1, ',', ' '),
                 'AJAX_RATE' => number_format($ajax_pct, 1, ',', ' '),
                 'SCROLL_RATE' => number_format($scroll_pct, 1, ',', ' '),
+            ]);
+        }
+        $this->db->sql_freeresult($result);
+    }
+
+    /**
+     * Mesure qui utilise réellement view=print dans la fenêtre.
+     * Le signal est très utile pour le profiling de scrapers déguisés.
+     */
+    private function assign_behavior_view_print_usage($start_time)
+    {
+        $sql = 'SELECT grp,
+                       COUNT(*) AS sessions,
+                       SUM(view_print_seen) AS view_print_sessions
+                FROM (
+                    SELECT
+                        session_id,
+                        CASE
+                            WHEN MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 1
+                                 AND MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0
+                                 AND MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0 THEN \'bots\'
+                            WHEN MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 1
+                                 AND MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0
+                                 AND MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 0 THEN \'members\'
+                            WHEN MAX(CASE WHEN user_id <= 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 1
+                                 AND MAX(CASE WHEN user_id > 1 AND is_bot = 0 THEN 1 ELSE 0 END) = 0
+                                 AND MAX(CASE WHEN is_bot = 1 THEN 1 ELSE 0 END) = 0 THEN \'guests\'
+                            ELSE \'mixed\'
+                        END AS grp,
+                        MAX(CASE WHEN LOWER(page_url) LIKE \'%view=print%\' THEN 1 ELSE 0 END) AS view_print_seen
+                    FROM ' . $this->table_prefix . 'bastien59_stats
+                    WHERE visit_time > ' . (int)$start_time . '
+                    GROUP BY session_id
+                ) AS sess
+                WHERE grp IN (\'members\', \'guests\', \'bots\')
+                GROUP BY grp';
+
+        $result = $this->db->sql_query($sql);
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $grp = (string)($row['grp'] ?? '');
+            if ($grp === '') {
+                continue;
+            }
+
+            $group_label = $grp;
+            if ($grp === 'members') {
+                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_MEMBERS');
+            } elseif ($grp === 'guests') {
+                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_GUESTS');
+            } elseif ($grp === 'bots') {
+                $group_label = $this->user->lang('STATS_BEHAVIOR_GROUP_BOTS');
+            }
+
+            $sessions = max(1, (int)($row['sessions'] ?? 0));
+            $view_print_sessions = max(0, (int)($row['view_print_sessions'] ?? 0));
+            $view_print_rate = round(($view_print_sessions * 100) / $sessions, 2);
+
+            $this->template->assign_block_vars('BEHAVIOR_VIEW_PRINT', [
+                'GROUP_LABEL' => htmlspecialchars($group_label, ENT_COMPAT, 'UTF-8'),
+                'SESSIONS' => number_format((int)($row['sessions'] ?? 0), 0, ',', ' '),
+                'VIEW_PRINT_SESSIONS' => number_format($view_print_sessions, 0, ',', ' '),
+                'VIEW_PRINT_RATE' => number_format($view_print_rate, 2, ',', ' '),
+                'IS_BOTS' => ($grp === 'bots') ? 1 : 0,
             ]);
         }
         $this->db->sql_freeresult($result);

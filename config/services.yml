@@ -1,4 +1,11 @@
 services:
+    bastien59960.stats.session_probability_model:
+        class: bastien59960\stats\service\session_probability_model
+        arguments:
+            - '@dbal.conn'
+            - '@config'
+            - '%core.table_prefix%'
+
     bastien59960.stats.collect.controller:
         class: bastien59960\stats\controller\collect_controller
         arguments:
@@ -17,6 +24,7 @@ services:
             - '@user'
             - '@config'
             - '%core.table_prefix%'
+            - '@bastien59960.stats.session_probability_model'
 
     bastien59960.stats.listener:
         class: bastien59960\stats\event\listener

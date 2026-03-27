@@ -21,7 +21,8 @@
 - Onglet **Sessions** avec timeline, pages, téléchargements de pièces jointes, diagnostics cookie/AJAX, signaux et aperçu pays/drapeau.
 - Onglet **Pages** (top pages + referers complets).
 - Onglet **Carte** (jVectorMap) pour la répartition géographique.
-- Onglet **Comportements** avec comparaison membres/invités/bots, profils appris, outliers invités, santé capture curseur et cas récents avec SVG.
+- Onglet **Comportements** avec comparaison membres/invités/bots, profils appris, outliers invités, santé capture curseur, usage `view=print` et cas récents avec SVG.
+- Bloc ACP probabiliste dans **Sessions**: donut humain/zone grise/bot, répartition par tranches, facteurs poussant vers bot ou humain, et badge `P(bot)` sur chaque session non exclue.
 
 ### Détection anti-bot multi-signaux
 
@@ -62,19 +63,20 @@ Signaux stricts ou d'observation selon contexte géographique:
 - Les hits `download/file.php` sont enregistrés dans la même session que les pages HTML via le hook phpBB `core.download_file_send_to_browser_before`.
 - La timeline ACP conserve l'ordre chronologique `page -> téléchargements`, avec referer, UA, IP, géoloc et hostname sur les lignes concernées.
 - La ligne d'entrée de session est aussi rendue dans la chronologie comme entrée `#1`, puis chaque sous-ligne affiche `IP - temps écoulé` pour rendre visibles les bascules d'IP dans la même session.
-- Le temps de timeline est calculé chronologiquement entre deux lignes successives; les rafales dans la même seconde restent visibles comme `0s` au lieu d'un simple `-`.
+- Le temps de timeline est affiché en **cumul depuis l'entrée de session**; les rafales dans la même seconde restent visibles comme `0s` au lieu d'un simple `-`.
 - La dernière colonne de timeline affiche maintenant l'empreinte tronquée du cookie signé `b59_vid` et sa **preuve serveur** par ligne, sans jamais exposer la valeur brute du cookie:
   - `HTTP` = cookie réellement vu dans la requête HTTP de cette ligne.
   - `AJAX` = cookie relu ensuite via `/stats/px` pour une vraie page HTML forum.
   - `Posé` = cookie émis sur cette réponse, mais pas encore prouvé en retour HTTP.
   - `Mismatch`, `Absent`, `N/A` = diagnostics négatifs ou indisponibles.
 - L'en-tête de session affiche désormais des badges visuels `IP multi-cookie` et `Cookie multi-IP`, avec le détail complet sur 24h dans le panneau de diagnostic.
-- Un filtre ACP `Corrélations` permet d'isoler `Cookie multi-IP`, `IP multi-cookie` ou toutes les corrélations, sans désactiver les filtres existants `Humains / Bots légitimes / Bots détectés`.
+- Un filtre ACP `Corrélations` permet d'isoler `Cookie multi-IP`, `IP multi-cookie` ou toutes les corrélations, sans désactiver les filtres existants `Humains / Membres enregistrés / Bots légitimes / Bots détectés`.
 - Les téléchargements restent visibles dans **Sessions**, mais ils sont exclus des heuristiques purement "page HTML + JS" (`page_count`, signaux absence d'interaction, durée de la page précédente).
 - Les sessions composées uniquement de téléchargements directs affichent désormais des libellés `N/A` explicites pour AJAX, CSS/JS réactions et assets Apache, au lieu d'un faux état "absent".
 - Les URLs non HTML sont maintenant classées explicitement dans la timeline (`Pièce jointe`, `Miniature PJ`, `Média`, `Asset app.php`, etc.). Les chemins directs inexistants sont signalés comme `Chemin introuvable` au lieu d'être présentés comme une page HTML banale.
 - Quand un login échoue, la ligne correspondante affiche `Login raté`, le **login soumis** et le **code d'erreur auth** captés côté serveur via `core.login_box_failed`. Le mot de passe n'est jamais enregistré.
 - Les cartes de session ACP sont visuellement encadrées selon le verdict: vert (OK ou bot phpBB légitime), orange (suspicion), rouge (signal strict).
+- Pour éviter les erreurs mémoire côté ACP, l'affichage **Sessions** est plafonné à `1000` groupes visibles par chargement. Les valeurs `2000` et `5000` ne sont plus proposées dans l'interface.
 
 ### Aucun DNS synchrone sur le thread web
 
@@ -201,6 +203,7 @@ Tables principales:
 
 - `bastien59_stats`: sessions/pages, signaux, AJAX, hash cookie, diagnostics de preuve `HTTP/AJAX/Posé`, tentatives de login ratées (`login_attempt_*`), curseur, téléchargements de PJ et compteurs Apache par session (`apache_*_hits`, `apache_asset_scan_time`).
 - `bastien59_stats_geo_cache`: cache géolocalisation IP + clé de sous-réseau IPv4 (`/24` par défaut, configurable en ACP).
+- `bastien59_stats_probability_model`: modèle probabiliste persistant par facteur, scope et profil.
 - `bastien59_stats_behavior_profile`: profils appris (membres).
 - `bastien59_stats_behavior_seen`: sessions déjà intégrées à l'apprentissage.
 

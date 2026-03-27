@@ -4,30 +4,256 @@
 <p>{L_ACP_STATS_BEHAVIOR_EXPLAIN}</p>
 
 <style>
-.behavior-wrap { margin: 15px 0; }
-.behavior-filters { background:#f5f5f5; border:1px solid #ddd; border-radius:6px; padding:12px; margin-bottom:16px; display:flex; gap:18px; align-items:center; flex-wrap:wrap; }
-.behavior-filters label { font-weight:bold; margin-right:4px; }
-.behavior-card-grid { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
-.behavior-card { flex:1; min-width:170px; background:#eef4fb; border:1px solid #d7e4f3; border-radius:8px; padding:10px 12px; }
-.behavior-card .k { color:#105289; font-size:12px; font-weight:bold; text-transform:uppercase; }
-.behavior-card .v { color:#1f2d3d; font-size:24px; font-weight:bold; }
-.behavior-box { border:1px solid #ddd; border-radius:8px; margin-bottom:16px; background:#fff; }
-.behavior-box h3 { margin:0; padding:10px 12px; border-bottom:1px solid #eee; background:#fafafa; }
-.behavior-table { width:100%; border-collapse:collapse; }
-.behavior-table th { background:#105289; color:#fff; padding:8px; text-align:left; font-size:12px; }
-.behavior-table td { padding:8px; border-bottom:1px solid #eee; vertical-align:top; font-size:12px; }
-.behavior-table tr:hover td { background:#f9fbff; }
-.behavior-muted { color:#777; font-size:12px; }
-.behavior-empty { padding:16px; color:#999; text-align:center; }
-.behavior-chip { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; background:#e8edf4; color:#334; }
-.behavior-bot { background:#fce8e6; color:#b3261e; }
-.behavior-help { cursor:help; text-decoration:underline dotted; text-underline-offset:2px; }
-.behavior-cursor-svg { display:block; width:220px; height:140px; border:1px solid #d8e4f2; border-radius:6px; background:#fff; }
+.behavior-wrap {
+    margin: 16px 0 22px;
+}
+.behavior-filters {
+    background: linear-gradient(135deg, #f6f9fc 0%, #ffffff 100%);
+    border: 1px solid #d7e4f3;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+    display: flex;
+    gap: 18px;
+    align-items: end;
+    flex-wrap: wrap;
+    box-shadow: 0 10px 24px rgba(16, 82, 137, 0.06);
+}
+.behavior-filters label {
+    display: block;
+    font-weight: bold;
+    margin: 0 0 4px;
+    color: #23476b;
+}
+.behavior-filters input[type="number"],
+.behavior-filters select {
+    min-height: 32px;
+    border: 1px solid #c7d9ec;
+    border-radius: 8px;
+    padding: 4px 8px;
+    background: #fff;
+}
+.behavior-intro {
+    margin: 0 0 16px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #0f5f88 0%, #153f67 100%);
+    color: #f2f7fb;
+    box-shadow: 0 12px 28px rgba(10, 44, 72, 0.18);
+}
+.behavior-intro strong {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 14px;
+    letter-spacing: 0.02em;
+}
+.behavior-intro span {
+    display: block;
+    max-width: 960px;
+    color: rgba(242, 247, 251, 0.88);
+    line-height: 1.45;
+}
+.behavior-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+}
+.behavior-card {
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+    background: linear-gradient(145deg, #eef5ff 0%, #ffffff 100%);
+    border: 1px solid #d5e3f2;
+    border-radius: 14px;
+    padding: 14px 16px;
+    box-shadow: 0 10px 26px rgba(31, 45, 61, 0.07);
+}
+.behavior-card::after {
+    content: "";
+    position: absolute;
+    inset: auto -10px -18px auto;
+    width: 74px;
+    height: 74px;
+    border-radius: 50%;
+    background: rgba(16, 82, 137, 0.08);
+}
+.behavior-card .k {
+    color: #3e6d95;
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+.behavior-card .v {
+    color: #16324f;
+    font-size: 28px;
+    line-height: 1.1;
+    font-weight: bold;
+    margin-top: 8px;
+}
+.behavior-card .s {
+    position: relative;
+    z-index: 1;
+    margin-top: 6px;
+    color: #5e7894;
+    font-size: 12px;
+}
+.behavior-section-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 16px;
+    margin-bottom: 16px;
+}
+.behavior-box {
+    border: 1px solid #d8e4f2;
+    border-radius: 14px;
+    margin-bottom: 16px;
+    background: #fff;
+    box-shadow: 0 12px 28px rgba(16, 82, 137, 0.06);
+    overflow: hidden;
+}
+.behavior-box h3 {
+    margin: 0;
+    padding: 13px 16px;
+    border-bottom: 1px solid #e8eef6;
+    background: linear-gradient(180deg, #fbfdff 0%, #f3f8fd 100%);
+    color: #133b61;
+}
+.behavior-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+.behavior-table th {
+    background: #0f4f80;
+    color: #fff;
+    padding: 9px 10px;
+    text-align: left;
+    font-size: 12px;
+    border-right: 1px solid rgba(255,255,255,0.08);
+}
+.behavior-table td {
+    padding: 10px;
+    border-bottom: 1px solid #edf2f8;
+    vertical-align: top;
+    font-size: 12px;
+}
+.behavior-table tbody tr:nth-child(even) td {
+    background: #fbfdff;
+}
+.behavior-table tr:hover td {
+    background: #f1f7fd;
+}
+.behavior-muted {
+    color: #6d8093;
+    font-size: 12px;
+}
+.behavior-empty {
+    padding: 18px;
+    color: #8ea0b3;
+    text-align: center;
+}
+.behavior-chip {
+    display: inline-block;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: bold;
+    background: #e8eff7;
+    color: #2e4965;
+    letter-spacing: 0.01em;
+}
+.behavior-bot {
+    background: #fce8e6;
+    color: #b3261e;
+}
+.behavior-help {
+    cursor: help;
+    text-decoration: underline dotted;
+    text-underline-offset: 2px;
+}
+.behavior-metric {
+    min-width: 120px;
+}
+.behavior-metric strong {
+    display: block;
+    margin-bottom: 5px;
+    color: #18324d;
+}
+.behavior-meter {
+    position: relative;
+    overflow: hidden;
+    height: 8px;
+    border-radius: 999px;
+    background: #e7eef6;
+}
+.behavior-meter > span {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #1f81d2 0%, #67b5ff 100%);
+}
+.behavior-meter[data-tone="orange"] > span {
+    background: linear-gradient(90deg, #ff9d42 0%, #ffd36d 100%);
+}
+.behavior-meter[data-tone="red"] > span {
+    background: linear-gradient(90deg, #ef5b54 0%, #ff9a84 100%);
+}
+.behavior-meter[data-tone="green"] > span {
+    background: linear-gradient(90deg, #20a464 0%, #67d29a 100%);
+}
+.behavior-meter[data-tone="purple"] > span {
+    background: linear-gradient(90deg, #7f61ff 0%, #b196ff 100%);
+}
+.behavior-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.behavior-tagline {
+    padding: 10px 16px 0;
+}
+.behavior-tagline p {
+    margin: 0;
+}
+.behavior-profile-key {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #eef4fb;
+    color: #5e7792;
+    font-size: 11px;
+}
+.behavior-cursor-svg {
+    display: block;
+    width: 220px;
+    height: 140px;
+    border: 1px solid #d8e4f2;
+    border-radius: 8px;
+    background: #fff;
+}
 .behavior-cursor-svg[data-cursor-zoom-ready="1"] { touch-action: none; user-select: none; -webkit-user-select: none; }
 .behavior-cursor-svg.cursor-zoom-in { cursor: zoom-in !important; }
 .behavior-cursor-svg.cursor-zoom-grab { cursor: grab !important; }
 .behavior-cursor-svg.cursor-zoom-grabbing { cursor: grabbing !important; }
-.behavior-note { padding:10px 12px; margin:0; border-bottom:1px solid #eee; }
+.behavior-note {
+    padding: 10px 16px;
+    margin: 0;
+    border-bottom: 1px solid #edf2f8;
+    background: #f8fbff;
+}
+.behavior-case-signal {
+    display: inline-block;
+    margin: 0 4px 4px 0;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: #fff1e7;
+    color: #9a4d0d;
+    font-size: 11px;
+    font-weight: bold;
+}
 .behavior-help::after {
     content:" ?";
     display:inline-block;
@@ -42,6 +268,18 @@
     line-height:11px;
     text-align:center;
     vertical-align:middle;
+}
+
+@media (max-width: 960px) {
+    .behavior-section-grid {
+        grid-template-columns: 1fr;
+    }
+    .behavior-table {
+        min-width: 820px;
+    }
+    .behavior-box {
+        overflow-x: auto;
+    }
 }
 </style>
 
@@ -75,22 +313,31 @@
         </div>
     </form>
 
+    <div class="behavior-intro">
+        <strong>{L_ACP_STATS_BEHAVIOR}</strong>
+        <span>{L_ACP_STATS_BEHAVIOR_EXPLAIN}</span>
+    </div>
+
     <div class="behavior-card-grid">
         <div class="behavior-card">
             <div class="k">{L_STATS_BEHAVIOR_LEARNING_STATUS}</div>
             <div class="v"><!-- IF LEARNING_ENABLED -->ON<!-- ELSE -->OFF<!-- ENDIF --></div>
+            <div class="s">Baseline membres enregistré côté serveur</div>
         </div>
         <div class="behavior-card">
             <div class="k">{L_STATS_BEHAVIOR_TABLES_STATUS}</div>
             <div class="v"><!-- IF HAS_LEARNING_TABLES -->OK<!-- ELSE -->N/A<!-- ENDIF --></div>
+            <div class="s">Disponibilité des tables de profils et signaux</div>
         </div>
         <div class="behavior-card">
             <div class="k">{L_STATS_BEHAVIOR_PURE_SESSIONS}</div>
             <div class="v">{BEHAVIOR_GROUP_SESSIONS_TOTAL_PURE}</div>
+            <div class="s">Sessions strictement classables pour comparaison</div>
         </div>
         <div class="behavior-card">
             <div class="k">{L_STATS_BEHAVIOR_MIXED_SESSIONS}</div>
             <div class="v">{BEHAVIOR_GROUP_SESSIONS_MIXED}</div>
+            <div class="s">Sessions volontairement exclues du baseline</div>
         </div>
     </div>
 
@@ -101,102 +348,212 @@
     <!-- ENDIF -->
 
     <!-- IF HAS_LEARNING_TABLES -->
-    <div class="behavior-box">
-        <h3>{L_STATS_BEHAVIOR_GROUP_COMPARISON}</h3>
-        <p class="behavior-muted" style="padding:10px 12px; margin:0; border-bottom:1px solid #eee;">
-            {L_STATS_BEHAVIOR_MIXED_EXPLAIN}
-            ({BEHAVIOR_GROUP_SESSIONS_TOTAL_PURE} / {BEHAVIOR_GROUP_SESSIONS_TOTAL_ALL}).
-        </p>
-        <table class="behavior-table">
-            <thead>
-                <tr>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_GROUP}">{L_STATS_BEHAVIOR_COL_GROUP}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SESSIONS}">{L_STATS_BEHAVIOR_COL_SESSIONS}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_AJAX_RATE}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SCROLL_RATE}">{L_STATS_BEHAVIOR_COL_SCROLL_RATE}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_FIRST_SCROLL}">{L_STATS_BEHAVIOR_COL_AVG_FIRST_SCROLL}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_EVENTS}">{L_STATS_BEHAVIOR_COL_AVG_EVENTS}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_MAXY}">{L_STATS_BEHAVIOR_COL_AVG_MAXY}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_ZERO_INTERACT}">{L_STATS_BEHAVIOR_COL_ZERO_INTERACT}</span></th>
-                </tr>
-            </thead>
-            <tbody>
-            <!-- BEGIN BEHAVIOR_GROUPS -->
-                <tr>
-                    <td><span class="behavior-chip<!-- IF BEHAVIOR_GROUPS.IS_BOTS --> behavior-bot<!-- ENDIF -->">{BEHAVIOR_GROUPS.GROUP_LABEL}</span></td>
-                    <td>{BEHAVIOR_GROUPS.SESSIONS}</td>
-                    <td>{BEHAVIOR_GROUPS.AJAX_RATE}%</td>
-                    <td>{BEHAVIOR_GROUPS.SCROLL_RATE}%</td>
-                    <td>{BEHAVIOR_GROUPS.AVG_FIRST_SCROLL_MS} ms</td>
-                    <td>{BEHAVIOR_GROUPS.AVG_SCROLL_EVENTS}</td>
-                    <td>{BEHAVIOR_GROUPS.AVG_SCROLL_MAX_Y}px</td>
-                    <td>{BEHAVIOR_GROUPS.ZERO_INTERACT_RATE}%</td>
-                </tr>
-            <!-- BEGINELSE -->
-                <tr><td colspan="8" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
-            <!-- END BEHAVIOR_GROUPS -->
-            </tbody>
-        </table>
+    <div class="behavior-section-grid">
+        <div class="behavior-box">
+            <h3>{L_STATS_BEHAVIOR_GROUP_COMPARISON}</h3>
+            <p class="behavior-muted behavior-note">
+                {L_STATS_BEHAVIOR_MIXED_EXPLAIN}
+                ({BEHAVIOR_GROUP_SESSIONS_TOTAL_PURE} / {BEHAVIOR_GROUP_SESSIONS_TOTAL_ALL}).
+            </p>
+            <table class="behavior-table">
+                <thead>
+                    <tr>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_GROUP}">{L_STATS_BEHAVIOR_COL_GROUP}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SESSIONS}">{L_STATS_BEHAVIOR_COL_SESSIONS}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_AJAX_RATE}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SCROLL_RATE}">{L_STATS_BEHAVIOR_COL_SCROLL_RATE}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_FIRST_SCROLL}">{L_STATS_BEHAVIOR_COL_AVG_FIRST_SCROLL}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_EVENTS}">{L_STATS_BEHAVIOR_COL_AVG_EVENTS}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AVG_MAXY}">{L_STATS_BEHAVIOR_COL_AVG_MAXY}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_ZERO_INTERACT}">{L_STATS_BEHAVIOR_COL_ZERO_INTERACT}</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                <!-- BEGIN BEHAVIOR_GROUPS -->
+                    <tr>
+                        <td><span class="behavior-chip<!-- IF BEHAVIOR_GROUPS.IS_BOTS --> behavior-bot<!-- ENDIF -->">{BEHAVIOR_GROUPS.GROUP_LABEL}</span></td>
+                        <td>{BEHAVIOR_GROUPS.SESSIONS}</td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_GROUPS.AJAX_RATE}%</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_GROUPS.AJAX_RATE}" data-tone="blue"><span></span></div>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_GROUPS.SCROLL_RATE}%</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_GROUPS.SCROLL_RATE}" data-tone="green"><span></span></div>
+                            </div>
+                        </td>
+                        <td>{BEHAVIOR_GROUPS.AVG_FIRST_SCROLL_MS} ms</td>
+                        <td>{BEHAVIOR_GROUPS.AVG_SCROLL_EVENTS}</td>
+                        <td>{BEHAVIOR_GROUPS.AVG_SCROLL_MAX_Y}px</td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_GROUPS.ZERO_INTERACT_RATE}%</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_GROUPS.ZERO_INTERACT_RATE}" data-tone="red"><span></span></div>
+                            </div>
+                        </td>
+                    </tr>
+                <!-- BEGINELSE -->
+                    <tr><td colspan="8" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+                <!-- END BEHAVIOR_GROUPS -->
+                </tbody>
+            </table>
+        </div>
+
+        <div class="behavior-box">
+            <h3>{L_STATS_BEHAVIOR_TELEMETRY_FOCUS}</h3>
+            <table class="behavior-table">
+                <thead>
+                    <tr>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_GROUP}">{L_STATS_BEHAVIOR_COL_GROUP}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SESSIONS}">{L_STATS_BEHAVIOR_COL_SESSIONS}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RES_COOKIE_RATE}">{L_STATS_BEHAVIOR_COL_RES_COOKIE_RATE}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RES_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_RES_AJAX_RATE}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_AJAX_RATE}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SCROLL_RATE}">{L_STATS_BEHAVIOR_COL_SCROLL_RATE}</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                <!-- BEGIN BEHAVIOR_TELEMETRY_SEGMENTS -->
+                    <tr>
+                        <td><span class="behavior-chip">{BEHAVIOR_TELEMETRY_SEGMENTS.GROUP_LABEL}</span></td>
+                        <td>{BEHAVIOR_TELEMETRY_SEGMENTS.SESSIONS}</td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_TELEMETRY_SEGMENTS.RES_COOKIE_RATE}%</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_TELEMETRY_SEGMENTS.RES_COOKIE_RATE}" data-tone="purple"><span></span></div>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_TELEMETRY_SEGMENTS.RES_AJAX_RATE}%</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_TELEMETRY_SEGMENTS.RES_AJAX_RATE}" data-tone="blue"><span></span></div>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_TELEMETRY_SEGMENTS.AJAX_RATE}%</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_TELEMETRY_SEGMENTS.AJAX_RATE}" data-tone="green"><span></span></div>
+                            </div>
+                        </td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_TELEMETRY_SEGMENTS.SCROLL_RATE}%</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_TELEMETRY_SEGMENTS.SCROLL_RATE}" data-tone="orange"><span></span></div>
+                            </div>
+                        </td>
+                    </tr>
+                <!-- BEGINELSE -->
+                    <tr><td colspan="6" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+                <!-- END BEHAVIOR_TELEMETRY_SEGMENTS -->
+                </tbody>
+            </table>
+        </div>
     </div>
 
-    <div class="behavior-box">
-        <h3>{L_STATS_BEHAVIOR_TELEMETRY_FOCUS}</h3>
-        <table class="behavior-table">
-            <thead>
-                <tr>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_GROUP}">{L_STATS_BEHAVIOR_COL_GROUP}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SESSIONS}">{L_STATS_BEHAVIOR_COL_SESSIONS}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RES_COOKIE_RATE}">{L_STATS_BEHAVIOR_COL_RES_COOKIE_RATE}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RES_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_RES_AJAX_RATE}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_AJAX_RATE}">{L_STATS_BEHAVIOR_COL_AJAX_RATE}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SCROLL_RATE}">{L_STATS_BEHAVIOR_COL_SCROLL_RATE}</span></th>
-                </tr>
-            </thead>
-            <tbody>
-            <!-- BEGIN BEHAVIOR_TELEMETRY_SEGMENTS -->
-                <tr>
-                    <td><span class="behavior-chip">{BEHAVIOR_TELEMETRY_SEGMENTS.GROUP_LABEL}</span></td>
-                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.SESSIONS}</td>
-                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.RES_COOKIE_RATE}%</td>
-                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.RES_AJAX_RATE}%</td>
-                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.AJAX_RATE}%</td>
-                    <td>{BEHAVIOR_TELEMETRY_SEGMENTS.SCROLL_RATE}%</td>
-                </tr>
-            <!-- BEGINELSE -->
-                <tr><td colspan="6" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
-            <!-- END BEHAVIOR_TELEMETRY_SEGMENTS -->
-            </tbody>
-        </table>
-    </div>
+    <div class="behavior-section-grid">
+        <div class="behavior-box">
+            <h3>{L_STATS_BEHAVIOR_VIEW_PRINT_USAGE}</h3>
+            <p class="behavior-muted behavior-note">{L_STATS_BEHAVIOR_VIEW_PRINT_EXPLAIN}</p>
+            <table class="behavior-table">
+                <thead>
+                    <tr>
+                        <th>{L_STATS_BEHAVIOR_COL_GROUP}</th>
+                        <th>{L_STATS_BEHAVIOR_COL_SESSIONS}</th>
+                        <th>{L_STATS_COL_VISITS}</th>
+                        <th>{L_STATS_BEHAVIOR_COL_RATE}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                <!-- BEGIN BEHAVIOR_VIEW_PRINT -->
+                    <tr>
+                        <td><span class="behavior-chip<!-- IF BEHAVIOR_VIEW_PRINT.IS_BOTS --> behavior-bot<!-- ENDIF -->">{BEHAVIOR_VIEW_PRINT.GROUP_LABEL}</span></td>
+                        <td>{BEHAVIOR_VIEW_PRINT.SESSIONS}</td>
+                        <td>{BEHAVIOR_VIEW_PRINT.VIEW_PRINT_SESSIONS}</td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_VIEW_PRINT.VIEW_PRINT_RATE}%</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_VIEW_PRINT.VIEW_PRINT_RATE}" data-tone="red"><span></span></div>
+                            </div>
+                        </td>
+                    </tr>
+                <!-- BEGINELSE -->
+                    <tr><td colspan="4" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+                <!-- END BEHAVIOR_VIEW_PRINT -->
+                </tbody>
+            </table>
+        </div>
 
-    <div class="behavior-box">
-        <h3>{L_STATS_BEHAVIOR_CURSOR_CAPTURE_HEALTH}</h3>
-        <table class="behavior-table">
-            <thead>
-                <tr>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_GROUP}">{L_STATS_BEHAVIOR_COL_GROUP}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SESSIONS}">{L_STATS_BEHAVIOR_COL_SESSIONS}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_USERS}">{L_STATS_BEHAVIOR_COL_USERS}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_CURSOR_OK}">{L_STATS_BEHAVIOR_COL_CURSOR_OK}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_CURSOR_FAIL}">{L_STATS_BEHAVIOR_COL_CURSOR_FAIL}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_CURSOR_FAIL_RATE}">{L_STATS_BEHAVIOR_COL_CURSOR_FAIL_RATE}</span></th>
-                </tr>
-            </thead>
-            <tbody>
-            <!-- BEGIN BEHAVIOR_CURSOR_CAPTURE -->
-                <tr>
-                    <td><span class="behavior-chip">{BEHAVIOR_CURSOR_CAPTURE.GROUP_LABEL}</span></td>
-                    <td>{BEHAVIOR_CURSOR_CAPTURE.SESSIONS}</td>
-                    <td>{BEHAVIOR_CURSOR_CAPTURE.USERS}</td>
-                    <td>{BEHAVIOR_CURSOR_CAPTURE.TRACE_OK} ({BEHAVIOR_CURSOR_CAPTURE.TRACE_OK_RATE}%)</td>
-                    <td>{BEHAVIOR_CURSOR_CAPTURE.TRACE_FAIL}</td>
-                    <td>{BEHAVIOR_CURSOR_CAPTURE.TRACE_FAIL_RATE}%</td>
-                </tr>
-            <!-- BEGINELSE -->
-                <tr><td colspan="6" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
-            <!-- END BEHAVIOR_CURSOR_CAPTURE -->
-            </tbody>
-        </table>
+        <div class="behavior-box">
+            <h3>{L_STATS_BEHAVIOR_CURSOR_CAPTURE_HEALTH}</h3>
+            <table class="behavior-table">
+                <thead>
+                    <tr>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_GROUP}">{L_STATS_BEHAVIOR_COL_GROUP}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SESSIONS}">{L_STATS_BEHAVIOR_COL_SESSIONS}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_USERS}">{L_STATS_BEHAVIOR_COL_USERS}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_CURSOR_OK}">{L_STATS_BEHAVIOR_COL_CURSOR_OK}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_CURSOR_FAIL}">{L_STATS_BEHAVIOR_COL_CURSOR_FAIL}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_CURSOR_FAIL_RATE}">{L_STATS_BEHAVIOR_COL_CURSOR_FAIL_RATE}</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                <!-- BEGIN BEHAVIOR_CURSOR_CAPTURE -->
+                    <tr>
+                        <td><span class="behavior-chip">{BEHAVIOR_CURSOR_CAPTURE.GROUP_LABEL}</span></td>
+                        <td>{BEHAVIOR_CURSOR_CAPTURE.SESSIONS}</td>
+                        <td>{BEHAVIOR_CURSOR_CAPTURE.USERS}</td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_CURSOR_CAPTURE.TRACE_OK} ({BEHAVIOR_CURSOR_CAPTURE.TRACE_OK_RATE}%)</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_CURSOR_CAPTURE.TRACE_OK_RATE}" data-tone="green"><span></span></div>
+                            </div>
+                        </td>
+                        <td>{BEHAVIOR_CURSOR_CAPTURE.TRACE_FAIL}</td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_CURSOR_CAPTURE.TRACE_FAIL_RATE}%</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_CURSOR_CAPTURE.TRACE_FAIL_RATE}" data-tone="red"><span></span></div>
+                            </div>
+                        </td>
+                    </tr>
+                <!-- BEGINELSE -->
+                    <tr><td colspan="6" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+                <!-- END BEHAVIOR_CURSOR_CAPTURE -->
+                </tbody>
+            </table>
+        </div>
+
+        <div class="behavior-box">
+            <h3>{L_STATS_BEHAVIOR_OUTLIERS}</h3>
+            <table class="behavior-table">
+                <thead>
+                    <tr>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SIGNAL}">{L_STATS_BEHAVIOR_COL_SIGNAL}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_VISITS}">{L_STATS_COL_VISITS}</span></th>
+                        <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RATE}">{L_STATS_BEHAVIOR_COL_RATE}</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                <!-- BEGIN BEHAVIOR_OUTLIERS -->
+                    <tr>
+                        <td><code>{BEHAVIOR_OUTLIERS.SIGNAL}</code><br><span class="behavior-muted">{BEHAVIOR_OUTLIERS.LABEL}</span></td>
+                        <td>{BEHAVIOR_OUTLIERS.COUNT}</td>
+                        <td>
+                            <div class="behavior-metric">
+                                <strong>{BEHAVIOR_OUTLIERS.RATE}%</strong>
+                                <div class="behavior-meter" data-rate="{BEHAVIOR_OUTLIERS.RATE}" data-tone="red"><span></span></div>
+                            </div>
+                        </td>
+                    </tr>
+                <!-- BEGINELSE -->
+                    <tr><td colspan="3" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
+                <!-- END BEHAVIOR_OUTLIERS -->
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <div class="behavior-box">
@@ -219,44 +576,38 @@
             <tbody>
             <!-- BEGIN BEHAVIOR_PROFILES -->
                 <tr>
-                    <td><strong>{BEHAVIOR_PROFILES.PROFILE_LABEL}</strong><br><span class="behavior-muted">{BEHAVIOR_PROFILES.PROFILE_KEY}</span></td>
+                    <td>
+                        <strong>{BEHAVIOR_PROFILES.PROFILE_LABEL}</strong><br>
+                        <span class="behavior-profile-key">{BEHAVIOR_PROFILES.PROFILE_KEY}</span>
+                    </td>
                     <td>{BEHAVIOR_PROFILES.SAMPLE_COUNT}</td>
                     <td>{BEHAVIOR_PROFILES.AVG_FIRST_SCROLL_MS} ms</td>
                     <td>{BEHAVIOR_PROFILES.AVG_SCROLL_EVENTS}</td>
                     <td>{BEHAVIOR_PROFILES.AVG_SCROLL_MAX_Y}px</td>
                     <td>{BEHAVIOR_PROFILES.AVG_INTERACT_SCORE}</td>
-                    <td>{BEHAVIOR_PROFILES.NO_INTERACT_PCT}%</td>
-                    <td>{BEHAVIOR_PROFILES.FAST_SCROLL_PCT}%</td>
-                    <td>{BEHAVIOR_PROFILES.JUMP_SCROLL_PCT}%</td>
+                    <td>
+                        <div class="behavior-metric">
+                            <strong>{BEHAVIOR_PROFILES.NO_INTERACT_PCT}%</strong>
+                            <div class="behavior-meter" data-rate="{BEHAVIOR_PROFILES.NO_INTERACT_PCT}" data-tone="red"><span></span></div>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="behavior-metric">
+                            <strong>{BEHAVIOR_PROFILES.FAST_SCROLL_PCT}%</strong>
+                            <div class="behavior-meter" data-rate="{BEHAVIOR_PROFILES.FAST_SCROLL_PCT}" data-tone="orange"><span></span></div>
+                        </div>
+                    </td>
+                    <td>
+                        <div class="behavior-metric">
+                            <strong>{BEHAVIOR_PROFILES.JUMP_SCROLL_PCT}%</strong>
+                            <div class="behavior-meter" data-rate="{BEHAVIOR_PROFILES.JUMP_SCROLL_PCT}" data-tone="purple"><span></span></div>
+                        </div>
+                    </td>
                     <td>{BEHAVIOR_PROFILES.UPDATED_TIME}</td>
                 </tr>
             <!-- BEGINELSE -->
                 <tr><td colspan="10" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
             <!-- END BEHAVIOR_PROFILES -->
-            </tbody>
-        </table>
-    </div>
-
-    <div class="behavior-box">
-        <h3>{L_STATS_BEHAVIOR_OUTLIERS}</h3>
-        <table class="behavior-table">
-            <thead>
-                <tr>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_SIGNAL}">{L_STATS_BEHAVIOR_COL_SIGNAL}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_VISITS}">{L_STATS_COL_VISITS}</span></th>
-                    <th><span class="behavior-help" title="{L_STATS_BEHAVIOR_HELP_COL_RATE}">{L_STATS_BEHAVIOR_COL_RATE}</span></th>
-                </tr>
-            </thead>
-            <tbody>
-            <!-- BEGIN BEHAVIOR_OUTLIERS -->
-                <tr>
-                    <td><code>{BEHAVIOR_OUTLIERS.SIGNAL}</code><br><span class="behavior-muted">{BEHAVIOR_OUTLIERS.LABEL}</span></td>
-                    <td>{BEHAVIOR_OUTLIERS.COUNT}</td>
-                    <td>{BEHAVIOR_OUTLIERS.RATE}%</td>
-                </tr>
-            <!-- BEGINELSE -->
-                <tr><td colspan="3" class="behavior-empty">{L_STATS_NO_DATA}</td></tr>
-            <!-- END BEHAVIOR_OUTLIERS -->
             </tbody>
         </table>
     </div>
@@ -281,7 +632,7 @@
                     <td>{BEHAVIOR_CASES.TIME}</td>
                     <td><code>{BEHAVIOR_CASES.IP}</code><br>{BEHAVIOR_CASES.COUNTRY}</td>
                     <td><strong>{BEHAVIOR_CASES.PAGE_TITLE}</strong><br><span class="behavior-muted">{BEHAVIOR_CASES.PAGE_URL}</span></td>
-                    <td><code>{BEHAVIOR_CASES.SIGNALS}</code>{BEHAVIOR_CASES.SIGNALS_DESC}</td>
+                    <td><span class="behavior-case-signal"><code>{BEHAVIOR_CASES.SIGNALS}</code></span>{BEHAVIOR_CASES.SIGNALS_DESC}</td>
                     <td>
                         <span class="behavior-muted">{BEHAVIOR_CASES.CURSOR_DEVICE}</span><br>
                         <span class="behavior-muted">{BEHAVIOR_CASES.CURSOR_SUMMARY}</span><br>
@@ -303,6 +654,24 @@
 </div>
 
 <script>
+function initBehaviorMeters(root) {
+    var scope = (root && root.querySelectorAll) ? root : document;
+    var meters = scope.querySelectorAll('.behavior-meter[data-rate]');
+    for (var i = 0; i < meters.length; i++) {
+        var meter = meters[i];
+        var raw = String(meter.getAttribute('data-rate') || '').replace(',', '.').trim();
+        var value = parseFloat(raw);
+        if (!isFinite(value)) {
+            value = 0;
+        }
+        value = Math.max(0, Math.min(100, value));
+        var bar = meter.querySelector('span');
+        if (bar) {
+            bar.style.width = value + '%';
+        }
+    }
+}
+
 function cursorZoomClamp(value, min, max) {
     if (value < min) {
         return min;
@@ -637,13 +1006,10 @@ function initCursorSvgZoom(root) {
     }
 }
 
-if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', function() {
-        initCursorSvgZoom(document);
-    });
-} else {
+document.addEventListener('DOMContentLoaded', function() {
+    initBehaviorMeters(document);
     initCursorSvgZoom(document);
-}
+});
 </script>
 
 <!-- INCLUDE overall_footer.html -->

@@ -44,6 +44,7 @@
 .bar-blue { background: linear-gradient(90deg, #105289, #1a73e8); }
 .bar-orange { background: linear-gradient(90deg, #d35400, #e67e22); }
 .bar-green { background: linear-gradient(90deg, #27ae60, #2ecc71); }
+.bar-gray { background: linear-gradient(90deg, #7f8c8d, #bdc3c7); }
 .bar-purple { background: linear-gradient(90deg, #8e44ad, #9b59b6); }
 .bar-red { background: linear-gradient(90deg, #c0392b, #e74c3c); }
 
@@ -117,6 +118,11 @@
 .badge-referer { background: #8e44ad; color: #fff; }
 .badge-ip-multi-cookie { background: #d35400; color: #fff; }
 .badge-cookie-multi-ip { background: #16a085; color: #fff; }
+.badge-proba-low { background: #27ae60; color: #fff; }
+.badge-proba-medium { background: #e67e22; color: #fff; }
+.badge-proba-high { background: #d35400; color: #fff; }
+.badge-proba-very-high { background: #c0392b; color: #fff; }
+.badge-proba-na { background: #95a5a6; color: #fff; }
 .badge-scroll-yes { background: #27ae60; color: #fff; }
 .badge-scroll-no { background: #7f8c8d; color: #fff; }
 .res-compare-ok { color: #27ae60; font-weight: bold; }
@@ -170,6 +176,24 @@ body.cursor-modal-open { overflow: hidden; }
 .behavior-cursor-svg.cursor-zoom-in { cursor: zoom-in !important; }
 .behavior-cursor-svg.cursor-zoom-grab { cursor: grab !important; }
 .behavior-cursor-svg.cursor-zoom-grabbing { cursor: grabbing !important; }
+.prob-summary-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px; margin: 0 0 18px; }
+.prob-donut-wrap { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+.prob-donut { width:140px; height:140px; border-radius:50%; position:relative; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06); flex:0 0 auto; }
+.prob-donut::after { content:""; position:absolute; inset:24px; background:#fff; border-radius:50%; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05); }
+.prob-donut-center { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:1; text-align:center; }
+.prob-donut-total { font-size:26px; font-weight:bold; color:#105289; line-height:1; }
+.prob-donut-label { font-size:11px; color:#667; margin-top:4px; text-transform:uppercase; }
+.prob-legend { flex:1; min-width:180px; }
+.prob-legend-row { display:flex; justify-content:space-between; gap:10px; padding:4px 0; font-size:12px; }
+.prob-legend-row strong { color:#223; }
+.prob-swatch { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; }
+.prob-swatch.human { background:#27ae60; }
+.prob-swatch.uncertain { background:#95a5a6; }
+.prob-swatch.bot { background:#c0392b; }
+.prob-mini-metrics { margin-top:8px; display:grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap:8px; }
+.prob-mini-card { border:1px solid #e4ebf3; border-radius:8px; padding:8px 10px; background:#fbfdff; }
+.prob-mini-card .label { display:block; font-size:11px; color:#667; text-transform:uppercase; }
+.prob-mini-card .value { display:block; margin-top:4px; font-size:20px; font-weight:bold; color:#105289; }
 </style>
 
 <!-- Filtres -->
@@ -197,8 +221,6 @@ body.cursor-modal-open { overflow: hidden; }
             <option value="250"<!-- IF DISPLAY_LIMIT == 250 --> selected<!-- ENDIF -->>250</option>
             <option value="500"<!-- IF DISPLAY_LIMIT == 500 --> selected<!-- ENDIF -->>500</option>
             <option value="1000"<!-- IF DISPLAY_LIMIT == 1000 --> selected<!-- ENDIF -->>1 000</option>
-            <option value="2000"<!-- IF DISPLAY_LIMIT == 2000 --> selected<!-- ENDIF -->>2 000</option>
-            <option value="5000"<!-- IF DISPLAY_LIMIT == 5000 --> selected<!-- ENDIF -->>5 000</option>
         </select>
     </div>
 </div>
@@ -354,6 +376,7 @@ body.cursor-modal-open { overflow: hidden; }
                 </label>
                 <div id="sessions-type-filter-group" class="sessions-type-filter-group" style="display:flex; gap:15px; align-items:center;">
                 <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-humans" checked onchange="filterSessions()"> <span class="badge badge-human">{L_STATS_FILTER_HUMANS}</span></label>
+                <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-members" checked onchange="filterSessions()"> <span class="badge badge-member">{L_STATS_FILTER_MEMBERS}</span></label>
                 <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-phpbb-bots" checked onchange="filterSessions()"> <span class="badge badge-bot-phpbb">{L_STATS_FILTER_PHPBB_BOTS}</span></label>
                 <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-bots" checked onchange="filterSessions()"> <span class="badge badge-bot">{L_STATS_FILTER_ROBOTS}</span></label>
                 </div>
@@ -364,6 +387,72 @@ body.cursor-modal-open { overflow: hidden; }
             </form>
         </div>
         <div style="margin:-5px 0 12px; color:#666; font-size:11px;">{L_STATS_CLEAR_KEEP_GEO_CACHE}</div>
+
+        <!-- IF HAS_PROBABILITY_SUMMARY -->
+        <div class="prob-summary-grid">
+            <div class="chart-box">
+                <h4>{L_STATS_BOT_PROBA_VISUAL_TITLE}</h4>
+                <div class="prob-donut-wrap">
+                    <div class="prob-donut" style="background:{PROBABILITY_SUMMARY_DONUT_STYLE};">
+                        <div class="prob-donut-center">
+                            <span class="prob-donut-total">{PROBABILITY_SUMMARY_TOTAL}</span>
+                            <span class="prob-donut-label">{L_STATS_BOT_PROBA_VISUAL_TOTAL}</span>
+                        </div>
+                    </div>
+                    <div class="prob-legend">
+                        <div class="prob-legend-row"><strong><span class="prob-swatch human"></span>{L_STATS_BOT_PROBA_VISUAL_HUMAN}</strong><span>{PROBABILITY_SUMMARY_HUMAN_LIKE} ({PROBABILITY_SUMMARY_HUMAN_LIKE_PCT}%)</span></div>
+                        <div class="prob-legend-row"><strong><span class="prob-swatch uncertain"></span>{L_STATS_BOT_PROBA_VISUAL_UNCERTAIN}</strong><span>{PROBABILITY_SUMMARY_UNCERTAIN} ({PROBABILITY_SUMMARY_UNCERTAIN_PCT}%)</span></div>
+                        <div class="prob-legend-row"><strong><span class="prob-swatch bot"></span>{L_STATS_BOT_PROBA_VISUAL_BOT}</strong><span>{PROBABILITY_SUMMARY_BOT_LIKE} ({PROBABILITY_SUMMARY_BOT_LIKE_PCT}%)</span></div>
+                    </div>
+                </div>
+                <div class="prob-mini-metrics">
+                    <div class="prob-mini-card">
+                        <span class="label">{L_STATS_BOT_PROBA_AVG_HUMAN}</span>
+                        <span class="value">{PROBABILITY_SUMMARY_AVG_HUMAN}%</span>
+                    </div>
+                    <div class="prob-mini-card">
+                        <span class="label">{L_STATS_BOT_PROBA_AVG_BOT}</span>
+                        <span class="value">{PROBABILITY_SUMMARY_AVG_BOT}%</span>
+                    </div>
+                </div>
+            </div>
+            <div class="chart-box">
+                <h4>{L_STATS_BOT_PROBA_BUCKETS_TITLE}</h4>
+                <p style="margin:0 0 10px; color:#6c7a89; font-size:11px;">{L_STATS_BOT_PROBA_BUCKETS_EXPLAIN}</p>
+                <!-- BEGIN PROBABILITY_BUCKETS -->
+                <div class="stat-row">
+                    <div class="stat-label">{PROBABILITY_BUCKETS.LABEL}</div>
+                    <div class="stat-bar-container"><div class="stat-bar bar-gray" style="width:{PROBABILITY_BUCKETS.PERCENT}%"></div></div>
+                    <div class="stat-count">{PROBABILITY_BUCKETS.COUNT}</div>
+                </div>
+                <!-- END PROBABILITY_BUCKETS -->
+            </div>
+            <div class="chart-box">
+                <h4>{L_STATS_BOT_PROBA_TOP_BOT_FACTORS_TITLE}</h4>
+                <!-- BEGIN PROBABILITY_TOP_BOT_FACTORS -->
+                <div class="stat-row">
+                    <div class="stat-label">{PROBABILITY_TOP_BOT_FACTORS.LABEL}</div>
+                    <div class="stat-bar-container"><div class="stat-bar bar-red" style="width:{PROBABILITY_TOP_BOT_FACTORS.PERCENT}%"></div></div>
+                    <div class="stat-count">{PROBABILITY_TOP_BOT_FACTORS.COUNT}</div>
+                </div>
+                <!-- BEGINELSE -->
+                <p style="color:#999; text-align:center;">{L_STATS_NO_DATA}</p>
+                <!-- END PROBABILITY_TOP_BOT_FACTORS -->
+            </div>
+            <div class="chart-box">
+                <h4>{L_STATS_BOT_PROBA_TOP_HUMAN_FACTORS_TITLE}</h4>
+                <!-- BEGIN PROBABILITY_TOP_HUMAN_FACTORS -->
+                <div class="stat-row">
+                    <div class="stat-label">{PROBABILITY_TOP_HUMAN_FACTORS.LABEL}</div>
+                    <div class="stat-bar-container"><div class="stat-bar bar-green" style="width:{PROBABILITY_TOP_HUMAN_FACTORS.PERCENT}%"></div></div>
+                    <div class="stat-count">{PROBABILITY_TOP_HUMAN_FACTORS.COUNT}</div>
+                </div>
+                <!-- BEGINELSE -->
+                <p style="color:#999; text-align:center;">{L_STATS_NO_DATA}</p>
+                <!-- END PROBABILITY_TOP_HUMAN_FACTORS -->
+            </div>
+        </div>
+        <!-- ENDIF -->
 
         <table class="sessions-table" id="sessions-table">
             <thead>
@@ -377,7 +466,7 @@ body.cursor-modal-open { overflow: hidden; }
             </thead>
             <tbody>
             <!-- BEGIN SESSIONS -->
-                <tr class="session-row session-{SESSIONS.BOT_CLASS} {SESSIONS.SESSION_FRAME_CLASS}" data-type="{SESSIONS.BOT_CLASS}" data-correlation="{SESSIONS.CORRELATION_TYPE}" onclick="toggleDetails(this)" style="cursor: pointer;" title="Cliquez pour voir les détails de diagnostic">
+                <tr class="session-row session-{SESSIONS.BOT_CLASS} {SESSIONS.SESSION_FRAME_CLASS}" data-type="{SESSIONS.BOT_CLASS}" data-correlation="{SESSIONS.CORRELATION_TYPE}" data-is-member="{SESSIONS.IS_MEMBER}" data-is-guest="{SESSIONS.IS_GUEST}" onclick="toggleDetails(this)" style="cursor: pointer;" title="Cliquez pour voir les détails de diagnostic">
                     <td class="session-info">
                         <!-- IF SESSIONS.IS_BOT -->
                             <span class="badge badge-bot">{L_STATS_BADGE_BOT}</span>
@@ -393,6 +482,12 @@ body.cursor-modal-open { overflow: hidden; }
                         <span class="session-correlation-badges">
                             <!-- IF SESSIONS.HAS_IP_MULTI_COOKIE --><span class="badge badge-ip-multi-cookie" title="{SESSIONS.IP_MULTI_COOKIE_TITLE}">{L_STATS_SESSION_BADGE_IP_MULTI_COOKIE}</span><!-- ENDIF -->
                             <!-- IF SESSIONS.HAS_COOKIE_MULTI_IP --><span class="badge badge-cookie-multi-ip" title="{SESSIONS.COOKIE_MULTI_IP_TITLE}">{L_STATS_SESSION_BADGE_COOKIE_MULTI_IP}</span><!-- ENDIF -->
+                            <!-- IF SESSIONS.HAS_BOT_PROBA_BADGE --><span class="badge {SESSIONS.BOT_PROBA_BADGE_CLASS}" title="{SESSIONS.BOT_PROBA_SCOPE_LABEL}">{SESSIONS.BOT_PROBA_BADGE_LABEL}</span><!-- ENDIF -->
+                        </span>
+                        <!-- ENDIF -->
+                        <!-- IF not (SESSIONS.HAS_IP_MULTI_COOKIE or SESSIONS.HAS_COOKIE_MULTI_IP) and SESSIONS.HAS_BOT_PROBA_BADGE -->
+                        <span class="session-correlation-badges">
+                            <span class="badge {SESSIONS.BOT_PROBA_BADGE_CLASS}" title="{SESSIONS.BOT_PROBA_SCOPE_LABEL}">{SESSIONS.BOT_PROBA_BADGE_LABEL}</span>
                         </span>
                         <!-- ENDIF -->
                         <!-- IF SESSIONS.COUNTRY --><br><span style="font-size:14px;">{SESSIONS.COUNTRY}<!-- IF SESSIONS.CITY -->, <span style="color:#555;">{SESSIONS.CITY}</span><!-- ENDIF --></span><!-- ENDIF -->
@@ -501,6 +596,11 @@ body.cursor-modal-open { overflow: hidden; }
                             <!-- IF SESSIONS.VISITOR_COOKIE_CROSSIP_IPS --><br><small style="color:#666;">{SESSIONS.VISITOR_COOKIE_CROSSIP_IPS}</small><!-- ENDIF --><br>
                             <strong>{L_STATS_SESSION_IP_MULTICOOKIE_LABEL}</strong> <span class="{SESSIONS.IP_MULTI_COOKIE_CLASS}">{SESSIONS.IP_MULTI_COOKIE_LABEL}</span>
                             <!-- IF SESSIONS.IP_MULTI_COOKIE_DETAILS --><br><small style="color:#666;">{SESSIONS.IP_MULTI_COOKIE_DETAILS}</small><!-- ENDIF --><br>
+                            <strong>{L_STATS_BOT_PROBA_TITLE}</strong> <span class="{SESSIONS.BOT_PROBA_DIAG_CLASS}">{SESSIONS.BOT_PROBA_LABEL}</span>
+                            <br><small style="color:#666;">{SESSIONS.BOT_PROBA_SCOPE_LABEL} · {L_STATS_BOT_PROBA_SAMPLES} {SESSIONS.BOT_PROBA_HUMAN_SAMPLES} / {SESSIONS.BOT_PROBA_BOT_SAMPLES}</small>
+                            <!-- BEGIN PROBA_FACTORS -->
+                                <br><small class="{SESSIONS.PROBA_FACTORS.CLASS}"><strong>{SESSIONS.PROBA_FACTORS.LABEL}</strong> : {SESSIONS.PROBA_FACTORS.DETAIL}</small>
+                            <!-- END PROBA_FACTORS --><br>
                             <strong>{L_STATS_VISITOR_COOKIE_RISK_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_RISK_CLASS}">{SESSIONS.VISITOR_COOKIE_RISK_LABEL}</span><br>
                             <strong>{L_STATS_VISITOR_COOKIE_FAIL2BAN_LABEL}</strong> <span class="{SESSIONS.VISITOR_COOKIE_FAIL2BAN_CLASS}">{SESSIONS.VISITOR_COOKIE_FAIL2BAN_LABEL}</span><br>
                             <strong>{L_STATS_REACTIONS_ASSETS_LABEL}</strong> <span class="{SESSIONS.REACTIONS_ASSETS_STATUS_CLASS}">{SESSIONS.REACTIONS_ASSETS_STATUS_LABEL}</span><br>
@@ -1157,6 +1257,7 @@ var baseAction = '{U_ACTION}'.replace(/&amp;/g, '&');
 function filterSessions() {
     var correlationMode = document.getElementById('filter-sessions-correlation').value;
     var showHumans = document.getElementById('filter-sessions-humans').checked;
+    var showMembers = document.getElementById('filter-sessions-members').checked;
     var showPhpbbBots = document.getElementById('filter-sessions-phpbb-bots').checked;
     var showBots = document.getElementById('filter-sessions-bots').checked;
     var sessionRows = document.querySelectorAll('#sessions-table tbody tr.session-row[data-type]');
@@ -1165,6 +1266,7 @@ function filterSessions() {
         var sessionRow = sessionRows[i];
         var type = sessionRow.getAttribute('data-type');
         var correlationType = sessionRow.getAttribute('data-correlation') || 'none';
+        var isMember = (sessionRow.getAttribute('data-is-member') === '1');
         var showRow = true;
 
         if (correlationMode !== 'all') {
@@ -1177,7 +1279,7 @@ function filterSessions() {
             }
         }
         if (showRow && type === 'human') {
-            showRow = showHumans;
+            showRow = isMember ? showMembers : showHumans;
         } else if (showRow && type === 'phpbb-bot') {
             showRow = showPhpbbBots;
         } else if (showRow && type === 'bot') {
