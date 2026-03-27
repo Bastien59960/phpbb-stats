@@ -6,15 +6,26 @@ Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/)
 
 ## [Unreleased]
 
+### Added
+- Migration `release_1_17_0` avec colonnes `login_attempt_failed`, `login_attempt_username`, `login_attempt_error`
+- Capture côté serveur des logins ratés via `core.login_box_failed`, avec affichage ACP du login soumis et du code d'erreur auth sur la ligne concernée
+- Filtre ACP `Corrélations` pour isoler `Cookie multi-IP`, `IP multi-cookie` ou toutes les corrélations en conservant les filtres visiteurs existants
+- Classification explicite des URLs non HTML dans la timeline ACP (`Pièce jointe`, `Miniature PJ`, `Média`, `Asset app.php`, etc.) et marquage `Chemin introuvable` pour les chemins directs inexistants
+
 ### Changed
 - La documentation précise désormais la notion de "session observée": même IP avec plusieurs `b59_vid` et même `b59_vid` vu sur plusieurs IP sont deux corrélations fortes à faire ressortir dans l'analyse
 - Le cookie visiteur signé `b59_vid` devient l'ancre principale de session quand il est présent: les pages forum et téléchargements restent regroupés dans la même session même si l'IP change avant le timeout
+- Le regroupement ACP s'étend maintenant à la fermeture de corrélation 24h IP/cookie autour des sessions affichées, puis trie les groupes fusionnés par dernière activité observée
 - L'ACP **Sessions** affiche désormais une vraie ligne chronologique `#1` pour la page d'entrée, puis chaque ligne de timeline au format `IP - temps écoulé` pour rendre les bascules d'IP immédiatement lisibles
 - Le temps de timeline est calculé entre les lignes successives et affiche `0s` sur les rafales dans la même seconde au lieu d'un simple `-`
-- La dernière colonne de timeline affiche désormais l'empreinte tronquée du cookie signé `b59_vid` et son état de correspondance par ligne, sans exposer la valeur brute du cookie
+- La dernière colonne de timeline affiche désormais l'empreinte tronquée du cookie signé `b59_vid` et sa preuve côté serveur par ligne (`HTTP`, `AJAX`, `Posé`, `Mismatch`, `Absent`, `N/A`), sans exposer la valeur brute du cookie
 - L'ACP **Sessions** fait ressortir visuellement les corrélations `IP multi-cookie` et `Cookie multi-IP` via badges d'en-tête et détail 24h dans le diagnostic
 - Les sessions composées uniquement de téléchargements directs affichent des états `N/A` explicites pour AJAX, assets réactions et assets Apache, au lieu d'un diagnostic trompeur "absent"
 - Les cartes de session ACP sont maintenant encadrées visuellement selon le verdict: vert (OK / bot phpBB légitime), orange (suspicion), rouge (signal strict)
+
+### Fixed
+- Le filtre ACP **Sessions** masque/affiche désormais des blocs de session complets, avec message vide explicite quand aucun résultat ne correspond au filtre actif
+- Les corrélations `Même cookie, IP multiples` / `Même IP, cookies multiples` restent cohérentes après fusion ACP au lieu de se limiter au seul sous-ensemble déjà chargé
 
 ## [1.16.0] - 2026-03-26
 

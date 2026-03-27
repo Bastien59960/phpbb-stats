@@ -23,7 +23,9 @@ class acp_controller
     protected $has_apache_asset_columns = null;
     protected $has_visitor_cookie_column = null;
     protected $has_visitor_cookie_debug_columns = null;
+    protected $has_login_attempt_columns = null;
     protected $has_behavior_learning_tables = null;
+    protected $session_url_analysis_cache = [];
 
     public function __construct($db, $template, $request, $user, $config, $table_prefix)
     {
@@ -328,6 +330,7 @@ class acp_controller
         $pages_by_session = [];
         $has_cookie_column = $this->has_visitor_cookie_column();
         $has_cookie_debug_columns = $this->has_visitor_cookie_debug_columns();
+        $has_login_attempt_columns = $this->has_login_attempt_columns();
         $has_reactions_probe_columns = $this->has_reactions_probe_columns();
         $has_apache_asset_columns = $this->has_apache_asset_columns();
         $extra_ajax_columns = $this->has_ajax_telemetry_columns()
@@ -339,36 +342,105 @@ class acp_controller
         $extra_cookie_debug_columns = $has_cookie_debug_columns
             ? ', visitor_cookie_preexisting, visitor_cookie_ajax_state, visitor_cookie_ajax_hash'
             : '';
+        $extra_login_attempt_columns = $has_login_attempt_columns
+            ? ', login_attempt_failed, login_attempt_username, login_attempt_error'
+            : '';
         $extra_cursor_columns = $has_cursor_columns
             ? ', cursor_track_points, cursor_track_duration_ms, cursor_track_path, cursor_click_points,
                cursor_device_class, cursor_viewport, cursor_total_distance, cursor_avg_speed,
                cursor_max_speed, cursor_direction_changes, cursor_linearity, cursor_click_count'
             : '';
+        $extra_reactions_columns = $has_reactions_probe_columns
+            ? ', reactions_extension_expected, reactions_css_seen, reactions_js_seen'
+            : '';
+        $extra_apache_columns = $has_apache_asset_columns
+            ? ', apache_banner_hits, apache_rank_hits, apache_avatar_hits, apache_asset_scan_time'
+            : '';
+        $session_page_select_suffix = $extra_ajax_columns
+            . $extra_cookie_columns
+            . $extra_cookie_debug_columns
+            . $extra_login_attempt_columns
+            . $extra_cursor_columns
+            . $extra_reactions_columns
+            . $extra_apache_columns;
         // Plafond global : évite l'OOM quand une session bot accumule des milliers de pages.
         // 15 000 lignes × ~500 octets/ligne ≈ 7,5 Mo, bien en-dessous de la limite PHP de 128 Mo.
         $pages_query_limit = max(500, (int)($limit * 30));
-        $sql_pages = 'SELECT log_id, session_id, user_id, user_ip, page_url, page_title, visit_time, duration, referer, screen_res'
-                    . $extra_ajax_columns
-                    . $extra_cookie_columns
-                    . $extra_cookie_debug_columns
-                    . $extra_cursor_columns . '
-                      FROM ' . $this->table_prefix . 'bastien59_stats
-                      WHERE session_id IN (' . implode(',', $session_ids) . ')
-                      ORDER BY visit_time ASC, log_id ASC';
-        $result_pages = $this->db->sql_query_limit($sql_pages, $pages_query_limit);
-        while ($page = $this->db->sql_fetchrow($result_pages)) {
-            $page_session_key = $this->build_session_bucket_key(
-                (string)($page['session_id'] ?? ''),
-                (int)($page['user_id'] ?? 0),
-                (int)($page['visit_time'] ?? 0),
-                $member_session_max_seconds
-            );
-            if ($page_session_key === '') {
+        $pages_by_session = $this->fetch_pages_by_session_ids(
+            array_keys($session_ids_map),
+            $member_session_max_seconds,
+            $session_page_select_suffix,
+            $pages_query_limit
+        );
+
+        $seed_ips = [];
+        $seed_hashes = [];
+        foreach ($sessions as $row) {
+            $ip = trim((string)($row['user_ip'] ?? ''));
+            if ($ip !== '') {
+                $seed_ips[$ip] = true;
+            }
+            $hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
+            if ($this->is_valid_visitor_cookie_hash($hash)) {
+                $seed_hashes[$hash] = true;
+            }
+        }
+        foreach ($pages_by_session as $rows) {
+            foreach ($rows as $page_row) {
+                $ip = trim((string)($page_row['user_ip'] ?? ''));
+                if ($ip !== '') {
+                    $seed_ips[$ip] = true;
+                }
+                $hash = strtolower(trim((string)($page_row['visitor_cookie_hash'] ?? '')));
+                if ($this->is_valid_visitor_cookie_hash($hash)) {
+                    $seed_hashes[$hash] = true;
+                }
+            }
+        }
+
+        $correlated_session_ids = $this->discover_correlated_session_ids_24h(
+            array_keys($seed_ips),
+            array_keys($seed_hashes),
+            86400
+        );
+        $extra_session_ids_map = [];
+        foreach ($correlated_session_ids as $correlated_session_id) {
+            $correlated_session_id = trim((string)$correlated_session_id);
+            if ($correlated_session_id === '' || isset($session_ids_map[$correlated_session_id])) {
                 continue;
             }
-            $pages_by_session[$page_session_key][] = $page;
+            $extra_session_ids_map[$correlated_session_id] = true;
         }
-        $this->db->sql_freeresult($result_pages);
+
+        if (!empty($extra_session_ids_map)) {
+            $extra_pages_query_limit = max(500, (int)(count($extra_session_ids_map) * 30));
+            $extra_pages_by_session = $this->fetch_pages_by_session_ids(
+                array_keys($extra_session_ids_map),
+                $member_session_max_seconds,
+                $session_page_select_suffix,
+                $extra_pages_query_limit,
+                time() - 86400
+            );
+
+            $existing_session_keys = [];
+            foreach ($sessions as $session_row) {
+                $existing_session_key = (string)($session_row['session_bucket'] ?? ($session_row['session_id'] ?? ''));
+                if ($existing_session_key !== '') {
+                    $existing_session_keys[$existing_session_key] = true;
+                }
+            }
+
+            foreach ($extra_pages_by_session as $extra_session_key => $extra_pages) {
+                if (empty($extra_pages)) {
+                    continue;
+                }
+                $pages_by_session[$extra_session_key] = $extra_pages;
+                if (!isset($existing_session_keys[$extra_session_key])) {
+                    $sessions[] = $this->synthesize_session_row_from_pages($extra_session_key, $extra_pages);
+                    $existing_session_keys[$extra_session_key] = true;
+                }
+            }
+        }
 
         // Prépare une vue globale multi-IP par hash cookie visiteur (fenêtre 24h).
         $session_cookie_hashes = [];
@@ -394,6 +466,10 @@ class acp_controller
                 }
             }
         }
+        $clustered = $this->build_observed_session_clusters($sessions, $pages_by_session, $session_cookie_hashes);
+        $sessions = $clustered['sessions'];
+        $pages_by_session = $clustered['pages_by_session'];
+        $session_cookie_hashes = $clustered['session_cookie_hashes'];
         $cookie_overview = $this->get_visitor_cookie_cross_ip_overview(array_values(array_unique(array_values($session_cookie_hashes))), 86400);
         $all_session_ips = [];
         foreach ($sessions as $row) {
@@ -569,12 +645,14 @@ class acp_controller
             }
 
             $pages = $pages_by_session[$session_key] ?? [];
-            $landing_log_id = (int)($row['log_id'] ?? 0);
+            $landing_page_row = $this->resolve_session_landing_page_row($pages, $row);
+            $landing_log_id = (int)($landing_page_row['log_id'] ?? ($row['log_id'] ?? 0));
             if ($landing_log_id > 0 && count($pages) > 1) {
-                $landing_page = null;
+                $landing_page = $landing_page_row;
                 foreach ($pages as $page_row) {
-                    if ($landing_page === null && (int)($page_row['log_id'] ?? 0) === $landing_log_id) {
+                    if ((int)($page_row['log_id'] ?? 0) === $landing_log_id) {
                         $landing_page = $page_row;
+                        break;
                     }
                 }
                 if ($landing_page !== null) {
@@ -599,13 +677,18 @@ class acp_controller
                     $pages = array_merge([$landing_page], $other_pages);
                 }
             }
-            $landing_title = trim((string)($row['page_title'] ?? ''));
-            $landing_url = trim((string)($row['page_url'] ?? ''));
-            if ($landing_title === '') {
-                $landing_title = '-';
-            }
+            $landing_title = trim((string)($landing_page_row['page_title'] ?? ($row['page_title'] ?? '')));
+            $landing_url = trim((string)($landing_page_row['page_url'] ?? ($row['page_url'] ?? '')));
             if ($landing_url === '') {
                 $landing_url = '-';
+            }
+            $landing_url_analysis = $this->analyze_session_page_url($landing_url, $landing_title);
+            $landing_title = $landing_url_analysis['display_title'];
+            $landing_visit_time = (int)($landing_page_row['visit_time'] ?? ($row['visit_time'] ?? 0));
+            $landing_referer_raw = trim((string)($landing_page_row['referer'] ?? ($row['referer'] ?? '')));
+            $landing_referer_type = trim((string)($landing_page_row['referer_type'] ?? ($row['referer_type'] ?? '')));
+            if ($landing_referer_type === '') {
+                $landing_referer_type = 'Direct';
             }
 
             $download_only_session = $this->is_download_only_session($pages, $landing_url);
@@ -616,7 +699,7 @@ class acp_controller
                     $session_ips[$page_ip] = true;
                 }
             }
-            $landing_ip = trim((string)($row['user_ip'] ?? ''));
+            $landing_ip = trim((string)($landing_page_row['user_ip'] ?? ($row['user_ip'] ?? '')));
             if ($landing_ip !== '') {
                 $session_ips[$landing_ip] = true;
             }
@@ -713,6 +796,33 @@ class acp_controller
                 $hash = strtolower(trim((string)($page_row['visitor_cookie_hash'] ?? '')));
                 if ($this->is_valid_visitor_cookie_hash($hash)) {
                     $session_cookie_hash_set[$hash] = true;
+                }
+            }
+            $session_hash_to_ips = [];
+            $session_ip_to_hashes = [];
+            foreach ($pages as $page_row) {
+                $page_ip = trim((string)($page_row['user_ip'] ?? ''));
+                $page_hash = strtolower(trim((string)($page_row['visitor_cookie_hash'] ?? '')));
+                if ($page_ip === '' || !$this->is_valid_visitor_cookie_hash($page_hash)) {
+                    continue;
+                }
+                $session_hash_to_ips[$page_hash][$page_ip] = true;
+                $session_ip_to_hashes[$page_ip][$page_hash] = true;
+            }
+            if ($landing_ip !== '' && $this->is_valid_visitor_cookie_hash($visitor_cookie_hash)) {
+                $session_hash_to_ips[$visitor_cookie_hash][$landing_ip] = true;
+                $session_ip_to_hashes[$landing_ip][$visitor_cookie_hash] = true;
+            }
+            $internal_cookie_multi_ip_count = 0;
+            foreach ($session_hash_to_ips as $hash_ips) {
+                if (count($hash_ips) > 1) {
+                    $internal_cookie_multi_ip_count++;
+                }
+            }
+            $internal_ip_multi_cookie_count = 0;
+            foreach ($session_ip_to_hashes as $ip_hashes) {
+                if (count($ip_hashes) > 1) {
+                    $internal_ip_multi_cookie_count++;
                 }
             }
 
@@ -869,6 +979,17 @@ class acp_controller
                     $ip_multi_cookie_label = sprintf($this->user->lang('STATS_SESSION_IP_MULTICOOKIE_FOUND'), $ip_multi_cookie_count, $preview);
                     $ip_multi_cookie_class = ($ip_multi_cookie_count >= 2) ? 'diag-cookie-bad' : 'diag-cookie-mid';
                 }
+            }
+
+            $has_cookie_multi_ip = ($cookie_other_ips_count > 0 || $internal_cookie_multi_ip_count > 0);
+            $has_ip_multi_cookie = ($ip_multi_cookie_count > 0 || $internal_ip_multi_cookie_count > 0);
+            $correlation_type = 'none';
+            if ($has_cookie_multi_ip && $has_ip_multi_cookie) {
+                $correlation_type = 'both';
+            } elseif ($has_cookie_multi_ip) {
+                $correlation_type = 'cookie-multi-ip';
+            } elseif ($has_ip_multi_cookie) {
+                $correlation_type = 'ip-multi-cookie';
             }
 
             $cookie_risk_label = $this->user->lang('STATS_VISITOR_COOKIE_RISK_LOW');
@@ -1130,13 +1251,14 @@ class acp_controller
                 'VISITOR_COOKIE_CROSSIP_LABEL' => htmlspecialchars($cookie_cross_label, ENT_COMPAT, 'UTF-8'),
                 'VISITOR_COOKIE_CROSSIP_CLASS' => $cookie_cross_class,
                 'VISITOR_COOKIE_CROSSIP_IPS' => htmlspecialchars($cookie_other_ips, ENT_COMPAT, 'UTF-8'),
-                'HAS_COOKIE_MULTI_IP' => ($cookie_other_ips_count > 0) ? 1 : 0,
+                'HAS_COOKIE_MULTI_IP' => $has_cookie_multi_ip ? 1 : 0,
                 'COOKIE_MULTI_IP_TITLE' => htmlspecialchars($cookie_other_ips !== '' ? $cookie_other_ips : $cookie_cross_label, ENT_COMPAT, 'UTF-8'),
                 'IP_MULTI_COOKIE_LABEL' => htmlspecialchars($ip_multi_cookie_label, ENT_COMPAT, 'UTF-8'),
                 'IP_MULTI_COOKIE_CLASS' => $ip_multi_cookie_class,
                 'IP_MULTI_COOKIE_DETAILS' => htmlspecialchars($ip_multi_cookie_details, ENT_COMPAT, 'UTF-8'),
-                'HAS_IP_MULTI_COOKIE' => ($ip_multi_cookie_count > 0) ? 1 : 0,
+                'HAS_IP_MULTI_COOKIE' => $has_ip_multi_cookie ? 1 : 0,
                 'IP_MULTI_COOKIE_TITLE' => htmlspecialchars($ip_multi_cookie_details !== '' ? $ip_multi_cookie_details : $ip_multi_cookie_label, ENT_COMPAT, 'UTF-8'),
+                'CORRELATION_TYPE' => htmlspecialchars($correlation_type, ENT_COMPAT, 'UTF-8'),
                 'VISITOR_COOKIE_RISK_LABEL' => htmlspecialchars($cookie_risk_label, ENT_COMPAT, 'UTF-8'),
                 'VISITOR_COOKIE_RISK_CLASS' => $cookie_risk_class,
                 'VISITOR_COOKIE_FAIL2BAN_LABEL' => htmlspecialchars($cookie_fail2ban_label, ENT_COMPAT, 'UTF-8'),
@@ -1166,19 +1288,19 @@ class acp_controller
                 'SIGNALS_DESC'  => $this->format_signals_description($row['signals'] ?? ''),
                 'BOT_VERDICT_TYPE' => $signals_class['type'],
                 'BOT_SCORE'     => $signals_class['score'],
-                'START_TIME'    => $this->user->format_date((int)($row['visit_time'] ?? 0)),
+                'START_TIME'    => $this->user->format_date($landing_visit_time),
                 'LANDING_PAGE'  => htmlspecialchars($landing_title, ENT_COMPAT, 'UTF-8'),
                 'LANDING_URL'   => htmlspecialchars($landing_url, ENT_COMPAT, 'UTF-8'),
-                'LANDING_TIME'  => $this->user->format_date((int)($row['visit_time'] ?? 0), 'H:i:s'),
-                'LANDING_DURATION' => $this->format_duration($row['duration'] ?? 0),
+                'LANDING_TIME'  => $this->user->format_date($landing_visit_time, 'H:i:s'),
+                'LANDING_DURATION' => $this->format_duration($landing_page_row['duration'] ?? 0),
                 'LANDING_IP'    => htmlspecialchars($landing_ip, ENT_COMPAT, 'UTF-8'),
                 'LANDING_HAS_IP' => ($landing_ip !== '') ? 1 : 0,
-                'LANDING_REFERER' => trim((string)($row['referer'] ?? '')) !== '' ? $this->format_referer($row['referer']) : '',
-                'LANDING_HAS_REFERER' => trim((string)($row['referer'] ?? '')) !== '' ? 1 : 0,
-                'REFERER'       => $this->format_referer($row['referer']),
-                'REFERER_TYPE'  => htmlspecialchars($row['referer_type'] ?? 'Direct', ENT_COMPAT, 'UTF-8'),
-                'PAGE_COUNT'    => (int)$row['page_count'],
-                'PAGES_COUNT_LABEL' => sprintf($this->user->lang('STATS_PAGES_COUNT'), (int)$row['page_count']),
+                'LANDING_REFERER' => $landing_referer_raw !== '' ? $this->format_referer($landing_referer_raw) : '',
+                'LANDING_HAS_REFERER' => $landing_referer_raw !== '' ? 1 : 0,
+                'REFERER'       => $this->format_referer($landing_referer_raw),
+                'REFERER_TYPE'  => htmlspecialchars($landing_referer_type, ENT_COMPAT, 'UTF-8'),
+                'PAGE_COUNT'    => count($pages),
+                'PAGES_COUNT_LABEL' => sprintf($this->user->lang('STATS_PAGES_COUNT'), count($pages)),
                 'LANDING_PAGE_INDEX' => 1,
                 'CURSOR_HAS_DATA' => $cursor_has_data,
                 'CURSOR_MODAL_ID' => htmlspecialchars($cursor_modal_id, ENT_COMPAT, 'UTF-8'),
@@ -1233,71 +1355,65 @@ class acp_controller
                 if ($current_log_id <= 0) {
                     continue;
                 }
-                $next_visit_time = null;
-                if (isset($pages[$timeline_index + 1])) {
-                    $next_visit_time = (int)($pages[$timeline_index + 1]['visit_time'] ?? 0);
+                $previous_visit_time = null;
+                if (isset($pages[$timeline_index - 1])) {
+                    $previous_visit_time = (int)($pages[$timeline_index - 1]['visit_time'] ?? 0);
                 }
                 $timeline_duration_labels[$current_log_id] = $this->format_timeline_duration(
                     (int)($timeline_row['visit_time'] ?? 0),
-                    $next_visit_time,
-                    (int)($timeline_row['duration'] ?? 0)
+                    $previous_visit_time,
+                    (int)($timeline_row['duration'] ?? 0),
+                    ($page_count_total === 1 && $timeline_index === 0)
                 );
             }
 
             $landing_duration_label = $timeline_duration_labels[$landing_log_id]
-                ?? $this->format_timeline_duration((int)($row['visit_time'] ?? 0), null, (int)($row['duration'] ?? 0));
+                ?? $this->format_timeline_duration(
+                    $landing_visit_time,
+                    null,
+                    (int)($landing_page_row['duration'] ?? ($row['duration'] ?? 0)),
+                    ($page_count_total === 1)
+                );
 
             $page_index = 2;
             $visible_page_count = count($visible_pages);
+            $landing_cookie_cell = $this->build_timeline_cookie_cell($landing_page_row, $has_cookie_column, $has_cookie_debug_columns);
+            $landing_login_attempt = $this->build_timeline_login_attempt_cell($landing_page_row, $has_login_attempt_columns);
             $this->template->assign_block_vars('SESSIONS.LANDING_ROW', [
                 'FRAME_CLASS' => $session_frame_class,
                 'IS_LAST' => ($visible_page_count === 0) ? 1 : 0,
-                'TIME' => $this->user->format_date((int)($row['visit_time'] ?? 0), 'H:i:s'),
+                'TIME' => $this->user->format_date($landing_visit_time, 'H:i:s'),
                 'DURATION' => $landing_duration_label,
-                'COOKIE_HASH' => htmlspecialchars($session_cookie_hash_short, ENT_COMPAT, 'UTF-8'),
-                'COOKIE_MATCH_LABEL' => htmlspecialchars(
-                    $has_cookie_column
-                        ? ($visitor_cookie_present
-                            ? $this->user->lang('STATS_SESSION_COOKIE_MATCH_OK')
-                            : $this->user->lang('STATS_SESSION_COOKIE_MATCH_ABSENT'))
-                        : $this->user->lang('STATS_SESSION_COOKIE_MATCH_UNAVAILABLE'),
-                    ENT_COMPAT,
-                    'UTF-8'
-                ),
-                'COOKIE_MATCH_CLASS' => !$has_cookie_column
-                    ? 'diag-cookie-na'
-                    : ($visitor_cookie_present ? 'diag-cookie-ok' : 'diag-cookie-na'),
+                'COOKIE_HASH' => htmlspecialchars($landing_cookie_cell['hash'], ENT_COMPAT, 'UTF-8'),
+                'COOKIE_MATCH_LABEL' => htmlspecialchars($landing_cookie_cell['label'], ENT_COMPAT, 'UTF-8'),
+                'COOKIE_MATCH_CLASS' => $landing_cookie_cell['class'],
+                'CORRELATION_TYPE' => htmlspecialchars($correlation_type, ENT_COMPAT, 'UTF-8'),
+                'HAS_URL_KIND' => $landing_url_analysis['kind_label'] !== '' ? 1 : 0,
+                'URL_KIND_LABEL' => htmlspecialchars($landing_url_analysis['kind_label'], ENT_COMPAT, 'UTF-8'),
+                'HAS_URL_STATUS' => $landing_url_analysis['status_label'] !== '' ? 1 : 0,
+                'URL_STATUS_LABEL' => htmlspecialchars($landing_url_analysis['status_label'], ENT_COMPAT, 'UTF-8'),
+                'URL_STATUS_CLASS' => $landing_url_analysis['status_class'],
+                'HAS_LOGIN_ATTEMPT' => !empty($landing_login_attempt['has']) ? 1 : 0,
+                'LOGIN_ATTEMPT_LABEL' => htmlspecialchars((string)($landing_login_attempt['label'] ?? ''), ENT_COMPAT, 'UTF-8'),
+                'LOGIN_ATTEMPT_USERNAME_LABEL' => htmlspecialchars((string)($landing_login_attempt['username_label'] ?? ''), ENT_COMPAT, 'UTF-8'),
+                'LOGIN_ATTEMPT_USERNAME' => htmlspecialchars((string)($landing_login_attempt['username'] ?? ''), ENT_COMPAT, 'UTF-8'),
+                'HAS_LOGIN_ATTEMPT_ERROR' => !empty($landing_login_attempt['error']) ? 1 : 0,
+                'LOGIN_ATTEMPT_ERROR_LABEL' => htmlspecialchars((string)($landing_login_attempt['error_label'] ?? ''), ENT_COMPAT, 'UTF-8'),
+                'LOGIN_ATTEMPT_ERROR' => htmlspecialchars((string)($landing_login_attempt['error'] ?? ''), ENT_COMPAT, 'UTF-8'),
             ]);
             foreach ($visible_pages as $visible_index => $page) {
                 $page_title = trim((string)($page['page_title'] ?? ''));
-                if ($page_title === '') {
-                    $page_title = '-';
-                }
                 $page_url = trim((string)($page['page_url'] ?? ''));
                 if ($page_url === '') {
                     $page_url = '-';
                 }
+                $page_url_analysis = $this->analyze_session_page_url($page_url, $page_title);
+                $page_title = $page_url_analysis['display_title'];
                 $page_referer = trim((string)($page['referer'] ?? ''));
                 $page_ip = trim((string)($page['user_ip'] ?? ''));
                 $show_page_ip = ($page_ip !== '');
-                $page_cookie_hash = strtolower(trim((string)($page['visitor_cookie_hash'] ?? '')));
-                $page_cookie_valid = $this->is_valid_visitor_cookie_hash($page_cookie_hash);
-                if (!$has_cookie_column) {
-                    $page_cookie_match_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_UNAVAILABLE');
-                    $page_cookie_match_class = 'diag-cookie-na';
-                } elseif (!$page_cookie_valid) {
-                    $page_cookie_match_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_ABSENT');
-                    $page_cookie_match_class = 'diag-cookie-na';
-                } elseif ($visitor_cookie_present && hash_equals($visitor_cookie_hash, $page_cookie_hash)) {
-                    $page_cookie_match_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_OK');
-                    $page_cookie_match_class = 'diag-cookie-ok';
-                } elseif ($visitor_cookie_present) {
-                    $page_cookie_match_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_MISMATCH');
-                    $page_cookie_match_class = 'diag-cookie-bad';
-                } else {
-                    $page_cookie_match_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_PRESENT');
-                    $page_cookie_match_class = 'diag-cookie-mid';
-                }
+                $page_cookie_cell = $this->build_timeline_cookie_cell($page, $has_cookie_column, $has_cookie_debug_columns);
+                $page_login_attempt = $this->build_timeline_login_attempt_cell($page, $has_login_attempt_columns);
                 $this->template->assign_block_vars('SESSIONS.PAGES', [
                     'PAGE_INDEX' => $page_index,
                     'TITLE'     => htmlspecialchars($page_title, ENT_COMPAT, 'UTF-8'),
@@ -1310,11 +1426,24 @@ class acp_controller
                     'HAS_IP'    => $show_page_ip ? 1 : 0,
                     'IP'        => htmlspecialchars($page_ip, ENT_COMPAT, 'UTF-8'),
                     'IP_CHANGED'=> ($page_ip !== '' && $page_ip !== $landing_ip) ? 1 : 0,
-                    'COOKIE_HASH' => htmlspecialchars($this->format_cookie_hash_short($page_cookie_hash), ENT_COMPAT, 'UTF-8'),
-                    'COOKIE_MATCH_LABEL' => htmlspecialchars($page_cookie_match_label, ENT_COMPAT, 'UTF-8'),
-                    'COOKIE_MATCH_CLASS' => $page_cookie_match_class,
+                    'COOKIE_HASH' => htmlspecialchars($page_cookie_cell['hash'], ENT_COMPAT, 'UTF-8'),
+                    'COOKIE_MATCH_LABEL' => htmlspecialchars($page_cookie_cell['label'], ENT_COMPAT, 'UTF-8'),
+                    'COOKIE_MATCH_CLASS' => $page_cookie_cell['class'],
+                    'CORRELATION_TYPE' => htmlspecialchars($correlation_type, ENT_COMPAT, 'UTF-8'),
                     'HAS_REFERER' => ($page_referer !== '') ? 1 : 0,
                     'REFERER'   => ($page_referer !== '') ? $this->format_referer($page_referer) : '',
+                    'HAS_URL_KIND' => $page_url_analysis['kind_label'] !== '' ? 1 : 0,
+                    'URL_KIND_LABEL' => htmlspecialchars($page_url_analysis['kind_label'], ENT_COMPAT, 'UTF-8'),
+                    'HAS_URL_STATUS' => $page_url_analysis['status_label'] !== '' ? 1 : 0,
+                    'URL_STATUS_LABEL' => htmlspecialchars($page_url_analysis['status_label'], ENT_COMPAT, 'UTF-8'),
+                    'URL_STATUS_CLASS' => $page_url_analysis['status_class'],
+                    'HAS_LOGIN_ATTEMPT' => !empty($page_login_attempt['has']) ? 1 : 0,
+                    'LOGIN_ATTEMPT_LABEL' => htmlspecialchars((string)($page_login_attempt['label'] ?? ''), ENT_COMPAT, 'UTF-8'),
+                    'LOGIN_ATTEMPT_USERNAME_LABEL' => htmlspecialchars((string)($page_login_attempt['username_label'] ?? ''), ENT_COMPAT, 'UTF-8'),
+                    'LOGIN_ATTEMPT_USERNAME' => htmlspecialchars((string)($page_login_attempt['username'] ?? ''), ENT_COMPAT, 'UTF-8'),
+                    'HAS_LOGIN_ATTEMPT_ERROR' => !empty($page_login_attempt['error']) ? 1 : 0,
+                    'LOGIN_ATTEMPT_ERROR_LABEL' => htmlspecialchars((string)($page_login_attempt['error_label'] ?? ''), ENT_COMPAT, 'UTF-8'),
+                    'LOGIN_ATTEMPT_ERROR' => htmlspecialchars((string)($page_login_attempt['error'] ?? ''), ENT_COMPAT, 'UTF-8'),
                 ]);
                 $page_index++;
             }
@@ -1396,6 +1525,230 @@ class acp_controller
     }
 
     /**
+     * Analyse une URL de timeline pour afficher explicitement les assets non HTML
+     * et signaler les chemins introuvables côté forum.
+     *
+     * @return array{display_title:string,kind_label:string,status_label:string,status_class:string}
+     */
+    private function analyze_session_page_url($page_url, $page_title = '')
+    {
+        $raw_url = trim((string)$page_url);
+        $raw_title = trim((string)$page_title);
+        $cache_key = strtolower($raw_url) . '|' . strtolower($raw_title);
+        if (isset($this->session_url_analysis_cache[$cache_key])) {
+            return $this->session_url_analysis_cache[$cache_key];
+        }
+
+        $result = [
+            'display_title' => ($raw_title !== '') ? $raw_title : '-',
+            'kind_label' => '',
+            'status_label' => '',
+            'status_class' => 'diag-cookie-na',
+        ];
+
+        if ($raw_url === '' || $raw_url === '-') {
+            return $this->session_url_analysis_cache[$cache_key] = $result;
+        }
+
+        $path = parse_url($raw_url, PHP_URL_PATH);
+        if (!is_string($path) || $path === '') {
+            $path = $raw_url;
+        }
+        $normalized_path = '/' . ltrim($path, '/');
+        $path_lc = strtolower($normalized_path);
+        $basename = basename($normalized_path);
+        $basename_lc = strtolower($basename);
+        $extension = strtolower(pathinfo($basename_lc, PATHINFO_EXTENSION));
+
+        if ($this->is_download_file_url($raw_url)) {
+            if (stripos($raw_url, 'avatar=') !== false) {
+                $result['kind_label'] = $this->user->lang('STATS_SESSION_URL_KIND_AVATAR');
+            } elseif (preg_match('/(?:\\?|&)t=1(?:&|$)/i', $raw_url)) {
+                $result['kind_label'] = $this->user->lang('STATS_SESSION_URL_KIND_THUMB');
+            } else {
+                $result['kind_label'] = $this->user->lang('STATS_SESSION_URL_KIND_ATTACHMENT');
+            }
+        } elseif ($extension !== '') {
+            $result['kind_label'] = $this->get_non_html_asset_kind_label($extension, $path_lc);
+        } elseif (strpos($path_lc, '/app.php/') === 0) {
+            $result['kind_label'] = $this->user->lang('STATS_SESSION_URL_KIND_APP_ROUTE');
+        }
+
+        if ($result['kind_label'] === '' && $this->looks_like_direct_resource_path($path_lc)) {
+            $result['kind_label'] = $this->user->lang('STATS_SESSION_URL_KIND_DIRECT_RESOURCE');
+        }
+
+        if ($this->should_use_filename_as_page_title($raw_title, $basename, $path_lc, $result['kind_label'])) {
+            $result['display_title'] = $basename;
+        } elseif ($result['display_title'] === '-' && $result['kind_label'] !== '') {
+            $result['display_title'] = $result['kind_label'];
+        }
+
+        if ($this->should_mark_session_url_missing($path_lc)) {
+            $candidate_path = $this->resolve_public_url_path_to_file($normalized_path);
+            if ($candidate_path !== null && !is_file($candidate_path)) {
+                $result['status_label'] = $this->user->lang('STATS_SESSION_URL_STATUS_MISSING');
+                $result['status_class'] = 'diag-cookie-bad';
+                if ($result['kind_label'] === '') {
+                    $result['kind_label'] = $this->user->lang('STATS_SESSION_URL_KIND_DIRECT_RESOURCE');
+                }
+                if ($this->should_use_filename_as_page_title($raw_title, $basename, $path_lc, $result['kind_label'])) {
+                    $result['display_title'] = ($basename !== '' && $basename !== '/') ? $basename : $result['kind_label'];
+                }
+            }
+        }
+
+        return $this->session_url_analysis_cache[$cache_key] = $result;
+    }
+
+    private function get_non_html_asset_kind_label($extension, $path_lc)
+    {
+        switch ($extension) {
+            case 'js':
+                return $this->user->lang('STATS_SESSION_URL_KIND_JS');
+            case 'css':
+                return $this->user->lang('STATS_SESSION_URL_KIND_CSS');
+            case 'jpg':
+            case 'jpeg':
+            case 'png':
+            case 'gif':
+            case 'webp':
+            case 'svg':
+            case 'ico':
+            case 'bmp':
+            case 'avif':
+                return $this->user->lang('STATS_SESSION_URL_KIND_IMAGE');
+            case 'mp3':
+            case 'wav':
+            case 'ogg':
+            case 'm4a':
+            case 'flac':
+            case 'mp4':
+            case 'm4v':
+            case 'avi':
+            case 'mpg':
+            case 'mpeg':
+            case 'mov':
+            case 'wmv':
+            case 'mkv':
+            case 'webm':
+                return $this->user->lang('STATS_SESSION_URL_KIND_MEDIA');
+            case 'pdf':
+            case 'doc':
+            case 'docx':
+            case 'xls':
+            case 'xlsx':
+            case 'ppt':
+            case 'pptx':
+            case 'zip':
+            case 'rar':
+            case '7z':
+            case 'gz':
+            case 'tar':
+            case 'bz2':
+            case 'csv':
+            case 'txt':
+                return $this->user->lang('STATS_SESSION_URL_KIND_DOCUMENT');
+            case 'woff':
+            case 'woff2':
+            case 'ttf':
+            case 'otf':
+            case 'eot':
+                return $this->user->lang('STATS_SESSION_URL_KIND_FONT');
+        }
+
+        if (strpos($path_lc, '/app.php/') === 0) {
+            return $this->user->lang('STATS_SESSION_URL_KIND_APP_ASSET');
+        }
+
+        return $this->user->lang('STATS_SESSION_URL_KIND_DIRECT_RESOURCE');
+    }
+
+    private function should_use_filename_as_page_title($page_title, $basename, $path_lc, $kind_label = '')
+    {
+        $title = strtolower(trim((string)$page_title));
+        if ($basename === '' || $basename === '/' || substr($basename, -4) === '.php') {
+            return false;
+        }
+
+        if ($title === '' || $title === '-' || $title === 'index' || $title === 'informations' || $title === 'information') {
+            return true;
+        }
+
+        return ($kind_label !== '' && $this->looks_like_direct_resource_path($path_lc));
+    }
+
+    private function looks_like_direct_resource_path($path_lc)
+    {
+        if ($path_lc === '' || $path_lc === '/' || strpos($path_lc, '/download/file.php') === 0) {
+            return false;
+        }
+        if ($this->is_known_php_front_controller_path($path_lc)) {
+            return false;
+        }
+
+        return (bool)preg_match('#^/[a-z0-9._/-]+$#i', $path_lc);
+    }
+
+    private function should_mark_session_url_missing($path_lc)
+    {
+        if ($path_lc === '' || $path_lc === '/' || strpos($path_lc, '/download/file.php') === 0) {
+            return false;
+        }
+        if (strpos($path_lc, '/app.php/') === 0) {
+            return false;
+        }
+        if ($this->is_known_php_front_controller_path($path_lc)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function is_known_php_front_controller_path($path_lc)
+    {
+        static $known_scripts = [
+            '/index.php',
+            '/viewforum.php',
+            '/viewtopic.php',
+            '/search.php',
+            '/posting.php',
+            '/faq.php',
+            '/feed.php',
+            '/memberlist.php',
+            '/ucp.php',
+            '/mcp.php',
+            '/app.php',
+            '/cron.php',
+            '/report.php',
+            '/viewonline.php',
+            '/adm/index.php',
+            '/admin/index.php',
+        ];
+
+        if (in_array($path_lc, $known_scripts, true)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private function resolve_public_url_path_to_file($path)
+    {
+        $relative_path = ltrim((string)$path, '/');
+        if ($relative_path === '' || strpos($relative_path, '..') !== false) {
+            return null;
+        }
+
+        $forum_root = realpath(__DIR__ . '/../../../../');
+        if ($forum_root === false) {
+            return null;
+        }
+
+        return $forum_root . '/' . $relative_path;
+    }
+
+    /**
      * Récupère le nom d'utilisateur
      */
     private function get_username($user_id)
@@ -1449,6 +1802,522 @@ class acp_controller
     }
 
     /**
+     * Charge les lignes stats d'une liste de session_id et les regroupe par bucket ACP.
+     *
+     * @return array<string,array<int,array>>
+     */
+    private function fetch_pages_by_session_ids(array $session_ids, $member_session_max_seconds, $select_suffix = '', $limit = 0, $cutoff = 0)
+    {
+        $pages_by_session = [];
+        $escaped_session_ids = [];
+        foreach ($session_ids as $session_id) {
+            $session_id = trim((string)$session_id);
+            if ($session_id === '') {
+                continue;
+            }
+            $escaped_session_ids[$session_id] = '\'' . $this->db->sql_escape($session_id) . '\'';
+        }
+        if (empty($escaped_session_ids)) {
+            return $pages_by_session;
+        }
+
+        $sql = 'SELECT log_id, session_id, user_id, user_ip, user_agent, user_os, user_device,
+                       screen_res, is_bot, bot_source, country_code, country_name, hostname,
+                       visit_time, page_url, page_title, referer, referer_type, duration,
+                       is_first_visit, signals'
+                . $select_suffix . '
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE session_id IN (' . implode(',', $escaped_session_ids) . ')';
+        if ((int)$cutoff > 0) {
+            $sql .= ' AND visit_time >= ' . (int)$cutoff;
+        }
+        $sql .= ' ORDER BY visit_time ASC, log_id ASC';
+
+        $result = ((int)$limit > 0)
+            ? $this->db->sql_query_limit($sql, (int)$limit)
+            : $this->db->sql_query($sql);
+        while ($page = $this->db->sql_fetchrow($result)) {
+            $page_session_key = $this->build_session_bucket_key(
+                (string)($page['session_id'] ?? ''),
+                (int)($page['user_id'] ?? 0),
+                (int)($page['visit_time'] ?? 0),
+                $member_session_max_seconds
+            );
+            if ($page_session_key === '') {
+                continue;
+            }
+            $pages_by_session[$page_session_key][] = $page;
+        }
+        $this->db->sql_freeresult($result);
+
+        return $pages_by_session;
+    }
+
+    /**
+     * Découvre la fermeture 24h des session_id reliés par IP ou cookie visiteur.
+     *
+     * @return array<int,string>
+     */
+    private function discover_correlated_session_ids_24h(array $seed_ips, array $seed_hashes, $window_sec = 86400)
+    {
+        if (!$this->has_visitor_cookie_column()) {
+            return [];
+        }
+
+        $known_ips = [];
+        foreach ($seed_ips as $ip) {
+            $ip = trim((string)$ip);
+            if ($ip !== '') {
+                $known_ips[$ip] = true;
+            }
+        }
+
+        $known_hashes = [];
+        foreach ($seed_hashes as $hash) {
+            $hash = strtolower(trim((string)$hash));
+            if ($this->is_valid_visitor_cookie_hash($hash)) {
+                $known_hashes[$hash] = true;
+            }
+        }
+
+        if (empty($known_ips) && empty($known_hashes)) {
+            return [];
+        }
+
+        $known_session_ids = [];
+        $cutoff = time() - max(3600, (int)$window_sec);
+
+        for ($iteration = 0; $iteration < 6; $iteration++) {
+            $conditions = [];
+            if (!empty($known_ips)) {
+                $escaped_ips = [];
+                foreach (array_keys($known_ips) as $ip) {
+                    $escaped_ips[] = '\'' . $this->db->sql_escape($ip) . '\'';
+                }
+                $conditions[] = 'user_ip IN (' . implode(',', $escaped_ips) . ')';
+            }
+            if (!empty($known_hashes)) {
+                $escaped_hashes = [];
+                foreach (array_keys($known_hashes) as $hash) {
+                    $escaped_hashes[] = '\'' . $this->db->sql_escape($hash) . '\'';
+                }
+                $conditions[] = 'visitor_cookie_hash IN (' . implode(',', $escaped_hashes) . ')';
+            }
+            if (empty($conditions)) {
+                break;
+            }
+
+            $sql = 'SELECT DISTINCT session_id, user_ip, visitor_cookie_hash
+                    FROM ' . $this->table_prefix . 'bastien59_stats
+                    WHERE visit_time >= ' . (int)$cutoff . '
+                    AND (' . implode(' OR ', $conditions) . ')';
+            $result = $this->db->sql_query($sql);
+            $changed = false;
+            while ($row = $this->db->sql_fetchrow($result)) {
+                $session_id = trim((string)($row['session_id'] ?? ''));
+                if ($session_id !== '' && !isset($known_session_ids[$session_id])) {
+                    $known_session_ids[$session_id] = true;
+                    $changed = true;
+                }
+
+                $ip = trim((string)($row['user_ip'] ?? ''));
+                if ($ip !== '' && !isset($known_ips[$ip])) {
+                    $known_ips[$ip] = true;
+                    $changed = true;
+                }
+
+                $hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
+                if ($this->is_valid_visitor_cookie_hash($hash) && !isset($known_hashes[$hash])) {
+                    $known_hashes[$hash] = true;
+                    $changed = true;
+                }
+            }
+            $this->db->sql_freeresult($result);
+
+            if (!$changed) {
+                break;
+            }
+        }
+
+        return array_keys($known_session_ids);
+    }
+
+    /**
+     * Synthétise une ligne session ACP à partir des pages chargées pour un bucket.
+     */
+    private function synthesize_session_row_from_pages($session_key, array $pages)
+    {
+        if (empty($pages)) {
+            return [
+                'session_id' => (string)$session_key,
+                'session_bucket' => (string)$session_key,
+            ];
+        }
+
+        usort($pages, function ($a, $b) {
+            $timeCmp = ((int)($a['visit_time'] ?? 0) <=> (int)($b['visit_time'] ?? 0));
+            if ($timeCmp !== 0) {
+                return $timeCmp;
+            }
+            return ((int)($a['log_id'] ?? 0) <=> (int)($b['log_id'] ?? 0));
+        });
+
+        $latest_row = end($pages);
+        if (!is_array($latest_row)) {
+            $latest_row = $pages[0];
+        }
+
+        $page_count = count($pages);
+        $last_visit_time = 0;
+        $has_interaction = 0;
+        $last_interaction_time = 0;
+        $signals = [];
+
+        $first_visit_country_code = '';
+        $first_visit_country_name = '';
+        $first_visit_hostname = '';
+        $any_country_code = '';
+        $any_country_name = '';
+        $any_hostname = '';
+
+        foreach ($pages as $page_row) {
+            $visit_time = (int)($page_row['visit_time'] ?? 0);
+            $last_visit_time = max($last_visit_time, $visit_time);
+
+            $page_has_interaction = (
+                (int)($page_row['ajax_seen_time'] ?? 0) > 0
+                || (int)($page_row['scroll_down_ajax'] ?? 0) === 1
+                || (int)($page_row['cursor_track_points'] ?? 0) > 0
+                || (int)($page_row['cursor_click_count'] ?? 0) > 0
+            );
+            if ($page_has_interaction) {
+                $has_interaction = 1;
+                $last_interaction_time = max($last_interaction_time, $visit_time);
+            }
+
+            $signals_raw = trim((string)($page_row['signals'] ?? ''));
+            if ($signals_raw !== '') {
+                foreach (explode(',', $signals_raw) as $signal) {
+                    $signal = trim($signal);
+                    if ($signal !== '') {
+                        $signals[$signal] = true;
+                    }
+                }
+            }
+
+            $country_code = strtoupper(trim((string)($page_row['country_code'] ?? '')));
+            $country_name = trim((string)($page_row['country_name'] ?? ''));
+            $hostname = trim((string)($page_row['hostname'] ?? ''));
+
+            if ($any_country_code === '' && $country_code !== '') {
+                $any_country_code = $country_code;
+            }
+            if ($any_country_name === '' && $country_name !== '') {
+                $any_country_name = $country_name;
+            }
+            if ($any_hostname === '' && $hostname !== '') {
+                $any_hostname = $hostname;
+            }
+
+            if ((int)($page_row['is_first_visit'] ?? 0) === 1) {
+                if ($first_visit_country_code === '' && $country_code !== '') {
+                    $first_visit_country_code = $country_code;
+                }
+                if ($first_visit_country_name === '' && $country_name !== '') {
+                    $first_visit_country_name = $country_name;
+                }
+                if ($first_visit_hostname === '' && $hostname !== '') {
+                    $first_visit_hostname = $hostname;
+                }
+            }
+        }
+
+        $synthetic_row = $latest_row;
+        $synthetic_row['session_bucket'] = (string)$session_key;
+        $synthetic_row['page_count'] = $page_count;
+        $synthetic_row['last_visit_time'] = $last_visit_time;
+        $synthetic_row['has_interaction'] = $has_interaction;
+        $synthetic_row['last_interaction_time'] = $last_interaction_time;
+        $synthetic_row['session_country_code'] = ($first_visit_country_code !== '') ? $first_visit_country_code : $any_country_code;
+        $synthetic_row['session_country_name'] = ($first_visit_country_name !== '') ? $first_visit_country_name : $any_country_name;
+        $synthetic_row['session_hostname'] = ($first_visit_hostname !== '') ? $first_visit_hostname : $any_hostname;
+        $synthetic_row['signals'] = implode(',', array_keys($signals));
+
+        return $synthetic_row;
+    }
+
+    /**
+     * Regroupe les sessions affichées en "sessions observées" corrélées.
+     * Règles:
+     * - même cookie visiteur sur plusieurs IP -> même groupe
+     * - même IP avec plusieurs cookies visiteurs distincts -> même groupe
+     *
+     * Le rendu ACP affiche ensuite un seul bloc par groupe, trié sur sa dernière activité.
+     *
+     * @return array{sessions:array<int,array>,pages_by_session:array<string,array<int,array>>,session_cookie_hashes:array<string,string>}
+     */
+    private function build_observed_session_clusters(array $sessions, array $pages_by_session, array $session_cookie_hashes)
+    {
+        $nodes = [];
+        foreach ($sessions as $row) {
+            $session_key = (string)($row['session_bucket'] ?? ($row['session_id'] ?? ''));
+            if ($session_key === '') {
+                continue;
+            }
+
+            $pages = $pages_by_session[$session_key] ?? [];
+            if (empty($pages)) {
+                $pages = [$row];
+            }
+            usort($pages, function ($a, $b) {
+                $timeCmp = ((int)($a['visit_time'] ?? 0) <=> (int)($b['visit_time'] ?? 0));
+                if ($timeCmp !== 0) {
+                    return $timeCmp;
+                }
+                return ((int)($a['log_id'] ?? 0) <=> (int)($b['log_id'] ?? 0));
+            });
+
+            $ips = [];
+            $hashes = [];
+            foreach ($pages as $page_row) {
+                $ip = trim((string)($page_row['user_ip'] ?? ''));
+                if ($ip !== '') {
+                    $ips[$ip] = true;
+                }
+                $hash = strtolower(trim((string)($page_row['visitor_cookie_hash'] ?? '')));
+                if ($this->is_valid_visitor_cookie_hash($hash)) {
+                    $hashes[$hash] = true;
+                }
+            }
+            $row_ip = trim((string)($row['user_ip'] ?? ''));
+            if ($row_ip !== '') {
+                $ips[$row_ip] = true;
+            }
+            $row_hash = strtolower(trim((string)($session_cookie_hashes[$session_key] ?? ($row['visitor_cookie_hash'] ?? ''))));
+            if ($this->is_valid_visitor_cookie_hash($row_hash)) {
+                $hashes[$row_hash] = true;
+            }
+
+            $last_visit_time = max((int)($row['last_visit_time'] ?? 0), (int)($row['visit_time'] ?? 0));
+            foreach ($pages as $page_row) {
+                $last_visit_time = max($last_visit_time, (int)($page_row['visit_time'] ?? 0));
+            }
+
+            $nodes[$session_key] = [
+                'row' => $row,
+                'pages' => $pages,
+                'ips' => array_keys($ips),
+                'hashes' => array_keys($hashes),
+                'last_visit_time' => $last_visit_time,
+            ];
+        }
+
+        if (count($nodes) <= 1) {
+            return [
+                'sessions' => $sessions,
+                'pages_by_session' => $pages_by_session,
+                'session_cookie_hashes' => $session_cookie_hashes,
+            ];
+        }
+
+        $parent = [];
+        $rank = [];
+        foreach (array_keys($nodes) as $session_key) {
+            $parent[$session_key] = $session_key;
+            $rank[$session_key] = 0;
+        }
+
+        $find = null;
+        $find = function ($key) use (&$parent, &$find) {
+            if ($parent[$key] !== $key) {
+                $parent[$key] = $find($parent[$key]);
+            }
+            return $parent[$key];
+        };
+        $union = function ($a, $b) use (&$parent, &$rank, $find) {
+            $rootA = $find($a);
+            $rootB = $find($b);
+            if ($rootA === $rootB) {
+                return;
+            }
+            if ($rank[$rootA] < $rank[$rootB]) {
+                $parent[$rootA] = $rootB;
+            } elseif ($rank[$rootA] > $rank[$rootB]) {
+                $parent[$rootB] = $rootA;
+            } else {
+                $parent[$rootB] = $rootA;
+                $rank[$rootA]++;
+            }
+        };
+
+        $cookie_to_sessions = [];
+        $ip_to_sessions = [];
+        foreach ($nodes as $session_key => $node) {
+            foreach ($node['hashes'] as $hash) {
+                $cookie_to_sessions[$hash][] = $session_key;
+            }
+            foreach ($node['ips'] as $ip) {
+                $ip_to_sessions[$ip][] = $session_key;
+            }
+        }
+
+        foreach ($cookie_to_sessions as $session_keys) {
+            if (count($session_keys) < 2) {
+                continue;
+            }
+            $base_key = array_shift($session_keys);
+            foreach ($session_keys as $other_key) {
+                $union($base_key, $other_key);
+            }
+        }
+
+        foreach ($ip_to_sessions as $session_keys) {
+            if (count($session_keys) < 2) {
+                continue;
+            }
+            $distinct_hashes = [];
+            foreach ($session_keys as $session_key) {
+                foreach ($nodes[$session_key]['hashes'] as $hash) {
+                    $distinct_hashes[$hash] = true;
+                }
+            }
+            if (count($distinct_hashes) < 2) {
+                continue;
+            }
+            $base_key = array_shift($session_keys);
+            foreach ($session_keys as $other_key) {
+                $union($base_key, $other_key);
+            }
+        }
+
+        $components = [];
+        foreach (array_keys($nodes) as $session_key) {
+            $root = $find($session_key);
+            $components[$root][] = $session_key;
+        }
+
+        if (count($components) === count($nodes)) {
+            return [
+                'sessions' => $sessions,
+                'pages_by_session' => $pages_by_session,
+                'session_cookie_hashes' => $session_cookie_hashes,
+            ];
+        }
+
+        $cluster_sessions = [];
+        $cluster_pages_by_session = [];
+        $cluster_cookie_hashes = [];
+
+        foreach ($components as $component_keys) {
+            usort($component_keys, function ($a, $b) use ($nodes) {
+                $timeCmp = ($nodes[$b]['last_visit_time'] <=> $nodes[$a]['last_visit_time']);
+                if ($timeCmp !== 0) {
+                    return $timeCmp;
+                }
+                return ((int)($nodes[$b]['row']['log_id'] ?? 0) <=> (int)($nodes[$a]['row']['log_id'] ?? 0));
+            });
+
+            $cluster_key = (count($component_keys) === 1)
+                ? (string)$component_keys[0]
+                : 'cluster:' . md5(implode('|', $component_keys));
+
+            $latest_row = $nodes[$component_keys[0]]['row'];
+            $all_pages = [];
+            $all_signals = [];
+            $page_count = 0;
+            $last_visit_time = 0;
+            $has_interaction = 0;
+            $last_interaction_time = 0;
+            $anchor_cookie_hash = '';
+
+            foreach ($component_keys as $session_key) {
+                $node = $nodes[$session_key];
+                $page_count += count($node['pages']);
+                $last_visit_time = max($last_visit_time, (int)($node['last_visit_time'] ?? 0));
+                $has_interaction = max($has_interaction, (int)($node['row']['has_interaction'] ?? 0));
+                $last_interaction_time = max($last_interaction_time, (int)($node['row']['last_interaction_time'] ?? 0));
+                foreach ($node['pages'] as $page_row) {
+                    $all_pages[] = $page_row;
+                }
+                $signals_raw = trim((string)($node['row']['signals'] ?? ''));
+                if ($signals_raw !== '') {
+                    foreach (explode(',', $signals_raw) as $signal) {
+                        $signal = trim($signal);
+                        if ($signal !== '') {
+                            $all_signals[$signal] = true;
+                        }
+                    }
+                }
+                if ($anchor_cookie_hash === '') {
+                    $candidate = strtolower(trim((string)($session_cookie_hashes[$session_key] ?? ($node['row']['visitor_cookie_hash'] ?? ''))));
+                    if ($this->is_valid_visitor_cookie_hash($candidate)) {
+                        $anchor_cookie_hash = $candidate;
+                    } elseif (!empty($node['hashes'])) {
+                        $anchor_cookie_hash = (string)$node['hashes'][0];
+                    }
+                }
+            }
+
+            usort($all_pages, function ($a, $b) {
+                $timeCmp = ((int)($a['visit_time'] ?? 0) <=> (int)($b['visit_time'] ?? 0));
+                if ($timeCmp !== 0) {
+                    return $timeCmp;
+                }
+                return ((int)($a['log_id'] ?? 0) <=> (int)($b['log_id'] ?? 0));
+            });
+
+            $synthetic_row = $latest_row;
+            $synthetic_row['session_bucket'] = $cluster_key;
+            $synthetic_row['session_id'] = $cluster_key;
+            $synthetic_row['page_count'] = $page_count;
+            $synthetic_row['last_visit_time'] = $last_visit_time;
+            $synthetic_row['has_interaction'] = $has_interaction;
+            $synthetic_row['last_interaction_time'] = $last_interaction_time;
+            $synthetic_row['signals'] = implode(',', array_keys($all_signals));
+
+            $cluster_sessions[] = $synthetic_row;
+            $cluster_pages_by_session[$cluster_key] = $all_pages;
+            if ($anchor_cookie_hash !== '') {
+                $cluster_cookie_hashes[$cluster_key] = $anchor_cookie_hash;
+            }
+        }
+
+        usort($cluster_sessions, function ($a, $b) {
+            $timeCmp = ((int)($b['last_visit_time'] ?? 0) <=> (int)($a['last_visit_time'] ?? 0));
+            if ($timeCmp !== 0) {
+                return $timeCmp;
+            }
+            return ((int)($b['log_id'] ?? 0) <=> (int)($a['log_id'] ?? 0));
+        });
+
+        return [
+            'sessions' => $cluster_sessions,
+            'pages_by_session' => $cluster_pages_by_session,
+            'session_cookie_hashes' => $cluster_cookie_hashes,
+        ];
+    }
+
+    /**
+     * Détermine la page d'entrée à afficher pour une session observée.
+     */
+    private function resolve_session_landing_page_row(array $pages, array $fallback_row = [])
+    {
+        if (empty($pages)) {
+            return $fallback_row;
+        }
+
+        foreach ($pages as $page_row) {
+            $page_url = strtolower(trim((string)($page_row['page_url'] ?? '')));
+            if (strpos($page_url, 'search_id=active_topics') !== false) {
+                continue;
+            }
+            return $page_row;
+        }
+
+        return $pages[0];
+    }
+
+    /**
      * Formate une durée en secondes
      */
     private function format_duration($seconds)
@@ -1466,19 +2335,19 @@ class acp_controller
     }
 
     /**
-     * Formate le temps écoulé entre deux lignes de timeline.
+     * Formate le temps écoulé depuis la ligne précédente dans la timeline.
      * Contrairement à format_duration(), une durée nulle explicite doit rester visible (`0s`).
      */
-    private function format_timeline_duration($visit_time, $next_visit_time = null, $stored_duration = 0)
+    private function format_timeline_duration($visit_time, $previous_visit_time = null, $stored_duration = 0, $allow_stored_fallback = false)
     {
         $current = (int)$visit_time;
-        $next = ($next_visit_time === null) ? null : (int)$next_visit_time;
+        $previous = ($previous_visit_time === null) ? null : (int)$previous_visit_time;
         $stored = (int)$stored_duration;
 
-        if ($next !== null && $current > 0 && $next >= $current) {
-            return $this->format_explicit_duration($next - $current);
+        if ($previous !== null && $current > 0 && $current >= $previous) {
+            return $this->format_explicit_duration($current - $previous);
         }
-        if ($stored > 0) {
+        if ($allow_stored_fallback && $stored > 0) {
             return $this->format_explicit_duration($stored);
         }
 
@@ -1737,6 +2606,31 @@ class acp_controller
     }
 
     /**
+     * Détecte si les colonnes de tentative de login ratée (migration 1.17.0) existent.
+     */
+    private function has_login_attempt_columns()
+    {
+        if ($this->has_login_attempt_columns !== null) {
+            return $this->has_login_attempt_columns;
+        }
+
+        $sql = 'SELECT login_attempt_failed, login_attempt_username, login_attempt_error
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_login_attempt_columns = !$has_error;
+        return $this->has_login_attempt_columns;
+    }
+
+    /**
      * Retourne vrai si le hash cookie visiteur est valide.
      */
     private function is_valid_visitor_cookie_hash($hash)
@@ -1756,6 +2650,139 @@ class acp_controller
         }
 
         return substr($hash, 0, 12) . '...';
+    }
+
+    /**
+     * Statut timeline du cookie b59vid pour une ligne précise.
+     * Ici on privilégie la preuve réelle côté serveur:
+     * - HTTP   : cookie vu dans la requête HTTP de cette ligne
+     * - AJAX   : cookie relu ensuite via AJAX pour cette ligne
+     * - Posé   : cookie créé sur cette réponse, pas encore prouvé en retour HTTP
+     */
+    private function build_timeline_cookie_cell(array $row, $has_cookie_column, $has_cookie_debug_columns)
+    {
+        if (!$has_cookie_column) {
+            return [
+                'hash' => '-',
+                'label' => $this->user->lang('STATS_SESSION_COOKIE_MATCH_UNAVAILABLE'),
+                'class' => 'diag-cookie-na',
+            ];
+        }
+
+        $row_cookie_hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
+        if (!$this->is_valid_visitor_cookie_hash($row_cookie_hash)) {
+            return [
+                'hash' => '-',
+                'label' => $this->user->lang('STATS_SESSION_COOKIE_MATCH_ABSENT'),
+                'class' => 'diag-cookie-na',
+            ];
+        }
+
+        if (!$has_cookie_debug_columns) {
+            return [
+                'hash' => $this->format_cookie_hash_short($row_cookie_hash),
+                'label' => $this->user->lang('STATS_SESSION_COOKIE_MATCH_PRESENT'),
+                'class' => 'diag-cookie-mid',
+            ];
+        }
+
+        $cookie_preexisting = (int)($row['visitor_cookie_preexisting'] ?? 0) === 1;
+        $ajax_cookie_state = (int)($row['visitor_cookie_ajax_state'] ?? 0);
+        $ajax_cookie_hash = strtolower(trim((string)($row['visitor_cookie_ajax_hash'] ?? '')));
+        $ajax_cookie_valid = $this->is_valid_visitor_cookie_hash($ajax_cookie_hash);
+        $ajax_expected_for_row = $this->is_ajax_expected_for_page_url((string)($row['page_url'] ?? ''));
+
+        if ($cookie_preexisting) {
+            return [
+                'hash' => $this->format_cookie_hash_short($row_cookie_hash),
+                'label' => $this->user->lang('STATS_SESSION_COOKIE_MATCH_HTTP'),
+                'class' => 'diag-cookie-ok',
+            ];
+        }
+
+        if ($ajax_expected_for_row && $ajax_cookie_state === 1 && $ajax_cookie_valid && hash_equals($row_cookie_hash, $ajax_cookie_hash)) {
+            return [
+                'hash' => $this->format_cookie_hash_short($row_cookie_hash),
+                'label' => $this->user->lang('STATS_SESSION_COOKIE_MATCH_AJAX'),
+                'class' => 'diag-cookie-mid',
+            ];
+        }
+
+        if ($ajax_cookie_state === 4) {
+            return [
+                'hash' => $this->format_cookie_hash_short($row_cookie_hash),
+                'label' => $this->user->lang('STATS_SESSION_COOKIE_MATCH_MISMATCH'),
+                'class' => 'diag-cookie-bad',
+            ];
+        }
+
+        return [
+            'hash' => $this->format_cookie_hash_short($row_cookie_hash),
+            'label' => $this->user->lang('STATS_SESSION_COOKIE_MATCH_SET'),
+            'class' => 'diag-cookie-na',
+        ];
+    }
+
+    /**
+     * Diagnostic de tentative de login ratée, captée côté serveur via core.login_box_failed.
+     * Ici on affiche exactement le login soumis au POST, jamais le mot de passe.
+     */
+    private function build_timeline_login_attempt_cell(array $row, $has_login_attempt_columns)
+    {
+        if (!$has_login_attempt_columns || (int)($row['login_attempt_failed'] ?? 0) !== 1) {
+            return [
+                'has' => false,
+                'label' => '',
+                'username_label' => '',
+                'username' => '',
+                'error_label' => '',
+                'error' => '',
+            ];
+        }
+
+        $submitted_username = trim((string)($row['login_attempt_username'] ?? ''));
+        $error_code = trim((string)($row['login_attempt_error'] ?? ''));
+
+        return [
+            'has' => true,
+            'label' => $this->user->lang('STATS_SESSION_LOGIN_ATTEMPT_FAILED'),
+            'username_label' => $this->user->lang('STATS_SESSION_LOGIN_ATTEMPT_USERNAME'),
+            'username' => $submitted_username !== '' ? $submitted_username : '-',
+            'error_label' => $this->user->lang('STATS_SESSION_LOGIN_ATTEMPT_ERROR'),
+            'error' => $error_code,
+        ];
+    }
+
+    /**
+     * L'AJAX de relecture cookie n'est pertinent que sur des pages HTML forum.
+     * On l'exclut explicitement pour PJ, avatars et assets non HTML.
+     */
+    private function is_ajax_expected_for_page_url($page_url)
+    {
+        $raw_url = trim((string)$page_url);
+        if ($raw_url === '' || $raw_url === '-') {
+            return false;
+        }
+        if ($this->is_download_file_url($raw_url)) {
+            return false;
+        }
+
+        $path = parse_url($raw_url, PHP_URL_PATH);
+        if (!is_string($path) || $path === '') {
+            $path = $raw_url;
+        }
+        $path = strtolower($path);
+
+        if ($path === '/' || $this->is_known_php_front_controller_path($path) || strpos($path, '/app.php/') === 0) {
+            return true;
+        }
+
+        $extension = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        if ($extension === '' || $extension === 'php') {
+            return true;
+        }
+
+        return false;
     }
 
     /**

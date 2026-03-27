@@ -57,14 +57,22 @@ Strict and observation signals depending on geo context:
 ### Unified page + download timeline
 
 - Operational definition: an observed **session** is not the native phpBB session, but a correlation unit built by the extension to follow one visitor or scraper. Two patterns must stand out immediately in the analysis: **one IP carrying several `b59_vid` cookies** and **one `b59_vid` cookie seen across several IPs**. In both cases, the extension treats this as a strong hint that the same machine, browser, or distributed scraper is involved.
+- ACP grouping now applies that IP/cookie correlation on the full 24h closure around displayed sessions, then sorts merged groups by their **latest observed activity**.
 - `download/file.php` hits are logged into the same tracked session as HTML pages through the phpBB hook `core.download_file_send_to_browser_before`.
 - The ACP timeline keeps chronological `page -> downloads` ordering and exposes referer, UA, IP, geolocation, and hostname on those entries as well.
 - The landing request is also rendered inside the chronology as row `#1`, then every sub-row shows `IP - elapsed time` so IP switches stay visible inside the same session.
 - Timeline duration is computed chronologically between successive rows; same-second bursts stay visible as `0s` instead of a plain `-`.
-- The last timeline column now shows a shortened hash of the signed `b59_vid` cookie together with its per-row match state (`OK`, `Mismatch`, `Missing`, `N/A`) without ever exposing the raw cookie value.
+- The last timeline column now shows a shortened hash of the signed `b59_vid` cookie together with its **server-side proof** for that row, without ever exposing the raw cookie value:
+  - `HTTP` = cookie actually seen in the HTTP request of that row
+  - `AJAX` = cookie replayed later via `/stats/px` for a real forum HTML page
+  - `Set` = cookie emitted on that response, but not yet proven back in HTTP
+  - `Mismatch`, `Missing`, `N/A` = negative or unavailable diagnostics
 - The session header now exposes `IP multi-cookie` and `Cookie multi-IP` badges, with the full 24h correlation details available in the diagnostic panel.
+- An ACP `Correlations` filter can isolate `Cookie multi-IP`, `IP multi-cookie`, or all correlations without disabling the existing `Humans / Legit bots / Detected bots` filters.
 - Downloads stay visible in **Sessions** but are excluded from HTML/JS-only behavior scoring (`page_count`, no-interaction style rules, previous page duration updates).
 - Sessions made only of direct downloads now show explicit `N/A` labels for AJAX, reactions CSS/JS, and Apache asset diagnostics instead of a misleading "missing" state.
+- Non-HTML URLs are now explicitly classified in the timeline (`Attachment`, `Attachment thumb`, `Media`, `app.php asset`, etc.). Missing direct paths are flagged as `Path not found` instead of being rendered like a normal HTML page.
+- Failed login rows now expose `Failed login`, the **submitted login**, and the **auth error code** captured server-side through `core.login_box_failed`. Passwords are never stored.
 - ACP session cards now use a visual frame by verdict: green (OK or legitimate phpBB bot), orange (suspicion), red (strict signal).
 
 ### Security bridge / Fail2ban
@@ -168,7 +176,7 @@ php ext/bastien59960/stats/bin/backfill_reactions_assets.php --apply --window=12
 
 Main tables:
 
-- `bastien59_stats`: sessions/pages, signals, AJAX, cookie hash, cursor metrics, diagnostics, attachment downloads, and per-session Apache counters (`apache_*_hits`, `apache_asset_scan_time`).
+- `bastien59_stats`: sessions/pages, signals, AJAX, cookie hash, `HTTP/AJAX/Set` cookie proof diagnostics, failed login attempts (`login_attempt_*`), cursor metrics, attachment downloads, and per-session Apache counters (`apache_*_hits`, `apache_asset_scan_time`).
 - `bastien59_stats_geo_cache`: geolocation cache + IPv4 subnet keys (`/24` by default, configurable in ACP).
 - `bastien59_stats_behavior_profile`: learned behavior profiles.
 - `bastien59_stats_behavior_seen`: dedup table for learned sessions.
@@ -177,6 +185,7 @@ Main tables:
 
 - No passwords, API tokens, or server secrets are versioned.
 - Visitor cookie is stored as hash in DB.
+- On failed logins, only the **submitted login** and the **auth error code** are stored; the password is never collected.
 - AJAX endpoint enforces method, token, session, and same-origin checks.
 - Country-sensitive FR/CO signals can be kept in observation mode when applicable.
 

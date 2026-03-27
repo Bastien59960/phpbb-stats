@@ -26,11 +26,13 @@ class listener implements EventSubscriberInterface
     protected $has_reactions_probe_columns = null;
     protected $has_visitor_cookie_column = null;
     protected $has_visitor_cookie_debug_columns = null;
+    protected $has_login_attempt_columns = null;
     protected $has_behavior_learning_tables = null;
     protected $has_reactions_learning_columns = null;
     protected $reactions_extension_active = null;
     protected $behavior_profile_cache = [];
     protected $visitor_cookie_preexisting = false;
+    protected $pending_login_attempt = null;
 
     const AJAX_LINK_NAME = 'b59_stats_px';
     const VISITOR_COOKIE_NAME = 'b59_vid';
@@ -136,6 +138,7 @@ class listener implements EventSubscriberInterface
         return [
             'core.page_header_after' => 'log_visit',
             'core.download_file_send_to_browser_before' => 'log_attachment_download',
+            'core.login_box_failed' => 'capture_failed_login_attempt',
             'core.page_footer'       => 'inject_resolution_script',
             'core.obtain_users_online_string_modify' => 'split_online_users',
         ];
@@ -163,6 +166,23 @@ class listener implements EventSubscriberInterface
             'allow_behavior_detection' => false,
             'is_download' => true,
         ]);
+    }
+
+    public function capture_failed_login_attempt($event)
+    {
+        if (empty($this->config['bastien59_stats_enabled'])) {
+            return;
+        }
+
+        $username = trim((string)($event['username'] ?? ''));
+        $result = (isset($event['result']) && is_array($event['result'])) ? $event['result'] : [];
+        $error_code = trim((string)($result['error_msg'] ?? ''));
+
+        $this->pending_login_attempt = [
+            'failed' => 1,
+            'username' => substr($username, 0, 254),
+            'error' => substr($error_code, 0, 63),
+        ];
     }
 
     private function log_request_entry(array $context = [])
@@ -209,6 +229,11 @@ class listener implements EventSubscriberInterface
         if ($page_title === '') {
             $page_name = trim((string)($context['page_name'] ?? ''));
             $page_title = $this->get_page_title_from_url($page_name, $page_url);
+        }
+
+        $login_attempt_meta = null;
+        if ($this->has_login_attempt_columns()) {
+            $login_attempt_meta = $this->consume_pending_login_attempt_for_page($page_url);
         }
 
         // Résolution via cookie
@@ -410,6 +435,11 @@ class listener implements EventSubscriberInterface
             $sql_ary['reactions_extension_expected'] = $this->is_reactions_extension_active() ? 1 : 0;
             $sql_ary['reactions_css_seen'] = 0;
             $sql_ary['reactions_js_seen'] = 0;
+        }
+        if ($this->has_login_attempt_columns()) {
+            $sql_ary['login_attempt_failed'] = !empty($login_attempt_meta['failed']) ? 1 : 0;
+            $sql_ary['login_attempt_username'] = substr((string)($login_attempt_meta['username'] ?? ''), 0, 254);
+            $sql_ary['login_attempt_error'] = substr((string)($login_attempt_meta['error'] ?? ''), 0, 63);
         }
 
         $sql = 'INSERT INTO ' . $this->table_prefix . 'bastien59_stats ' . $this->db->sql_build_array('INSERT', $sql_ary);
@@ -1897,6 +1927,75 @@ HTML;
 
         $this->has_visitor_cookie_debug_columns = !$has_error;
         return $this->has_visitor_cookie_debug_columns;
+    }
+
+    /**
+     * Détecte si les colonnes de tentative de login ratée (migration 1.17.0) existent.
+     */
+    private function has_login_attempt_columns()
+    {
+        if ($this->has_login_attempt_columns !== null) {
+            return $this->has_login_attempt_columns;
+        }
+
+        $sql = 'SELECT login_attempt_failed, login_attempt_username, login_attempt_error
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE 1 = 0';
+
+        $this->db->sql_return_on_error(true);
+        $result = $this->db->sql_query_limit($sql, 1);
+        $has_error = (bool)$this->db->get_sql_error_triggered();
+        if ($result !== false) {
+            $this->db->sql_freeresult($result);
+        }
+        $this->db->sql_return_on_error(false);
+
+        $this->has_login_attempt_columns = !$has_error;
+        return $this->has_login_attempt_columns;
+    }
+
+    /**
+     * Associe la tentative de login ratée au rendu de la page de connexion du même POST.
+     * On la consomme une seule fois pour éviter de polluer une requête suivante.
+     */
+    private function consume_pending_login_attempt_for_page($page_url)
+    {
+        if (!is_array($this->pending_login_attempt) || empty($this->pending_login_attempt['failed'])) {
+            return null;
+        }
+
+        if (!$this->is_login_page_url($page_url)) {
+            return null;
+        }
+
+        $payload = $this->pending_login_attempt;
+        $this->pending_login_attempt = null;
+
+        return $payload;
+    }
+
+    /**
+     * Détecte la page de connexion phpBB classique.
+     */
+    private function is_login_page_url($page_url)
+    {
+        $raw_url = trim((string)$page_url);
+        if ($raw_url === '') {
+            return false;
+        }
+
+        $path = parse_url($raw_url, PHP_URL_PATH);
+        if (!is_string($path) || $path === '') {
+            $path = $raw_url;
+        }
+
+        $path = strtolower($path);
+        if (substr($path, -7) !== 'ucp.php' && $path !== '/ucp.php') {
+            return false;
+        }
+
+        parse_str((string)parse_url($raw_url, PHP_URL_QUERY), $query);
+        return strtolower(trim((string)($query['mode'] ?? ''))) === 'login';
     }
 
     /**

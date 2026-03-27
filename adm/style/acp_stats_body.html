@@ -342,10 +342,21 @@ body.cursor-modal-open { overflow: hidden; }
     <!-- ONGLET 2 : SESSIONS -->
     <div id="tab_sessions" class="tab-content">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-            <div style="display:flex; gap:15px; align-items:center;">
+            <div style="display:flex; gap:15px; align-items:center; flex-wrap:wrap;">
+                <label style="font-weight:bold;">
+                    {L_STATS_FILTER_CORRELATION}
+                    <select id="filter-sessions-correlation" onchange="filterSessions()">
+                        <option value="all">{L_STATS_FILTER_CORRELATION_ALL}</option>
+                        <option value="any">{L_STATS_FILTER_CORRELATION_ANY}</option>
+                        <option value="cookie-multi-ip">{L_STATS_FILTER_CORRELATION_COOKIE_MULTI_IP}</option>
+                        <option value="ip-multi-cookie">{L_STATS_FILTER_CORRELATION_IP_MULTI_COOKIE}</option>
+                    </select>
+                </label>
+                <div id="sessions-type-filter-group" class="sessions-type-filter-group" style="display:flex; gap:15px; align-items:center;">
                 <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-humans" checked onchange="filterSessions()"> <span class="badge badge-human">{L_STATS_FILTER_HUMANS}</span></label>
                 <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-phpbb-bots" checked onchange="filterSessions()"> <span class="badge badge-bot-phpbb">{L_STATS_FILTER_PHPBB_BOTS}</span></label>
                 <label style="font-weight:bold; cursor:pointer;"><input type="checkbox" id="filter-sessions-bots" checked onchange="filterSessions()"> <span class="badge badge-bot">{L_STATS_FILTER_ROBOTS}</span></label>
+                </div>
             </div>
             <form method="post" action="{U_ACTION}" style="margin:0;">
                 <input type="submit" name="submit_clear" value="{L_ACP_BASTIEN59_STATS_CLEAR}" class="button2" onclick="return confirm('{L_ACP_BASTIEN59_STATS_CONFIRM}');" />
@@ -366,7 +377,7 @@ body.cursor-modal-open { overflow: hidden; }
             </thead>
             <tbody>
             <!-- BEGIN SESSIONS -->
-                <tr class="session-row session-{SESSIONS.BOT_CLASS} {SESSIONS.SESSION_FRAME_CLASS}" data-type="{SESSIONS.BOT_CLASS}" onclick="toggleDetails(this)" style="cursor: pointer;" title="Cliquez pour voir les détails de diagnostic">
+                <tr class="session-row session-{SESSIONS.BOT_CLASS} {SESSIONS.SESSION_FRAME_CLASS}" data-type="{SESSIONS.BOT_CLASS}" data-correlation="{SESSIONS.CORRELATION_TYPE}" onclick="toggleDetails(this)" style="cursor: pointer;" title="Cliquez pour voir les détails de diagnostic">
                     <td class="session-info">
                         <!-- IF SESSIONS.IS_BOT -->
                             <span class="badge badge-bot">{L_STATS_BADGE_BOT}</span>
@@ -466,7 +477,7 @@ body.cursor-modal-open { overflow: hidden; }
                         <span class="page-count">{SESSIONS.PAGES_COUNT_LABEL}</span>
                     </td>
                 </tr>
-                <tr class="session-details-row session-{SESSIONS.BOT_CLASS} {SESSIONS.SESSION_FRAME_CLASS}" data-type="{SESSIONS.BOT_CLASS}" style="display: none;">
+                <tr class="session-details-row session-{SESSIONS.BOT_CLASS} {SESSIONS.SESSION_FRAME_CLASS}" data-type="{SESSIONS.BOT_CLASS}" data-correlation="{SESSIONS.CORRELATION_TYPE}" style="display: none;">
                     <td colspan="5" style="padding: 10px 20px 10px 40px; background: #fdfdfd; font-size: 12px; line-height: 1.7; border-bottom: 1px solid #eee;">
                         <div style="max-width: 90%;">
                             <strong style="color: #105289;">Informations de Diagnostic</strong><br>
@@ -539,7 +550,7 @@ body.cursor-modal-open { overflow: hidden; }
                     </td>
                 </tr>
                 <!-- BEGIN LANDING_ROW -->
-                <tr class="page-row session-{SESSIONS.BOT_CLASS} {SESSIONS.LANDING_ROW.FRAME_CLASS}<!-- IF SESSIONS.LANDING_ROW.IS_LAST --> last-row<!-- ENDIF -->" data-type="{SESSIONS.BOT_CLASS}">
+                <tr class="page-row session-{SESSIONS.BOT_CLASS} {SESSIONS.LANDING_ROW.FRAME_CLASS}<!-- IF SESSIONS.LANDING_ROW.IS_LAST --> last-row<!-- ENDIF -->" data-type="{SESSIONS.BOT_CLASS}" data-correlation="{SESSIONS.LANDING_ROW.CORRELATION_TYPE}">
                     <td style="color:#888; font-size:11px;">
                         <!-- IF SESSIONS.LANDING_HAS_IP --><span class="row-side-meta row-side-ip ip-same">{SESSIONS.LANDING_IP}</span><span class="row-side-sep">-</span><!-- ENDIF --><span class="row-side-duration">{SESSIONS.LANDING_ROW.DURATION}</span>
                     </td>
@@ -547,8 +558,13 @@ body.cursor-modal-open { overflow: hidden; }
                         <span class="session-page-index">{SESSIONS.LANDING_PAGE_INDEX}</span>&#8627; {SESSIONS.LANDING_ROW.TIME}
                     </td>
                     <td>
-                        <strong>{SESSIONS.LANDING_PAGE}</strong><br>
+                        <strong>{SESSIONS.LANDING_PAGE}</strong>
+                        <!-- IF SESSIONS.LANDING_ROW.HAS_URL_KIND --> <span class="badge" style="background:#6c757d; color:#fff;">{SESSIONS.LANDING_ROW.URL_KIND_LABEL}</span><!-- ENDIF -->
+                        <!-- IF SESSIONS.LANDING_ROW.HAS_URL_STATUS --> <span class="badge {SESSIONS.LANDING_ROW.URL_STATUS_CLASS}">{SESSIONS.LANDING_ROW.URL_STATUS_LABEL}</span><!-- ENDIF -->
+                        <!-- IF SESSIONS.LANDING_ROW.HAS_LOGIN_ATTEMPT --> <span class="badge" style="background:#c0392b; color:#fff;">{SESSIONS.LANDING_ROW.LOGIN_ATTEMPT_LABEL}</span><!-- ENDIF --><br>
                         <a href="{SESSIONS.LANDING_URL}" target="_blank" style="font-size:11px; color:#888; word-break:break-all;">{SESSIONS.LANDING_URL}</a>
+                        <!-- IF SESSIONS.LANDING_ROW.HAS_LOGIN_ATTEMPT --><br><span style="font-size:11px; color:#b03a2e;">{SESSIONS.LANDING_ROW.LOGIN_ATTEMPT_USERNAME_LABEL}: <strong>{SESSIONS.LANDING_ROW.LOGIN_ATTEMPT_USERNAME}</strong></span><!-- ENDIF -->
+                        <!-- IF SESSIONS.LANDING_ROW.HAS_LOGIN_ATTEMPT_ERROR --><br><span style="font-size:11px; color:#8a6d3b;">{SESSIONS.LANDING_ROW.LOGIN_ATTEMPT_ERROR_LABEL}: {SESSIONS.LANDING_ROW.LOGIN_ATTEMPT_ERROR}</span><!-- ENDIF -->
                         <!-- IF SESSIONS.LANDING_HAS_REFERER --><br><span style="font-size:11px; color:#666;">Referer: {SESSIONS.LANDING_REFERER}</span><!-- ENDIF -->
                     </td>
                     <td></td>
@@ -559,7 +575,7 @@ body.cursor-modal-open { overflow: hidden; }
                 </tr>
                 <!-- END LANDING_ROW -->
                 <!-- BEGIN PAGES -->
-                <tr class="page-row session-{SESSIONS.BOT_CLASS} {SESSIONS.PAGES.FRAME_CLASS}<!-- IF SESSIONS.PAGES.IS_LAST --> last-row<!-- ENDIF -->" data-type="{SESSIONS.BOT_CLASS}">
+                <tr class="page-row session-{SESSIONS.BOT_CLASS} {SESSIONS.PAGES.FRAME_CLASS}<!-- IF SESSIONS.PAGES.IS_LAST --> last-row<!-- ENDIF -->" data-type="{SESSIONS.BOT_CLASS}" data-correlation="{SESSIONS.PAGES.CORRELATION_TYPE}">
                     <td style="color:#888; font-size:11px;">
                         <!-- IF SESSIONS.PAGES.HAS_IP --><span class="row-side-meta row-side-ip <!-- IF SESSIONS.PAGES.IP_CHANGED -->ip-changed<!-- ELSE -->ip-same<!-- ENDIF -->">{SESSIONS.PAGES.IP}</span><span class="row-side-sep">-</span><!-- ENDIF --><span class="row-side-duration">{SESSIONS.PAGES.DURATION}</span>
                     </td>
@@ -567,8 +583,13 @@ body.cursor-modal-open { overflow: hidden; }
                         <span class="session-page-index">{SESSIONS.PAGES.PAGE_INDEX}</span>&#8627; {SESSIONS.PAGES.TIME}
                     </td>
                     <td>
-                        <strong>{SESSIONS.PAGES.TITLE}</strong><br>
+                        <strong>{SESSIONS.PAGES.TITLE}</strong>
+                        <!-- IF SESSIONS.PAGES.HAS_URL_KIND --> <span class="badge" style="background:#6c757d; color:#fff;">{SESSIONS.PAGES.URL_KIND_LABEL}</span><!-- ENDIF -->
+                        <!-- IF SESSIONS.PAGES.HAS_URL_STATUS --> <span class="badge {SESSIONS.PAGES.URL_STATUS_CLASS}">{SESSIONS.PAGES.URL_STATUS_LABEL}</span><!-- ENDIF -->
+                        <!-- IF SESSIONS.PAGES.HAS_LOGIN_ATTEMPT --> <span class="badge" style="background:#c0392b; color:#fff;">{SESSIONS.PAGES.LOGIN_ATTEMPT_LABEL}</span><!-- ENDIF --><br>
                         <a href="{SESSIONS.PAGES.URL}" target="_blank" style="font-size:11px; color:#888; word-break:break-all;">{SESSIONS.PAGES.URL}</a>
+                        <!-- IF SESSIONS.PAGES.HAS_LOGIN_ATTEMPT --><br><span style="font-size:11px; color:#b03a2e;">{SESSIONS.PAGES.LOGIN_ATTEMPT_USERNAME_LABEL}: <strong>{SESSIONS.PAGES.LOGIN_ATTEMPT_USERNAME}</strong></span><!-- ENDIF -->
+                        <!-- IF SESSIONS.PAGES.HAS_LOGIN_ATTEMPT_ERROR --><br><span style="font-size:11px; color:#8a6d3b;">{SESSIONS.PAGES.LOGIN_ATTEMPT_ERROR_LABEL}: {SESSIONS.PAGES.LOGIN_ATTEMPT_ERROR}</span><!-- ENDIF -->
                         <!-- IF SESSIONS.PAGES.HAS_REFERER --><br><span style="font-size:11px; color:#666;">Referer: {SESSIONS.PAGES.REFERER}</span><!-- ENDIF -->
                     </td>
                     <td></td>
@@ -586,6 +607,12 @@ body.cursor-modal-open { overflow: hidden; }
                     </td>
                 </tr>
             <!-- END SESSIONS -->
+                <tr id="sessions-filter-empty-row" style="display:none;">
+                    <td colspan="5" style="text-align:center; padding: 32px; color: #999;">
+                        <strong>{L_STATS_NO_SESSION}</strong><br>
+                        {L_STATS_NO_SESSION_EXPLAIN}
+                    </td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -1105,14 +1132,19 @@ function toggleDetails(row) {
     var nextRow = row.nextElementSibling;
     if (nextRow && nextRow.classList.contains('session-details-row')) {
         // Hide all other open details rows
-        var allDetails = document.querySelectorAll('.session-details-row');
-        for (var i = 0; i < allDetails.length; i++) {
-            if (allDetails[i] !== nextRow) {
-                allDetails[i].style.display = 'none';
+        var allSessionRows = document.querySelectorAll('#sessions-table tbody tr.session-row');
+        for (var i = 0; i < allSessionRows.length; i++) {
+            var currentSessionRow = allSessionRows[i];
+            var currentDetailsRow = currentSessionRow.nextElementSibling;
+            if (currentDetailsRow && currentDetailsRow.classList.contains('session-details-row') && currentDetailsRow !== nextRow) {
+                currentDetailsRow.style.display = 'none';
+                currentSessionRow.setAttribute('data-details-open', '0');
             }
         }
         // Toggle the clicked one
-        nextRow.style.display = (nextRow.style.display === 'none' || nextRow.style.display === '') ? 'table-row' : 'none';
+        var shouldOpen = (nextRow.style.display === 'none' || nextRow.style.display === '');
+        nextRow.style.display = shouldOpen ? 'table-row' : 'none';
+        row.setAttribute('data-details-open', shouldOpen ? '1' : '0');
     }
 }
 
@@ -1123,21 +1155,62 @@ var baseAction = '{U_ACTION}'.replace(/&amp;/g, '&');
 
 // === FILTRE SESSIONS (cases a cocher humains / bots legitimes / bots detectes) ===
 function filterSessions() {
+    var correlationMode = document.getElementById('filter-sessions-correlation').value;
     var showHumans = document.getElementById('filter-sessions-humans').checked;
     var showPhpbbBots = document.getElementById('filter-sessions-phpbb-bots').checked;
     var showBots = document.getElementById('filter-sessions-bots').checked;
-    var rows = document.querySelectorAll('#sessions-table tbody tr[data-type]');
-    for (var i = 0; i < rows.length; i++) {
-        var type = rows[i].getAttribute('data-type');
-        if (type === 'human') {
-            rows[i].style.display = showHumans ? '' : 'none';
-        } else if (type === 'phpbb-bot') {
-            rows[i].style.display = showPhpbbBots ? '' : 'none';
-        } else if (type === 'bot') {
-            rows[i].style.display = showBots ? '' : 'none';
+    var sessionRows = document.querySelectorAll('#sessions-table tbody tr.session-row[data-type]');
+    var visibleSessionCount = 0;
+    for (var i = 0; i < sessionRows.length; i++) {
+        var sessionRow = sessionRows[i];
+        var type = sessionRow.getAttribute('data-type');
+        var correlationType = sessionRow.getAttribute('data-correlation') || 'none';
+        var showRow = true;
+
+        if (correlationMode !== 'all') {
+            if (correlationMode === 'any') {
+                showRow = (correlationType !== 'none');
+            } else if (correlationMode === 'cookie-multi-ip') {
+                showRow = (correlationType === 'cookie-multi-ip' || correlationType === 'both');
+            } else if (correlationMode === 'ip-multi-cookie') {
+                showRow = (correlationType === 'ip-multi-cookie' || correlationType === 'both');
+            }
+        }
+        if (showRow && type === 'human') {
+            showRow = showHumans;
+        } else if (showRow && type === 'phpbb-bot') {
+            showRow = showPhpbbBots;
+        } else if (showRow && type === 'bot') {
+            showRow = showBots;
+        }
+
+        sessionRow.style.display = showRow ? '' : 'none';
+        if (showRow) {
+            visibleSessionCount++;
+        }
+
+        var siblingRow = sessionRow.nextElementSibling;
+        while (siblingRow && !siblingRow.classList.contains('session-row')) {
+            if (showRow) {
+                if (siblingRow.classList.contains('session-details-row')) {
+                    siblingRow.style.display = (sessionRow.getAttribute('data-details-open') === '1') ? 'table-row' : 'none';
+                } else {
+                    siblingRow.style.display = '';
+                }
+            } else {
+                siblingRow.style.display = 'none';
+            }
+            siblingRow = siblingRow.nextElementSibling;
         }
     }
+
+    var emptyRow = document.getElementById('sessions-filter-empty-row');
+    if (emptyRow) {
+        emptyRow.style.display = (visibleSessionCount === 0) ? 'table-row' : 'none';
+    }
 }
+
+filterSessions();
 
 // === FILTRES ===
 function applyFilters() {
