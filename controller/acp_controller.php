@@ -395,6 +395,22 @@ class acp_controller
             }
         }
         $cookie_overview = $this->get_visitor_cookie_cross_ip_overview(array_values(array_unique(array_values($session_cookie_hashes))), 86400);
+        $all_session_ips = [];
+        foreach ($sessions as $row) {
+            $ip = trim((string)($row['user_ip'] ?? ''));
+            if ($ip !== '') {
+                $all_session_ips[$ip] = true;
+            }
+        }
+        foreach ($pages_by_session as $rows) {
+            foreach ($rows as $page_row) {
+                $ip = trim((string)($page_row['user_ip'] ?? ''));
+                if ($ip !== '') {
+                    $all_session_ips[$ip] = true;
+                }
+            }
+        }
+        $ip_cookie_overview = $this->get_ip_multi_cookie_overview(array_keys($all_session_ips), 86400);
 
         // Requête 3 : Villes depuis le cache de géolocalisation (lookup par sous-réseau)
         $city_by_subnet = [];
@@ -689,6 +705,17 @@ class acp_controller
                 $visitor_cookie_hash = $session_cookie_hashes[(string)$session_key];
             }
 
+            $session_cookie_hash_set = [];
+            if ($this->is_valid_visitor_cookie_hash($visitor_cookie_hash)) {
+                $session_cookie_hash_set[$visitor_cookie_hash] = true;
+            }
+            foreach ($pages as $page_row) {
+                $hash = strtolower(trim((string)($page_row['visitor_cookie_hash'] ?? '')));
+                if ($this->is_valid_visitor_cookie_hash($hash)) {
+                    $session_cookie_hash_set[$hash] = true;
+                }
+            }
+
             $res_cookie_px = $this->format_resolution_px($res_cookie);
             $res_ajax_px = $this->format_resolution_px($res_ajax);
             $res_display = ($res_ajax !== '') ? $res_ajax_px : (($res_cookie !== '') ? $res_cookie_px : '-');
@@ -804,6 +831,44 @@ class acp_controller
             } elseif (!$visitor_cookie_present) {
                 $cookie_cross_label = '-';
                 $cookie_cross_class = 'diag-cookie-na';
+            }
+
+            $ip_multi_cookie_label = $this->user->lang('STATS_SESSION_IP_MULTICOOKIE_NONE');
+            $ip_multi_cookie_class = 'diag-cookie-ok';
+            $ip_multi_cookie_details = '';
+            $ip_multi_cookie_count = 0;
+            if (!$has_cookie_column) {
+                $ip_multi_cookie_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_UNAVAILABLE');
+                $ip_multi_cookie_class = 'diag-cookie-na';
+            } else {
+                $cookie_items = [];
+                foreach (array_keys($session_ips) as $session_ip) {
+                    if (!isset($ip_cookie_overview[$session_ip])) {
+                        continue;
+                    }
+                    foreach ($ip_cookie_overview[$session_ip]['hashes'] as $seen_hash => $seen_time) {
+                        if (isset($session_cookie_hash_set[$seen_hash])) {
+                            continue;
+                        }
+                        $item_key = $session_ip . '|' . $seen_hash;
+                        if (isset($cookie_items[$item_key])) {
+                            continue;
+                        }
+                        $cookie_items[$item_key] = $this->format_cookie_hash_short($seen_hash)
+                            . ' via '
+                            . $session_ip
+                            . ' ('
+                            . $this->user->format_date((int)$seen_time, 'd M H:i')
+                            . ')';
+                    }
+                }
+                $ip_multi_cookie_count = count($cookie_items);
+                if ($ip_multi_cookie_count > 0) {
+                    $preview = implode(', ', array_slice(array_values($cookie_items), 0, 3));
+                    $ip_multi_cookie_details = implode(', ', array_values($cookie_items));
+                    $ip_multi_cookie_label = sprintf($this->user->lang('STATS_SESSION_IP_MULTICOOKIE_FOUND'), $ip_multi_cookie_count, $preview);
+                    $ip_multi_cookie_class = ($ip_multi_cookie_count >= 2) ? 'diag-cookie-bad' : 'diag-cookie-mid';
+                }
             }
 
             $cookie_risk_label = $this->user->lang('STATS_VISITOR_COOKIE_RISK_LOW');
@@ -1065,6 +1130,13 @@ class acp_controller
                 'VISITOR_COOKIE_CROSSIP_LABEL' => htmlspecialchars($cookie_cross_label, ENT_COMPAT, 'UTF-8'),
                 'VISITOR_COOKIE_CROSSIP_CLASS' => $cookie_cross_class,
                 'VISITOR_COOKIE_CROSSIP_IPS' => htmlspecialchars($cookie_other_ips, ENT_COMPAT, 'UTF-8'),
+                'HAS_COOKIE_MULTI_IP' => ($cookie_other_ips_count > 0) ? 1 : 0,
+                'COOKIE_MULTI_IP_TITLE' => htmlspecialchars($cookie_other_ips !== '' ? $cookie_other_ips : $cookie_cross_label, ENT_COMPAT, 'UTF-8'),
+                'IP_MULTI_COOKIE_LABEL' => htmlspecialchars($ip_multi_cookie_label, ENT_COMPAT, 'UTF-8'),
+                'IP_MULTI_COOKIE_CLASS' => $ip_multi_cookie_class,
+                'IP_MULTI_COOKIE_DETAILS' => htmlspecialchars($ip_multi_cookie_details, ENT_COMPAT, 'UTF-8'),
+                'HAS_IP_MULTI_COOKIE' => ($ip_multi_cookie_count > 0) ? 1 : 0,
+                'IP_MULTI_COOKIE_TITLE' => htmlspecialchars($ip_multi_cookie_details !== '' ? $ip_multi_cookie_details : $ip_multi_cookie_label, ENT_COMPAT, 'UTF-8'),
                 'VISITOR_COOKIE_RISK_LABEL' => htmlspecialchars($cookie_risk_label, ENT_COMPAT, 'UTF-8'),
                 'VISITOR_COOKIE_RISK_CLASS' => $cookie_risk_class,
                 'VISITOR_COOKIE_FAIL2BAN_LABEL' => htmlspecialchars($cookie_fail2ban_label, ENT_COMPAT, 'UTF-8'),
@@ -1730,6 +1802,58 @@ class acp_controller
             }
             if (!isset($overview[$hash]['ips'][$ip])) {
                 $overview[$hash]['ips'][$ip] = (int)($row['last_seen'] ?? 0);
+            }
+        }
+        $this->db->sql_freeresult($result);
+
+        return $overview;
+    }
+
+    /**
+     * Construit un aperçu des cookies visiteurs vus sur une même IP.
+     * @return array<string,array{hashes:array<string,int>}>
+     */
+    private function get_ip_multi_cookie_overview(array $ips, $window_sec = 86400)
+    {
+        $overview = [];
+        if (!$this->has_visitor_cookie_column()) {
+            return $overview;
+        }
+
+        $valid_ips = [];
+        foreach ($ips as $ip) {
+            $ip = trim((string)$ip);
+            if ($ip !== '') {
+                $valid_ips[$ip] = true;
+            }
+        }
+        if (empty($valid_ips)) {
+            return $overview;
+        }
+
+        $escaped_ips = [];
+        foreach (array_keys($valid_ips) as $ip) {
+            $escaped_ips[] = '\'' . $this->db->sql_escape($ip) . '\'';
+            $overview[$ip] = ['hashes' => []];
+        }
+
+        $cutoff = time() - max(3600, (int)$window_sec);
+        $sql = 'SELECT user_ip, visitor_cookie_hash, MAX(visit_time) AS last_seen
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE user_ip IN (' . implode(',', $escaped_ips) . ')
+                AND visitor_cookie_hash <> \'\'
+                AND visit_time >= ' . (int)$cutoff . '
+                GROUP BY user_ip, visitor_cookie_hash
+                ORDER BY last_seen DESC';
+        $result = $this->db->sql_query($sql);
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $ip = trim((string)($row['user_ip'] ?? ''));
+            $hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
+            if (!isset($overview[$ip]) || !$this->is_valid_visitor_cookie_hash($hash)) {
+                continue;
+            }
+            if (!isset($overview[$ip]['hashes'][$hash])) {
+                $overview[$ip]['hashes'][$hash] = (int)($row['last_seen'] ?? 0);
             }
         }
         $this->db->sql_freeresult($result);

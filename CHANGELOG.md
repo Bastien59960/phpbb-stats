@@ -7,10 +7,12 @@ Le format est basé sur [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/)
 ## [Unreleased]
 
 ### Changed
+- La documentation précise désormais la notion de "session observée": même IP avec plusieurs `b59_vid` et même `b59_vid` vu sur plusieurs IP sont deux corrélations fortes à faire ressortir dans l'analyse
 - Le cookie visiteur signé `b59_vid` devient l'ancre principale de session quand il est présent: les pages forum et téléchargements restent regroupés dans la même session même si l'IP change avant le timeout
 - L'ACP **Sessions** affiche désormais une vraie ligne chronologique `#1` pour la page d'entrée, puis chaque ligne de timeline au format `IP - temps écoulé` pour rendre les bascules d'IP immédiatement lisibles
 - Le temps de timeline est calculé entre les lignes successives et affiche `0s` sur les rafales dans la même seconde au lieu d'un simple `-`
 - La dernière colonne de timeline affiche désormais l'empreinte tronquée du cookie signé `b59_vid` et son état de correspondance par ligne, sans exposer la valeur brute du cookie
+- L'ACP **Sessions** fait ressortir visuellement les corrélations `IP multi-cookie` et `Cookie multi-IP` via badges d'en-tête et détail 24h dans le diagnostic
 - Les sessions composées uniquement de téléchargements directs affichent des états `N/A` explicites pour AJAX, assets réactions et assets Apache, au lieu d'un diagnostic trompeur "absent"
 - Les cartes de session ACP sont maintenant encadrées visuellement selon le verdict: vert (OK / bot phpBB légitime), orange (suspicion), rouge (signal strict)
 

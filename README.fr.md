@@ -57,11 +57,13 @@ Signaux stricts ou d'observation selon contexte géographique:
 
 ### Timeline unifiée page + téléchargements
 
+- Définition d'exploitation: une **session observée** n'est pas la session phpBB native, mais une unité de corrélation produite par l'extension pour suivre un visiteur ou un scraper. Deux motifs doivent ressortir immédiatement dans l'analyse: **une même IP avec plusieurs cookies `b59_vid`** et **un même cookie `b59_vid` vu sur plusieurs IP**. Dans les deux cas, on considère qu'il peut s'agir de la même machine, du même navigateur ou du même scraper distribué.
 - Les hits `download/file.php` sont enregistrés dans la même session que les pages HTML via le hook phpBB `core.download_file_send_to_browser_before`.
 - La timeline ACP conserve l'ordre chronologique `page -> téléchargements`, avec referer, UA, IP, géoloc et hostname sur les lignes concernées.
 - La ligne d'entrée de session est aussi rendue dans la chronologie comme entrée `#1`, puis chaque sous-ligne affiche `IP - temps écoulé` pour rendre visibles les bascules d'IP dans la même session.
 - Le temps de timeline est calculé chronologiquement entre deux lignes successives; les rafales dans la même seconde restent visibles comme `0s` au lieu d'un simple `-`.
 - La dernière colonne de timeline affiche maintenant l'empreinte tronquée du cookie signé `b59_vid` et son état de correspondance (`OK`, `Mismatch`, `Absent`, `N/A`) par ligne, sans jamais exposer la valeur brute du cookie.
+- L'en-tête de session affiche désormais des badges visuels `IP multi-cookie` et `Cookie multi-IP`, avec le détail complet sur 24h dans le panneau de diagnostic.
 - Les téléchargements restent visibles dans **Sessions**, mais ils sont exclus des heuristiques purement "page HTML + JS" (`page_count`, signaux absence d'interaction, durée de la page précédente).
 - Les sessions composées uniquement de téléchargements directs affichent désormais des libellés `N/A` explicites pour AJAX, CSS/JS réactions et assets Apache, au lieu d'un faux état "absent".
 - Les cartes de session ACP sont visuellement encadrées selon le verdict: vert (OK ou bot phpBB légitime), orange (suspicion), rouge (signal strict).
