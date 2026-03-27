@@ -60,6 +60,9 @@
 .sessions-table .page-row .row-side-ip.ip-same { color: #666; }
 .sessions-table .page-row .row-side-sep { color: #999; padding: 0 4px; }
 .sessions-table .page-row .row-side-duration { color: #888; }
+.sessions-table .page-row .row-cookie-cell { font-size: 11px; line-height: 1.35; color: #666; }
+.sessions-table .page-row .row-cookie-hash { display: block; font-family: monospace; color: #4b5563; }
+.sessions-table .page-row .row-cookie-status { display: block; margin-top: 2px; font-weight: bold; }
 .sessions-table .session-row.session-state-ok td { background: #f4fbf6; border-top: 3px solid #27ae60; }
 .sessions-table .session-row.session-state-warning td { background: #fff8f1; border-top: 3px solid #e67e22; }
 .sessions-table .session-row.session-state-danger td { background: #fff3f2; border-top: 3px solid #c0392b; }
@@ -531,10 +534,15 @@ body.cursor-modal-open { overflow: hidden; }
                     <td style="text-align:right; color:#888;">
                         <span class="session-page-index">{SESSIONS.LANDING_PAGE_INDEX}</span>&#8627; {SESSIONS.LANDING_ROW.TIME}
                     </td>
-                    <td colspan="3">
+                    <td>
                         <strong>{SESSIONS.LANDING_PAGE}</strong><br>
                         <a href="{SESSIONS.LANDING_URL}" target="_blank" style="font-size:11px; color:#888; word-break:break-all;">{SESSIONS.LANDING_URL}</a>
                         <!-- IF SESSIONS.LANDING_HAS_REFERER --><br><span style="font-size:11px; color:#666;">Referer: {SESSIONS.LANDING_REFERER}</span><!-- ENDIF -->
+                    </td>
+                    <td></td>
+                    <td class="row-cookie-cell">
+                        <span class="row-cookie-hash">{SESSIONS.LANDING_ROW.COOKIE_HASH}</span>
+                        <span class="row-cookie-status {SESSIONS.LANDING_ROW.COOKIE_MATCH_CLASS}">{SESSIONS.LANDING_ROW.COOKIE_MATCH_LABEL}</span>
                     </td>
                 </tr>
                 <!-- END LANDING_ROW -->
@@ -546,10 +554,15 @@ body.cursor-modal-open { overflow: hidden; }
                     <td style="text-align:right; color:#888;">
                         <span class="session-page-index">{SESSIONS.PAGES.PAGE_INDEX}</span>&#8627; {SESSIONS.PAGES.TIME}
                     </td>
-                    <td colspan="3">
+                    <td>
                         <strong>{SESSIONS.PAGES.TITLE}</strong><br>
                         <a href="{SESSIONS.PAGES.URL}" target="_blank" style="font-size:11px; color:#888; word-break:break-all;">{SESSIONS.PAGES.URL}</a>
                         <!-- IF SESSIONS.PAGES.HAS_REFERER --><br><span style="font-size:11px; color:#666;">Referer: {SESSIONS.PAGES.REFERER}</span><!-- ENDIF -->
+                    </td>
+                    <td></td>
+                    <td class="row-cookie-cell">
+                        <span class="row-cookie-hash">{SESSIONS.PAGES.COOKIE_HASH}</span>
+                        <span class="row-cookie-status {SESSIONS.PAGES.COOKIE_MATCH_CLASS}">{SESSIONS.PAGES.COOKIE_MATCH_LABEL}</span>
                     </td>
                 </tr>
                 <!-- END PAGES -->

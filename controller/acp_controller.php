@@ -728,6 +728,7 @@ class acp_controller
                 ? $this->user->lang('STATS_VISITOR_COOKIE_STATUS_SET')
                 : $this->user->lang('STATS_VISITOR_COOKIE_STATUS_MISSING');
             $cookie_status_class = $visitor_cookie_present ? 'diag-cookie-ok' : 'diag-cookie-bad';
+            $session_cookie_hash_short = $this->format_cookie_hash_short($visitor_cookie_hash);
 
             if (!$has_cookie_debug_columns) {
                 $cookie_preexisting_label = $this->user->lang('STATS_VISITOR_COOKIE_PREEXISTING_UNKNOWN');
@@ -1181,6 +1182,19 @@ class acp_controller
                 'IS_LAST' => ($visible_page_count === 0) ? 1 : 0,
                 'TIME' => $this->user->format_date((int)($row['visit_time'] ?? 0), 'H:i:s'),
                 'DURATION' => $landing_duration_label,
+                'COOKIE_HASH' => htmlspecialchars($session_cookie_hash_short, ENT_COMPAT, 'UTF-8'),
+                'COOKIE_MATCH_LABEL' => htmlspecialchars(
+                    $has_cookie_column
+                        ? ($visitor_cookie_present
+                            ? $this->user->lang('STATS_SESSION_COOKIE_MATCH_OK')
+                            : $this->user->lang('STATS_SESSION_COOKIE_MATCH_ABSENT'))
+                        : $this->user->lang('STATS_SESSION_COOKIE_MATCH_UNAVAILABLE'),
+                    ENT_COMPAT,
+                    'UTF-8'
+                ),
+                'COOKIE_MATCH_CLASS' => !$has_cookie_column
+                    ? 'diag-cookie-na'
+                    : ($visitor_cookie_present ? 'diag-cookie-ok' : 'diag-cookie-na'),
             ]);
             foreach ($visible_pages as $visible_index => $page) {
                 $page_title = trim((string)($page['page_title'] ?? ''));
@@ -1194,6 +1208,24 @@ class acp_controller
                 $page_referer = trim((string)($page['referer'] ?? ''));
                 $page_ip = trim((string)($page['user_ip'] ?? ''));
                 $show_page_ip = ($page_ip !== '');
+                $page_cookie_hash = strtolower(trim((string)($page['visitor_cookie_hash'] ?? '')));
+                $page_cookie_valid = $this->is_valid_visitor_cookie_hash($page_cookie_hash);
+                if (!$has_cookie_column) {
+                    $page_cookie_match_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_UNAVAILABLE');
+                    $page_cookie_match_class = 'diag-cookie-na';
+                } elseif (!$page_cookie_valid) {
+                    $page_cookie_match_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_ABSENT');
+                    $page_cookie_match_class = 'diag-cookie-na';
+                } elseif ($visitor_cookie_present && hash_equals($visitor_cookie_hash, $page_cookie_hash)) {
+                    $page_cookie_match_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_OK');
+                    $page_cookie_match_class = 'diag-cookie-ok';
+                } elseif ($visitor_cookie_present) {
+                    $page_cookie_match_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_MISMATCH');
+                    $page_cookie_match_class = 'diag-cookie-bad';
+                } else {
+                    $page_cookie_match_label = $this->user->lang('STATS_SESSION_COOKIE_MATCH_PRESENT');
+                    $page_cookie_match_class = 'diag-cookie-mid';
+                }
                 $this->template->assign_block_vars('SESSIONS.PAGES', [
                     'PAGE_INDEX' => $page_index,
                     'TITLE'     => htmlspecialchars($page_title, ENT_COMPAT, 'UTF-8'),
@@ -1206,6 +1238,9 @@ class acp_controller
                     'HAS_IP'    => $show_page_ip ? 1 : 0,
                     'IP'        => htmlspecialchars($page_ip, ENT_COMPAT, 'UTF-8'),
                     'IP_CHANGED'=> ($page_ip !== '' && $page_ip !== $landing_ip) ? 1 : 0,
+                    'COOKIE_HASH' => htmlspecialchars($this->format_cookie_hash_short($page_cookie_hash), ENT_COMPAT, 'UTF-8'),
+                    'COOKIE_MATCH_LABEL' => htmlspecialchars($page_cookie_match_label, ENT_COMPAT, 'UTF-8'),
+                    'COOKIE_MATCH_CLASS' => $page_cookie_match_class,
                     'HAS_REFERER' => ($page_referer !== '') ? 1 : 0,
                     'REFERER'   => ($page_referer !== '') ? $this->format_referer($page_referer) : '',
                 ]);
@@ -1635,6 +1670,20 @@ class acp_controller
     private function is_valid_visitor_cookie_hash($hash)
     {
         return (bool)preg_match('/^[a-f0-9]{64}$/', strtolower(trim((string)$hash)));
+    }
+
+    /**
+     * Affiche une empreinte courte du cookie visiteur signé.
+     * La valeur en clair n'est jamais stockée en base, seul le hash tronqué est montrable.
+     */
+    private function format_cookie_hash_short($hash)
+    {
+        $hash = strtolower(trim((string)$hash));
+        if (!$this->is_valid_visitor_cookie_hash($hash)) {
+            return '-';
+        }
+
+        return substr($hash, 0, 12) . '...';
     }
 
     /**

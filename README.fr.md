@@ -61,6 +61,7 @@ Signaux stricts ou d'observation selon contexte géographique:
 - La timeline ACP conserve l'ordre chronologique `page -> téléchargements`, avec referer, UA, IP, géoloc et hostname sur les lignes concernées.
 - La ligne d'entrée de session est aussi rendue dans la chronologie comme entrée `#1`, puis chaque sous-ligne affiche `IP - temps écoulé` pour rendre visibles les bascules d'IP dans la même session.
 - Le temps de timeline est calculé chronologiquement entre deux lignes successives; les rafales dans la même seconde restent visibles comme `0s` au lieu d'un simple `-`.
+- La dernière colonne de timeline affiche maintenant l'empreinte tronquée du cookie signé `b59_vid` et son état de correspondance (`OK`, `Mismatch`, `Absent`, `N/A`) par ligne, sans jamais exposer la valeur brute du cookie.
 - Les téléchargements restent visibles dans **Sessions**, mais ils sont exclus des heuristiques purement "page HTML + JS" (`page_count`, signaux absence d'interaction, durée de la page précédente).
 - Les sessions composées uniquement de téléchargements directs affichent désormais des libellés `N/A` explicites pour AJAX, CSS/JS réactions et assets Apache, au lieu d'un faux état "absent".
 - Les cartes de session ACP sont visuellement encadrées selon le verdict: vert (OK ou bot phpBB légitime), orange (suspicion), rouge (signal strict).
