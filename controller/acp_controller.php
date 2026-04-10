@@ -65,12 +65,13 @@ class acp_controller
         $show_bots = $this->request->variable('show_bots', 1);
         $bot_filter = ($show_bots) ? '' : ' AND is_bot = 0';
 
-        // Limite d'affichage (500 par défaut)
+        // Limite d'affichage (100 par défaut)
         // L'ACP sessions rend beaucoup de sous-lignes et de diagnostics par session.
-        // Au-delà de 1000 sessions, Twig finit par dépasser la mémoire PHP.
-        $display_limit = $this->request->variable('limit', 500);
+        // Avec 29 000 sessions/24h et un template complexe, 500 sessions épuisait les 128 Mo PHP.
+        // Au-delà de 300 sessions, Twig dépasse la mémoire PHP en production.
+        $display_limit = $this->request->variable('limit', 100);
         if ($display_limit < 10) $display_limit = 10;
-        if ($display_limit > 1000) $display_limit = 1000;
+        if ($display_limit > 300) $display_limit = 300;
 
         // ================================================================
         // 1. STATISTIQUES GLOBALES
@@ -1008,6 +1009,18 @@ class acp_controller
 
             $has_cookie_multi_ip = ($cookie_other_ips_count > 0 || $internal_cookie_multi_ip_count > 0);
             $has_ip_multi_cookie = ($ip_multi_cookie_count > 0 || $internal_ip_multi_cookie_count > 0);
+            $correlated_ips = $session_ips;
+            if ($visitor_cookie_present && isset($cookie_overview[$visitor_cookie_hash])) {
+                foreach ($cookie_overview[$visitor_cookie_hash]['ips'] as $seen_ip => $seen_time) {
+                    $seen_ip = trim((string)$seen_ip);
+                    if ($seen_ip === '') {
+                        continue;
+                    }
+                    $correlated_ips[$seen_ip] = true;
+                }
+            }
+            $correlated_ip_list = implode(', ', array_keys($correlated_ips));
+            $has_correlated_ips = (count($correlated_ips) > 1);
             $correlation_type = 'none';
             if ($has_cookie_multi_ip && $has_ip_multi_cookie) {
                 $correlation_type = 'both';
@@ -1015,6 +1028,14 @@ class acp_controller
                 $correlation_type = 'cookie-multi-ip';
             } elseif ($has_ip_multi_cookie) {
                 $correlation_type = 'ip-multi-cookie';
+            }
+
+            $session_media_counts = [];
+            if (
+                $this->session_probability_model
+                && method_exists($this->session_probability_model, 'compute_media_expectation_for_pages')
+            ) {
+                $session_media_counts = (array)$this->session_probability_model->compute_media_expectation_for_pages($pages);
             }
 
             $bot_probability_assessment = (!$is_phpbb_bot && $this->session_probability_model)
@@ -1025,7 +1046,8 @@ class acp_controller
                 : null;
             $bot_probability = $this->build_session_probability_view(
                 $bot_probability_assessment,
-                $is_phpbb_bot
+                $is_phpbb_bot,
+                $session_media_counts
             );
 
             if (!$is_phpbb_bot && is_array($bot_probability_assessment)) {
@@ -1348,6 +1370,8 @@ class acp_controller
                 'VISITOR_COOKIE_CROSSIP_IPS' => htmlspecialchars($cookie_other_ips, ENT_COMPAT, 'UTF-8'),
                 'HAS_COOKIE_MULTI_IP' => $has_cookie_multi_ip ? 1 : 0,
                 'COOKIE_MULTI_IP_TITLE' => htmlspecialchars($cookie_other_ips !== '' ? $cookie_other_ips : $cookie_cross_label, ENT_COMPAT, 'UTF-8'),
+                'HAS_CORRELATED_IPS' => $has_correlated_ips ? 1 : 0,
+                'CORRELATED_IP_LIST' => htmlspecialchars($correlated_ip_list, ENT_COMPAT, 'UTF-8'),
                 'IP_MULTI_COOKIE_LABEL' => htmlspecialchars($ip_multi_cookie_label, ENT_COMPAT, 'UTF-8'),
                 'IP_MULTI_COOKIE_CLASS' => $ip_multi_cookie_class,
                 'IP_MULTI_COOKIE_DETAILS' => htmlspecialchars($ip_multi_cookie_details, ENT_COMPAT, 'UTF-8'),
@@ -1441,22 +1465,6 @@ class acp_controller
                 ]);
             }
 
-            // Assigner les pages de la session (à partir de la 2ème)
-            // Afficher 50 pages max dans la liste de la session (la page de landing est déjà affichée).
-            // Au-delà, seul le compteur total (PAGE_COUNT) est pertinent.
-            $visible_pages = [];
-            $first = true;
-            foreach ($pages as $page) {
-                if ($first) {
-                    $first = false;
-                    continue; // Skip first page (already shown as landing)
-                }
-                if (count($visible_pages) >= 50) {
-                    break;
-                }
-                $visible_pages[] = $page;
-            }
-
             $timeline_duration_labels = [];
             $page_count_total = count($pages);
             $timeline_origin_visit_time = (int)($pages[0]['visit_time'] ?? 0);
@@ -1480,6 +1488,44 @@ class acp_controller
                     (int)($landing_page_row['duration'] ?? ($row['duration'] ?? 0)),
                     ($page_count_total === 1)
                 );
+
+            $has_login_attempt_rows = false;
+            if ($has_login_attempt_columns) {
+                foreach ($pages as $candidate_page) {
+                    if ((int)($candidate_page['login_attempt_failed'] ?? 0) === 1) {
+                        $has_login_attempt_rows = true;
+                        break;
+                    }
+                }
+            }
+
+            // Dans l'onglet sessions, on affiche une timeline de requêtes.
+            // Pour les humains et les sessions corrélées, il faut montrer la timeline complète,
+            // sinon les bascules IPv4/IPv6 et les pages de login disparaissent du rendu ACP.
+            $visible_page_limit = 50;
+            if (!(int)($row['is_bot'] ?? 0) || $session_has_multi_ip || $has_cookie_multi_ip || $has_ip_multi_cookie || $has_login_attempt_rows) {
+                $visible_page_limit = 0;
+            }
+
+            $visible_pages = [];
+            $landing_row_skipped = false;
+            foreach ($pages as $page) {
+                $current_log_id = (int)($page['log_id'] ?? 0);
+                if (!$landing_row_skipped) {
+                    if ($landing_log_id > 0 && $current_log_id === $landing_log_id) {
+                        $landing_row_skipped = true;
+                        continue;
+                    }
+                    if ($landing_log_id <= 0) {
+                        $landing_row_skipped = true;
+                        continue;
+                    }
+                }
+                if ($visible_page_limit > 0 && count($visible_pages) >= $visible_page_limit) {
+                    break;
+                }
+                $visible_pages[] = $page;
+            }
 
             $page_index = 2;
             $visible_page_count = count($visible_pages);
@@ -2927,7 +2973,7 @@ class acp_controller
     /**
      * Transforme une évaluation probabiliste brute en vue ACP prête à afficher.
      */
-    private function build_session_probability_view($assessment, $is_phpbb_bot = false)
+    private function build_session_probability_view($assessment, $is_phpbb_bot = false, array $session_media_counts = [])
     {
         if ($is_phpbb_bot) {
             return [
@@ -2982,7 +3028,7 @@ class acp_controller
 
         $factor_rows = [];
         foreach ((array)($assessment['factors'] ?? []) as $factor) {
-            $factor_rows[] = $this->build_session_probability_factor_view($factor);
+            $factor_rows[] = $this->build_session_probability_factor_view($factor, $session_media_counts);
         }
 
         return [
@@ -3005,7 +3051,7 @@ class acp_controller
     /**
      * Traduit un facteur probabiliste en libellé/détail ACP lisible.
      */
-    private function build_session_probability_factor_view(array $factor)
+    private function build_session_probability_factor_view(array $factor, array $session_media_counts = [])
     {
         $code = trim((string)($factor['code'] ?? ''));
         $delta = (float)($factor['delta'] ?? 0);
@@ -3025,10 +3071,31 @@ class acp_controller
             || $code === 'has_loaded_expected_media'
             || $code === 'has_human_media_bundle'
         ) {
+            $expected_media_count = max(0, (int)($factor['expected_media_count'] ?? 0));
+            $loaded_media_count = max(0, (int)($factor['loaded_media_count'] ?? 0));
+
+            if (
+                array_key_exists('expected_media_count', $session_media_counts)
+                || array_key_exists('loaded_media_count', $session_media_counts)
+            ) {
+                $expected_media_count = max(0, (int)($session_media_counts['expected_media_count'] ?? 0));
+                $loaded_media_count = max(0, (int)($session_media_counts['loaded_media_count'] ?? 0));
+
+                if ($expected_media_count > 0 && $loaded_media_count === 0) {
+                    $label = $this->user->lang('STATS_BOT_PROBA_FACTOR_MISSING_EXPECTED_MEDIA');
+                    $class = 'diag-cookie-bad';
+                } elseif ($expected_media_count > 0 && $loaded_media_count > 0) {
+                    $label = $this->user->lang('STATS_BOT_PROBA_FACTOR_LOADED_EXPECTED_MEDIA');
+                    $class = 'diag-cookie-ok';
+                } else {
+                    $class = 'diag-cookie-na';
+                }
+            }
+
             $detail = sprintf(
                 $this->user->lang('STATS_BOT_PROBA_FACTOR_MEDIA_COUNTS'),
-                max(0, (int)($factor['expected_media_count'] ?? 0)),
-                max(0, (int)($factor['loaded_media_count'] ?? 0))
+                $expected_media_count,
+                $loaded_media_count
             );
         } elseif ($code === 'has_missing_media_path') {
             $detail = sprintf(

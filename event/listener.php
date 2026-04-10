@@ -1028,24 +1028,43 @@ HTML;
         $cookie_hash = strtolower(trim((string)$visitor_cookie_hash));
 
         if ($this->has_visitor_cookie_column() && $this->is_valid_visitor_cookie_hash($cookie_hash)) {
-            $sql = 'SELECT log_id, visit_time, session_id
-                    FROM ' . $this->table_prefix . 'bastien59_stats
-                    WHERE user_id = ' . (int)$uid . '
-                    AND visitor_cookie_hash = \'' . $this->db->sql_escape($cookie_hash) . '\'
-                    ORDER BY visit_time DESC, log_id DESC';
+            $member_session = ($uid > 1)
+                ? $this->find_recent_cookie_tracking_session($cookie_hash, $uid, $time_now, $timeout)
+                : null;
 
-            $result = $this->db->sql_query_limit($sql, 1);
-            $last_row = $this->db->sql_fetchrow($result);
-            $this->db->sql_freeresult($result);
+            if ($uid > 1) {
+                $guest_login_session = $this->find_recent_anonymous_login_tracking_session($cookie_hash, $time_now, $timeout);
+                if (is_array($guest_login_session) && !empty($guest_login_session['session_id'])) {
+                    $resolved_session_id = !empty($member_session['session_id'])
+                        ? (string)$member_session['session_id']
+                        : (string)$guest_login_session['session_id'];
 
-            if ($last_row && !empty($last_row['session_id'])) {
-                $time_since_last = $time_now - (int)$last_row['visit_time'];
-                if ($time_since_last >= 0 && $time_since_last <= $timeout) {
-                    return [
-                        'session_id' => (string)$last_row['session_id'],
-                        'is_first_visit' => 0,
-                    ];
+                    if ($resolved_session_id !== '') {
+                        $this->promote_anonymous_login_rows_to_member_session(
+                            (string)$guest_login_session['session_id'],
+                            $uid,
+                            $resolved_session_id,
+                            $time_now,
+                            $timeout
+                        );
+
+                        return [
+                            'session_id' => $resolved_session_id,
+                            'is_first_visit' => 0,
+                        ];
+                    }
                 }
+            }
+
+            $last_row = ($uid > 1)
+                ? $member_session
+                : $this->find_recent_cookie_tracking_session($cookie_hash, $uid, $time_now, $timeout);
+
+            if (is_array($last_row) && !empty($last_row['session_id'])) {
+                return [
+                    'session_id' => (string)$last_row['session_id'],
+                    'is_first_visit' => 0,
+                ];
             }
 
             return [
@@ -1084,6 +1103,167 @@ HTML;
             'session_id' => (string)$last_row['last_session'],
             'is_first_visit' => 0,
         ];
+    }
+
+    /**
+     * Retrouve la dernière session stats récente d'un membre/invité pour un cookie visiteur donné.
+     *
+     * @return array{session_id:string,visit_time:int}|null
+     */
+    private function find_recent_cookie_tracking_session($visitor_cookie_hash, $user_id, $time_now, $session_timeout)
+    {
+        $hash = strtolower(trim((string)$visitor_cookie_hash));
+        $uid = (int)$user_id;
+        $timeout = max(300, (int)$session_timeout);
+        $time_now = max(0, (int)$time_now);
+
+        if ($uid < 0 || !$this->is_valid_visitor_cookie_hash($hash)) {
+            return null;
+        }
+
+        $sql = 'SELECT log_id, visit_time, session_id
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE user_id = ' . (int)$uid . '
+                AND visitor_cookie_hash = \'' . $this->db->sql_escape($hash) . '\'
+                ORDER BY visit_time DESC, log_id DESC';
+
+        $result = $this->db->sql_query_limit($sql, 1);
+        $row = $this->db->sql_fetchrow($result);
+        $this->db->sql_freeresult($result);
+
+        if (!$row || empty($row['session_id'])) {
+            return null;
+        }
+
+        $time_since_last = $time_now - (int)$row['visit_time'];
+        if ($time_since_last < 0 || $time_since_last > $timeout) {
+            return null;
+        }
+
+        return [
+            'session_id' => (string)$row['session_id'],
+            'visit_time' => (int)$row['visit_time'],
+        ];
+    }
+
+    /**
+     * Retrouve une session invitée récente contenant une activité de login.
+     * On s'appuie sur le cookie stats, pas sur l'IP, pour couvrir les bascules IPv4/IPv6.
+     *
+     * @return array{session_id:string,last_login_related_time:int}|null
+     */
+    private function find_recent_anonymous_login_tracking_session($visitor_cookie_hash, $time_now, $session_timeout)
+    {
+        $hash = strtolower(trim((string)$visitor_cookie_hash));
+        $time_now = max(0, (int)$time_now);
+        $lookback = max(900, max(300, (int)$session_timeout) * 2);
+
+        if (!$this->is_valid_visitor_cookie_hash($hash)) {
+            return null;
+        }
+
+        $select_login_columns = $this->has_login_attempt_columns()
+            ? ', login_attempt_failed'
+            : '';
+        $sql = 'SELECT log_id, visit_time, session_id, page_url' . $select_login_columns . '
+                FROM ' . $this->table_prefix . 'bastien59_stats
+                WHERE user_id <= 1
+                AND is_bot = 0
+                AND visitor_cookie_hash = \'' . $this->db->sql_escape($hash) . '\'
+                AND visit_time >= ' . (int) max(0, $time_now - $lookback) . '
+                ORDER BY visit_time DESC, log_id DESC';
+
+        $result = $this->db->sql_query_limit($sql, 60);
+        $sessions = [];
+        while ($row = $this->db->sql_fetchrow($result)) {
+            $session_id = trim((string)($row['session_id'] ?? ''));
+            if ($session_id === '') {
+                continue;
+            }
+
+            if (!isset($sessions[$session_id])) {
+                $sessions[$session_id] = [
+                    'session_id' => $session_id,
+                    'last_login_related_time' => 0,
+                ];
+            }
+
+            if ($this->is_login_related_tracking_row($row)) {
+                $sessions[$session_id]['last_login_related_time'] = max(
+                    (int)$sessions[$session_id]['last_login_related_time'],
+                    (int)($row['visit_time'] ?? 0)
+                );
+            }
+        }
+        $this->db->sql_freeresult($result);
+
+        if (empty($sessions)) {
+            return null;
+        }
+
+        uasort($sessions, function ($a, $b) {
+            return ((int)($b['last_login_related_time'] ?? 0) <=> (int)($a['last_login_related_time'] ?? 0));
+        });
+
+        foreach ($sessions as $candidate) {
+            if ((int)($candidate['last_login_related_time'] ?? 0) > 0) {
+                return $candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Promeut les lignes anonymes liées au login vers la session membre résolue.
+     */
+    private function promote_anonymous_login_rows_to_member_session($source_session_id, $member_user_id, $target_session_id, $time_now, $session_timeout)
+    {
+        $source = trim((string)$source_session_id);
+        $target = trim((string)$target_session_id);
+        $uid = (int)$member_user_id;
+        $time_now = max(0, (int)$time_now);
+        $lookback = max(900, max(300, (int)$session_timeout) * 2);
+
+        if ($source === '' || $uid <= 1) {
+            return;
+        }
+
+        if ($target === '') {
+            $target = $source;
+        }
+
+        $update_fields = [];
+        if ($target !== $source) {
+            $update_fields[] = 'session_id = \'' . $this->db->sql_escape($target) . '\'';
+        }
+        $update_fields[] = 'user_id = ' . (int)$uid;
+
+        $login_where = '(LOWER(page_url) LIKE \'%ucp.php%\' AND LOWER(page_url) LIKE \'%mode=login%\')';
+        if ($this->has_login_attempt_columns()) {
+            $login_where = '(login_attempt_failed = 1 OR ' . $login_where . ')';
+        }
+
+        $sql = 'UPDATE ' . $this->table_prefix . 'bastien59_stats
+                SET ' . implode(', ', $update_fields) . '
+                WHERE session_id = \'' . $this->db->sql_escape($source) . '\'
+                AND user_id <= 1
+                AND is_bot = 0
+                AND visit_time >= ' . (int) max(0, $time_now - $lookback) . '
+                AND ' . $login_where;
+        $this->db->sql_query($sql);
+    }
+
+    /**
+     * Ligne stats liée à la page de login phpBB ou à un login raté capturé côté serveur.
+     */
+    private function is_login_related_tracking_row(array $row)
+    {
+        if ((int)($row['login_attempt_failed'] ?? 0) === 1) {
+            return true;
+        }
+
+        return $this->is_login_page_url((string)($row['page_url'] ?? ''));
     }
 
     /**
@@ -2921,7 +3101,7 @@ HTML;
      */
     private function write_security_audit($ip, $session_id, $user_id, $all_signals, $user_agent, $page_url, $screen_res, $page_count, $hostname, $claimed_bot, $rdns_fail_reason = '')
     {
-        $log_file = $this->config['bastien59_stats_audit_log_path'] ?? '/var/log/security_audit.log';
+        $log_file = '/var/log/security_audit.log';
 
         // Déduplication : max 1 log par session+signaux par heure
         // Empêche qu'un utilisateur qui navigue N pages avec le même faux signal

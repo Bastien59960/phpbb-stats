@@ -478,6 +478,11 @@ body.cursor-modal-open { overflow: hidden; }
                         <!-- IF SESSIONS.USERNAME != "Invite" --><span class="badge badge-member">{SESSIONS.USERNAME}</span><!-- ENDIF -->
                         <br>
                         <span class="ip">{SESSIONS.IP}</span>
+                        <!-- IF SESSIONS.HAS_MULTI_IP -->
+                        <br><small style="color:#666;">{L_STATS_SESSION_IPS_LABEL} {SESSIONS.SESSION_IP_LIST}</small>
+                        <!-- ELSEIF SESSIONS.HAS_CORRELATED_IPS -->
+                        <br><small style="color:#666;">{L_STATS_SESSION_CORRELATED_IPS_LABEL} {SESSIONS.CORRELATED_IP_LIST}</small>
+                        <!-- ENDIF -->
                         <!-- IF SESSIONS.HAS_IP_MULTI_COOKIE or SESSIONS.HAS_COOKIE_MULTI_IP -->
                         <span class="session-correlation-badges">
                             <!-- IF SESSIONS.HAS_IP_MULTI_COOKIE --><span class="badge badge-ip-multi-cookie" title="{SESSIONS.IP_MULTI_COOKIE_TITLE}">{L_STATS_SESSION_BADGE_IP_MULTI_COOKIE}</span><!-- ENDIF -->
@@ -580,6 +585,8 @@ body.cursor-modal-open { overflow: hidden; }
                             <strong>Forward DNS :</strong> {SESSIONS.FORWARD_DNS_STATUS}<!-- IF SESSIONS.FORWARD_DNS_IPS --> (IPs: {SESSIONS.FORWARD_DNS_IPS})<!-- ENDIF --><br>
                             <!-- IF SESSIONS.HAS_MULTI_IP -->
                             <strong>{L_STATS_SESSION_IPS_LABEL}</strong> {SESSIONS.SESSION_IP_LIST}<br>
+                            <!-- ELSEIF SESSIONS.HAS_CORRELATED_IPS -->
+                            <strong>{L_STATS_SESSION_CORRELATED_IPS_LABEL}</strong> {SESSIONS.CORRELATED_IP_LIST}<br>
                             <!-- ENDIF -->
                             <strong>{L_STATS_SCROLL_LABEL}</strong> <span class="badge {SESSIONS.SCROLL_CLASS}">{SESSIONS.SCROLL_LABEL}</span><br>
                             <!-- IF SESSIONS.RES_BOTH_MISSING -->

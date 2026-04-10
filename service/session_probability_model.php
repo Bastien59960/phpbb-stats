@@ -188,6 +188,37 @@ class session_probability_model
         ];
     }
 
+    /**
+     * Recompute expected vs loaded media counts for a grouped ACP timeline.
+     *
+     * @param array<int,array<string,mixed>> $pages
+     *
+     * @return array{expected_media_count:int,loaded_media_count:int}
+     */
+    public function compute_media_expectation_for_pages(array $pages)
+    {
+        $loaded_attachment_ids = [];
+
+        foreach ($pages as $page) {
+            $page_url = trim((string)($page['page_url'] ?? ''));
+            if ($page_url === '' || !$this->is_download_file_url($page_url)) {
+                continue;
+            }
+
+            $attach_id = $this->extract_download_attach_id($page_url);
+            if ($attach_id > 0) {
+                $loaded_attachment_ids[$attach_id] = true;
+            }
+        }
+
+        $media_expectation = $this->compute_session_media_expectation($pages, array_keys($loaded_attachment_ids));
+
+        return [
+            'expected_media_count' => (int)($media_expectation['expected_count'] ?? 0),
+            'loaded_media_count' => (int)($media_expectation['loaded_count'] ?? 0),
+        ];
+    }
+
     private function get_base_bot_prior(array $session_row)
     {
         $user_id = (int)($session_row['user_id'] ?? 0);

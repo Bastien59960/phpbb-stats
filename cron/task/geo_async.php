@@ -111,6 +111,10 @@ class geo_async extends \phpbb\cron\task\base
 
     public function run()
     {
+        if (!$this->is_runnable() || !$this->should_run()) {
+            return;
+        }
+
         $now = time();
         $this->config->set('bastien59_stats_geo_async_last_run', $now);
 
@@ -1933,7 +1937,7 @@ class geo_async extends \phpbb\cron\task\base
         }
         @touch($dedup_file);
 
-        $log_file = $this->config['bastien59_stats_audit_log_path'] ?? '/var/log/security_audit.log';
+        $log_file = '/var/log/security_audit.log';
         $ts = date('Y-m-d H:i:s');
         $ua_safe = str_replace('"', '\\"', substr((string)$user_agent, 0, 500));
         $page_safe = str_replace('"', '\\"', substr((string)$page_url, 0, 500));

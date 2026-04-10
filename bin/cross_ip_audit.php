@@ -311,15 +311,6 @@ foreach ($rawDownloads as $d) {
 }
 
 $auditLogPath = '/var/log/security_audit.log';
-$configSql = "SELECT config_value FROM {$table_prefix}config WHERE config_name = 'bastien59_stats_audit_log_path'";
-$configRes = $db->query($configSql);
-if ($configRes) {
-    $cfg = $configRes->fetch_assoc();
-    $configRes->free();
-    if (!empty($cfg['config_value'])) {
-        $auditLogPath = (string)$cfg['config_value'];
-    }
-}
 
 $candidates = [];
 $summary = [

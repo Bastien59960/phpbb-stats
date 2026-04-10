@@ -136,9 +136,9 @@
 	<fieldset>
 		<legend>Journal de securite</legend>
 		<dl>
-			<dt><label for="stats_audit_log_path">Chemin du fichier de log :</label><br /><span>Fichier ou les detections de bots sont ecrites (lu par fail2ban). Le fichier doit etre accessible en ecriture par www-data.</span></dt>
+			<dt><label>Chemin du fichier de log :</label><br /><span>Chemin fixe utilise par l'extension et par fail2ban. Le fichier doit etre accessible en ecriture par www-data.</span></dt>
 			<dd>
-				<input type="text" id="stats_audit_log_path" name="stats_audit_log_path" value="{STATS_AUDIT_LOG_PATH}" style="width:400px;" />
+				<code>{STATS_AUDIT_LOG_PATH}</code>
 				<!-- IF STATS_AUDIT_LOG_STATUS == 'ok' -->
 					<span style="color:#27ae60; margin-left:8px;">&#10003; Accessible en ecriture</span>
 				<!-- ELSEIF STATS_AUDIT_LOG_STATUS == 'not_writable' -->
