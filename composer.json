@@ -1,23 +1,26 @@
 {
     "name": "bastien59960/stats",
     "type": "phpbb-extension",
-    "description": "Statistiques avancées : Visiteurs, Robots, Flux de navigation et Temps passé.",
+    "description": "Advanced visitor analytics for phpBB: bot detection, geolocation, session tracking, browser fingerprinting, and Fail2ban security bridge.",
+    "homepage": "https://github.com/Bastien59960/phpbb-stats",
     "version": "1.1.0",
     "license": "GPL-2.0-only",
     "authors": [
         {
-            "name": "Bastien",
-            "role": "Developer"
+            "name": "Bastien59960",
+            "role": "Developer",
+            "homepage": "https://github.com/Bastien59960"
         }
     ],
     "require": {
         "php": ">=7.1.3",
-        "phpbb/phpbb": ">=3.3.0"
+        "phpbb/phpbb": ">=3.3.0,<4.0.0@dev",
+        "composer/installers": "~1.0"
     },
     "extra": {
         "display-name": "Bastien59 Stats",
         "soft-require": {
-            "phpbb/phpbb": ">=3.3.0"
+            "phpbb/phpbb": ">=3.3.0,<4.0.0@dev"
         }
     },
     "autoload": {
