@@ -3,7 +3,7 @@
     "type": "phpbb-extension",
     "description": "Advanced visitor analytics for phpBB: bot detection, geolocation, session tracking, browser fingerprinting, and Fail2ban security bridge.",
     "homepage": "https://github.com/Bastien59960/phpbb-stats",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "license": "GPL-2.0-only",
     "authors": [
         {

@@ -1937,7 +1937,7 @@ class geo_async extends \phpbb\cron\task\base
         }
         @touch($dedup_file);
 
-        $log_file = '/var/log/security_audit.log';
+        $log_file = (string) ($this->config['bastien59_stats_audit_log_path'] ?? '/var/log/security_audit.log');
         $ts = date('Y-m-d H:i:s');
         $ua_safe = str_replace('"', '\\"', substr((string)$user_agent, 0, 500));
         $page_safe = str_replace('"', '\\"', substr((string)$page_url, 0, 500));

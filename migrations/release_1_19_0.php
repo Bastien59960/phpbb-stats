@@ -1,7 +1,8 @@
 <?php
 /**
  * Stats Extension for phpBB - Migration 1.19.0
- * Forces the security audit log path to /var/log/security_audit.log.
+ * Ensures the security audit log path config key exists with the default value.
+ * The path is now configurable via ACP (see release_1_20_0).
  *
  * @package bastien59960/stats
  * @version 1.19.0

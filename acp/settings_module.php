@@ -3,7 +3,7 @@ namespace bastien59960\stats\acp;
 
 class settings_module
 {
-    const AUDIT_LOG_PATH = '/var/log/security_audit.log';
+    const DEFAULT_AUDIT_LOG_PATH = '/var/log/security_audit.log';
 
     public $u_action;
     public $tpl_name;
@@ -87,8 +87,12 @@ class settings_module
             $cn_no_interaction_enabled = $request->variable('stats_cn_no_interaction_enabled', 1);
             $config->set('bastien59_stats_cn_no_interaction_enabled', $cn_no_interaction_enabled ? 1 : 0);
 
-            // Chemin du log de sécurité (fixe pour rester aligné avec fail2ban)
-            $config->set('bastien59_stats_audit_log_path', self::AUDIT_LOG_PATH);
+            // Chemin du log de sécurité (configurable via ACP)
+            $audit_log_path = trim($request->variable('stats_audit_log_path', self::DEFAULT_AUDIT_LOG_PATH));
+            if ($audit_log_path === '') {
+                $audit_log_path = self::DEFAULT_AUDIT_LOG_PATH;
+            }
+            $config->set('bastien59_stats_audit_log_path', $audit_log_path);
 
             // Seuil Chrome (50-200)
             $chrome_threshold = $request->variable('stats_chrome_threshold', 130);
@@ -150,8 +154,8 @@ class settings_module
             'STATS_NOSCREENRES_PAGES'=> $config['bastien59_stats_noscreenres_pages'] ?? 3,
             'STATS_GEO_IPV4_PREFIX_LEN' => $config['bastien59_stats_geo_ipv4_prefix_len'] ?? 24,
             'STATS_GEO_IPV6_PREFIX_LEN' => $config['bastien59_stats_geo_ipv6_prefix_len'] ?? 48,
-            'STATS_AUDIT_LOG_PATH'   => self::AUDIT_LOG_PATH,
-            'STATS_AUDIT_LOG_STATUS' => $this->check_log_status(self::AUDIT_LOG_PATH),
+            'STATS_AUDIT_LOG_PATH'   => $config['bastien59_stats_audit_log_path'] ?? self::DEFAULT_AUDIT_LOG_PATH,
+            'STATS_AUDIT_LOG_STATUS' => $this->check_log_status($config['bastien59_stats_audit_log_path'] ?? self::DEFAULT_AUDIT_LOG_PATH),
         ]);
     }
 

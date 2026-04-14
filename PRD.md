@@ -28,11 +28,14 @@ Le lot courant consolide plusieurs evolutions deja presentes dans le depot, puis
 - Les traces anonymes autour d'un login peuvent etre rattachees a la session membre resolue au lieu de casser artificiellement le parcours.
 - Cette logique vise a mieux raconter la navigation reelle sans dependre uniquement de l'IP source.
 
-### 3. Journal de securite fixe
+### 3. Journal de securite configurable (depuis v1.20.0)
 
-- Le chemin du journal de securite est fixe a `/var/log/security_audit.log`.
-- L'ACP n'expose plus ce chemin comme un parametre libre.
-- La migration `release_1_19_0` force la valeur de configuration pour rester alignee avec fail2ban et avec l'exploitation systeme.
+- Le chemin du journal de securite est configurable via l'ACP (section "Journal de securite").
+- Valeur par defaut : `/var/log/security_audit.log`.
+- La migration `release_1_19_0` initialise la cle de configuration avec la valeur par defaut.
+- La migration `release_1_20_0` officialise la configurabilite du champ (aucune valeur existante n'est ecrasee).
+- Les trois points d'emission (`listener.php`, `collect_controller.php`, `geo_async.php`) et le script CLI `bin/cross_ip_audit.php` (option `--log-path`) lisent tous cette valeur.
+- Si le chemin est modifie, mettre a jour les jails fail2ban en consequence (`logpath =`).
 
 ### 4. Garde-fou cron geo
 

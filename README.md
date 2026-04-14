@@ -131,13 +131,13 @@ In **Extensions > Stats Settings**:
 - Enable/disable tracking.
 - Set human and bot retention.
 - Configure session timeout.
-- Security log path is fixed to `/var/log/security_audit.log`.
+- Configure the security log path (default: `/var/log/security_audit.log`). Update your Fail2ban jails if you change it.
 - Tune browser/JS detection thresholds.
 
 Production checklist:
 
-- Ensure PHP process can write to security log.
-- Ensure Fail2ban reads `/var/log/security_audit.log`.
+- Ensure PHP process (`www-data`) can write to the configured security log path.
+- Ensure Fail2ban `logpath` in each jail matches the configured path.
 - Enable matching Fail2ban jails.
 - Ensure phpBB cron runs regularly.
 

@@ -2515,6 +2515,446 @@ class acp_controller
     }
 
     /**
+     * Regroupe les lignes d'un cluster en "machines probables".
+     * Ancrage fort: cookie visiteur stable.
+     * Repli: empreinte souple (OS/appareil/UA normalise/resolution/AJAX).
+     *
+     * @return array{groups:array<int,array>,row_meta:array<int,array>,group_count:int}
+     */
+    private function build_session_machine_groups(array $pages, array $fallback_row = [])
+    {
+        $rows = $pages;
+        if (empty($rows) && !empty($fallback_row)) {
+            $rows = [$fallback_row];
+        }
+        if (empty($rows)) {
+            return [
+                'groups' => [],
+                'row_meta' => [],
+                'group_count' => 0,
+            ];
+        }
+
+        usort($rows, function ($a, $b) {
+            $time_cmp = ((int)($a['visit_time'] ?? 0) <=> (int)($b['visit_time'] ?? 0));
+            if ($time_cmp !== 0) {
+                return $time_cmp;
+            }
+            return ((int)($a['log_id'] ?? 0) <=> (int)($b['log_id'] ?? 0));
+        });
+
+        $source_session_cookie_candidates = [];
+        foreach ($rows as $row) {
+            $source_session_id = trim((string)($row['session_id'] ?? ''));
+            $cookie_hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
+            if ($source_session_id === '' || !$this->is_valid_visitor_cookie_hash($cookie_hash)) {
+                continue;
+            }
+            $source_session_cookie_candidates[$source_session_id][$cookie_hash] = true;
+        }
+
+        $source_session_anchor_cookies = [];
+        foreach ($source_session_cookie_candidates as $source_session_id => $cookie_hashes) {
+            if (count($cookie_hashes) === 1) {
+                $cookie_keys = array_keys($cookie_hashes);
+                $source_session_anchor_cookies[$source_session_id] = (string)$cookie_keys[0];
+            }
+        }
+
+        $groups = [];
+        foreach ($rows as $row) {
+            $identity = $this->resolve_session_machine_group_identity($row, $source_session_anchor_cookies);
+            $group_key = trim((string)($identity['key'] ?? ''));
+            if ($group_key === '') {
+                continue;
+            }
+
+            if (!isset($groups[$group_key])) {
+                $groups[$group_key] = [
+                    'key' => $group_key,
+                    'anchor_type' => (string)($identity['anchor_type'] ?? 'fingerprint'),
+                    'anchor_value' => (string)($identity['anchor_value'] ?? ''),
+                    'rows' => [],
+                    'ips' => [],
+                    'session_ids' => [],
+                    'cookie_hashes' => [],
+                    'page_count' => 0,
+                    'first_time' => 0,
+                    'last_time' => 0,
+                    'latest_user_os' => '',
+                    'latest_user_device' => '',
+                    'latest_browser_family' => 'other',
+                    'latest_cookie_resolution' => '',
+                    'latest_cookie_resolution_time' => 0,
+                    'latest_ajax_resolution' => '',
+                    'latest_ajax_resolution_time' => 0,
+                    'ajax_seen' => 0,
+                ];
+            }
+
+            $visit_time = max(0, (int)($row['visit_time'] ?? 0));
+            $log_id = max(0, (int)($row['log_id'] ?? 0));
+            $ip = trim((string)($row['user_ip'] ?? ''));
+            $source_session_id = trim((string)($row['session_id'] ?? ''));
+            $cookie_hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
+            $user_os = trim((string)($row['user_os'] ?? ''));
+            $user_device = trim((string)($row['user_device'] ?? ''));
+            $browser_family = $this->get_browser_family((string)($row['user_agent'] ?? ''));
+            $cookie_resolution = trim((string)($row['screen_res'] ?? ''));
+            $ajax_resolution = trim((string)($row['screen_res_ajax'] ?? ''));
+            $ajax_time = max($visit_time, (int)($row['ajax_seen_time'] ?? 0));
+
+            $groups[$group_key]['rows'][] = $row;
+            $groups[$group_key]['page_count']++;
+
+            if ($visit_time > 0) {
+                if ((int)$groups[$group_key]['first_time'] <= 0 || $visit_time < (int)$groups[$group_key]['first_time']) {
+                    $groups[$group_key]['first_time'] = $visit_time;
+                }
+                if ($visit_time >= (int)$groups[$group_key]['last_time']) {
+                    $groups[$group_key]['last_time'] = $visit_time;
+                    if ($user_os !== '') {
+                        $groups[$group_key]['latest_user_os'] = $user_os;
+                    }
+                    if ($user_device !== '') {
+                        $groups[$group_key]['latest_user_device'] = $user_device;
+                    }
+                    $groups[$group_key]['latest_browser_family'] = $browser_family;
+                }
+            }
+
+            if ($ip !== '') {
+                $groups[$group_key]['ips'][$ip] = true;
+            }
+            if ($source_session_id !== '') {
+                $groups[$group_key]['session_ids'][$source_session_id] = true;
+            }
+            if ($this->is_valid_visitor_cookie_hash($cookie_hash)) {
+                $groups[$group_key]['cookie_hashes'][$cookie_hash] = true;
+            }
+            if ($cookie_resolution !== '' && $visit_time >= (int)$groups[$group_key]['latest_cookie_resolution_time']) {
+                $groups[$group_key]['latest_cookie_resolution'] = $cookie_resolution;
+                $groups[$group_key]['latest_cookie_resolution_time'] = $visit_time;
+            }
+            if ($ajax_resolution !== '' && $ajax_time >= (int)$groups[$group_key]['latest_ajax_resolution_time']) {
+                $groups[$group_key]['latest_ajax_resolution'] = $ajax_resolution;
+                $groups[$group_key]['latest_ajax_resolution_time'] = $ajax_time;
+            }
+            if ($ajax_time > 0 || !empty($row['scroll_down_ajax'])) {
+                $groups[$group_key]['ajax_seen'] = 1;
+            }
+
+            if ($log_id > 0) {
+                $groups[$group_key]['row_log_ids'][$log_id] = true;
+            }
+        }
+
+        if (empty($groups)) {
+            return [
+                'groups' => [],
+                'row_meta' => [],
+                'group_count' => 0,
+            ];
+        }
+
+        $ordered_groups = array_values($groups);
+        usort($ordered_groups, function ($a, $b) {
+            $time_cmp = ((int)($a['first_time'] ?? 0) <=> (int)($b['first_time'] ?? 0));
+            if ($time_cmp !== 0) {
+                return $time_cmp;
+            }
+            $last_cmp = ((int)($a['last_time'] ?? 0) <=> (int)($b['last_time'] ?? 0));
+            if ($last_cmp !== 0) {
+                return $last_cmp;
+            }
+            return strcmp((string)($a['key'] ?? ''), (string)($b['key'] ?? ''));
+        });
+
+        $group_views = [];
+        $row_meta = [];
+        foreach ($ordered_groups as $index => $group) {
+            $view = $this->build_session_machine_group_view($group, (int)$index + 1);
+            $group_views[] = $view;
+
+            foreach ((array)($group['rows'] ?? []) as $group_row) {
+                $log_id = (int)($group_row['log_id'] ?? 0);
+                if ($log_id <= 0) {
+                    continue;
+                }
+                $row_meta[$log_id] = [
+                    'GROUP_KEY' => (string)($group['key'] ?? ''),
+                    'LABEL' => (string)($view['LABEL'] ?? ''),
+                    'ANCHOR_LABEL' => (string)($view['ANCHOR_LABEL'] ?? ''),
+                    'HEADER_SUMMARY' => (string)($view['HEADER_SUMMARY'] ?? ''),
+                    'IP_LIST' => (string)($view['IP_LIST'] ?? ''),
+                    'HEADER_CLASS' => (string)($view['HEADER_CLASS'] ?? 'machine-group-fingerprint'),
+                ];
+            }
+        }
+
+        return [
+            'groups' => $group_views,
+            'row_meta' => $row_meta,
+            'group_count' => count($group_views),
+        ];
+    }
+
+    /**
+     * Retourne l'identité de regroupement "machine probable" pour une ligne.
+     *
+     * @return array{key:string,anchor_type:string,anchor_value:string}
+     */
+    private function resolve_session_machine_group_identity(array $row, array $source_session_anchor_cookies)
+    {
+        $cookie_hash = strtolower(trim((string)($row['visitor_cookie_hash'] ?? '')));
+        $source_session_id = trim((string)($row['session_id'] ?? ''));
+
+        if (
+            !$this->is_valid_visitor_cookie_hash($cookie_hash)
+            && $source_session_id !== ''
+            && isset($source_session_anchor_cookies[$source_session_id])
+            && $this->is_valid_visitor_cookie_hash($source_session_anchor_cookies[$source_session_id])
+        ) {
+            $cookie_hash = (string)$source_session_anchor_cookies[$source_session_id];
+        }
+
+        if ($this->is_valid_visitor_cookie_hash($cookie_hash)) {
+            return [
+                'key' => 'cookie:' . $cookie_hash,
+                'anchor_type' => 'cookie',
+                'anchor_value' => $cookie_hash,
+            ];
+        }
+
+        $fingerprint = $this->build_session_machine_fingerprint($row);
+        if ($fingerprint !== '') {
+            return [
+                'key' => 'fingerprint:' . sha1($fingerprint),
+                'anchor_type' => 'fingerprint',
+                'anchor_value' => $fingerprint,
+            ];
+        }
+
+        if ($source_session_id !== '') {
+            return [
+                'key' => 'session:' . sha1($source_session_id),
+                'anchor_type' => 'session',
+                'anchor_value' => $source_session_id,
+            ];
+        }
+
+        $ip = trim((string)($row['user_ip'] ?? ''));
+        if ($ip !== '') {
+            return [
+                'key' => 'ip:' . sha1($ip),
+                'anchor_type' => 'ip',
+                'anchor_value' => $ip,
+            ];
+        }
+
+        $fallback = (string)max(0, (int)($row['log_id'] ?? 0));
+        return [
+            'key' => 'row:' . $fallback,
+            'anchor_type' => 'row',
+            'anchor_value' => $fallback,
+        ];
+    }
+
+    /**
+     * Empreinte souple de machine: OS/appareil/UA normalise/resolution/type telemetrie.
+     */
+    private function build_session_machine_fingerprint(array $row)
+    {
+        $effective_resolution = trim((string)($row['screen_res_ajax'] ?? ''));
+        if ($effective_resolution === '') {
+            $effective_resolution = trim((string)($row['screen_res'] ?? ''));
+        }
+
+        $ajax_seen = (
+            (int)($row['ajax_seen_time'] ?? 0) > 0
+            || trim((string)($row['screen_res_ajax'] ?? '')) !== ''
+            || !empty($row['scroll_down_ajax'])
+        ) ? 'ajax' : 'http';
+
+        $parts = [
+            $this->normalize_session_machine_token((string)($row['user_os'] ?? '')),
+            $this->normalize_session_machine_token((string)($row['user_device'] ?? '')),
+            $this->normalize_session_machine_token($this->get_browser_family((string)($row['user_agent'] ?? ''))),
+            $this->normalize_session_machine_token($effective_resolution),
+            $ajax_seen,
+            $this->normalize_session_machine_user_agent((string)($row['user_agent'] ?? '')),
+        ];
+
+        $non_empty_parts = array_filter($parts, function ($part) {
+            return $part !== '' && $part !== '-';
+        });
+
+        return empty($non_empty_parts) ? '' : implode('|', $parts);
+    }
+
+    private function normalize_session_machine_token($value)
+    {
+        $normalized = strtolower(trim((string)$value));
+        $normalized = preg_replace('/\s+/', ' ', $normalized);
+        return ($normalized !== null && $normalized !== '') ? $normalized : '-';
+    }
+
+    private function normalize_session_machine_user_agent($user_agent)
+    {
+        $normalized = strtolower(trim((string)$user_agent));
+        if ($normalized === '') {
+            return '-';
+        }
+
+        $normalized = preg_replace('/[0-9]+(?:\.[0-9]+)*/', '#', $normalized);
+        $normalized = preg_replace('/[#]{2,}/', '#', (string)$normalized);
+        $normalized = preg_replace('/\s+/', ' ', (string)$normalized);
+        $normalized = trim((string)$normalized);
+
+        if ($normalized === '') {
+            return '-';
+        }
+
+        return substr($normalized, 0, 180);
+    }
+
+    /**
+     * Prépare une vue ACP lisible pour un groupe de machine probable.
+     *
+     * @return array<string,string>
+     */
+    private function build_session_machine_group_view(array $group, $machine_index)
+    {
+        $machine_index = max(1, (int)$machine_index);
+        $label = sprintf($this->user->lang('STATS_MACHINE_GROUP_LABEL'), $machine_index);
+        $anchor_type = (string)($group['anchor_type'] ?? 'fingerprint');
+        $anchor_value = (string)($group['anchor_value'] ?? '');
+        $header_class = 'machine-group-fingerprint';
+
+        if ($anchor_type === 'cookie') {
+            $anchor_label = sprintf(
+                $this->user->lang('STATS_MACHINE_ANCHOR_COOKIE'),
+                $this->format_cookie_hash_short($anchor_value)
+            );
+            $header_class = 'machine-group-cookie';
+        } elseif ($anchor_type === 'session') {
+            $anchor_label = $this->user->lang('STATS_MACHINE_ANCHOR_SESSION');
+            $header_class = 'machine-group-session';
+        } elseif ($anchor_type === 'ip') {
+            $anchor_label = $this->user->lang('STATS_MACHINE_ANCHOR_IP');
+            $header_class = 'machine-group-ip';
+        } elseif ($anchor_type === 'row') {
+            $anchor_label = $this->user->lang('STATS_MACHINE_ANCHOR_FALLBACK');
+            $header_class = 'machine-group-fallback';
+        } else {
+            $anchor_label = $this->user->lang('STATS_MACHINE_ANCHOR_FINGERPRINT');
+            $header_class = 'machine-group-fingerprint';
+        }
+
+        $os_label = trim((string)($group['latest_user_os'] ?? ''));
+        $device_label = trim((string)($group['latest_user_device'] ?? ''));
+        $browser_label = $this->format_browser_family_label((string)($group['latest_browser_family'] ?? 'other'));
+        $resolution = trim((string)($group['latest_ajax_resolution'] ?? ''));
+        if ($resolution === '') {
+            $resolution = trim((string)($group['latest_cookie_resolution'] ?? ''));
+        }
+
+        $summary_parts = [];
+        if ($os_label !== '' || $device_label !== '') {
+            $summary_parts[] = trim($os_label . ' | ' . $device_label, ' |');
+        }
+        if ($browser_label !== '') {
+            $summary_parts[] = $browser_label;
+        }
+        if ($resolution !== '') {
+            $summary_parts[] = $this->format_resolution_px($resolution);
+        }
+        $summary_parts[] = $this->user->lang(
+            !empty($group['ajax_seen'])
+                ? 'STATS_MACHINE_META_AJAX_SEEN'
+                : 'STATS_MACHINE_META_AJAX_NONE'
+        );
+        $summary_parts[] = sprintf(
+            $this->user->lang('STATS_MACHINE_META_REQUESTS'),
+            max(0, (int)($group['page_count'] ?? 0))
+        );
+        $summary_parts[] = sprintf(
+            $this->user->lang('STATS_MACHINE_META_IPS'),
+            count((array)($group['ips'] ?? []))
+        );
+        $summary_parts[] = sprintf(
+            $this->user->lang('STATS_MACHINE_META_SOURCE_SESSIONS'),
+            count((array)($group['session_ids'] ?? []))
+        );
+
+        $first_time = max(0, (int)($group['first_time'] ?? 0));
+        $last_time = max(0, (int)($group['last_time'] ?? 0));
+        $time_range = '-';
+        if ($first_time > 0 && $last_time > 0) {
+            $time_range = ($first_time === $last_time)
+                ? $this->user->format_date($first_time, 'd M Y H:i:s')
+                : $this->user->format_date($first_time, 'd M H:i:s')
+                    . ' -> '
+                    . $this->user->format_date($last_time, 'd M H:i:s');
+        }
+
+        $ip_list = implode(', ', array_keys((array)($group['ips'] ?? [])));
+        $detail_summary = $anchor_label . ' · ' . implode(' · ', $summary_parts);
+
+        return [
+            'LABEL' => htmlspecialchars($label, ENT_COMPAT, 'UTF-8'),
+            'ANCHOR_LABEL' => htmlspecialchars($anchor_label, ENT_COMPAT, 'UTF-8'),
+            'HEADER_SUMMARY' => htmlspecialchars(implode(' · ', $summary_parts), ENT_COMPAT, 'UTF-8'),
+            'DETAIL_SUMMARY' => htmlspecialchars($detail_summary, ENT_COMPAT, 'UTF-8'),
+            'IP_LIST' => htmlspecialchars($ip_list, ENT_COMPAT, 'UTF-8'),
+            'TIME_RANGE' => htmlspecialchars($time_range, ENT_COMPAT, 'UTF-8'),
+            'HEADER_CLASS' => $header_class,
+        ];
+    }
+
+    private function get_browser_family($user_agent)
+    {
+        $ua = strtolower((string)$user_agent);
+
+        if (strpos($ua, 'edg/') !== false || strpos($ua, 'edge/') !== false) {
+            return 'edge';
+        }
+        if (strpos($ua, 'opr/') !== false || strpos($ua, 'opera') !== false) {
+            return 'opera';
+        }
+        if (strpos($ua, 'firefox/') !== false) {
+            return 'firefox';
+        }
+        if (strpos($ua, 'safari/') !== false && strpos($ua, 'chrome/') === false) {
+            return 'safari';
+        }
+        if (strpos($ua, 'chrome/') !== false || strpos($ua, 'crios/') !== false) {
+            return 'chrome';
+        }
+        if (strpos($ua, 'trident/') !== false || strpos($ua, 'msie ') !== false) {
+            return 'ie';
+        }
+
+        return 'other';
+    }
+
+    private function format_browser_family_label($browser_family)
+    {
+        $family = strtolower(trim((string)$browser_family));
+        $labels = [
+            'edge' => 'Edge',
+            'opera' => 'Opera',
+            'firefox' => 'Firefox',
+            'safari' => 'Safari',
+            'chrome' => 'Chrome',
+            'ie' => 'IE',
+            'other' => 'Other',
+        ];
+
+        return isset($labels[$family]) ? $labels[$family] : 'Other';
+    }
+
+    /**
      * Détermine la page d'entrée à afficher pour une session observée.
      */
     private function resolve_session_landing_page_row(array $pages, array $fallback_row = [])

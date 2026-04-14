@@ -3101,7 +3101,7 @@ HTML;
      */
     private function write_security_audit($ip, $session_id, $user_id, $all_signals, $user_agent, $page_url, $screen_res, $page_count, $hostname, $claimed_bot, $rdns_fail_reason = '')
     {
-        $log_file = '/var/log/security_audit.log';
+        $log_file = (string) ($this->config['bastien59_stats_audit_log_path'] ?? '/var/log/security_audit.log');
 
         // Déduplication : max 1 log par session+signaux par heure
         // Empêche qu'un utilisateur qui navigue N pages avec le même faux signal

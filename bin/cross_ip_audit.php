@@ -16,6 +16,7 @@ $options = getopt('', [
     'hard-score::',
     'dedup-soft::',
     'dedup-hard::',
+    'log-path::',
     'verbose',
 ]);
 
@@ -310,7 +311,9 @@ foreach ($rawDownloads as $d) {
     }
 }
 
-$auditLogPath = '/var/log/security_audit.log';
+$auditLogPath = isset($options['log-path']) && $options['log-path'] !== ''
+    ? (string) $options['log-path']
+    : '/var/log/security_audit.log';
 
 $candidates = [];
 $summary = [

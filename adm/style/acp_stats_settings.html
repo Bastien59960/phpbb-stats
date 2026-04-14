@@ -136,9 +136,9 @@
 	<fieldset>
 		<legend>Journal de securite</legend>
 		<dl>
-			<dt><label>Chemin du fichier de log :</label><br /><span>Chemin fixe utilise par l'extension et par fail2ban. Le fichier doit etre accessible en ecriture par www-data.</span></dt>
+			<dt><label for="stats_audit_log_path">Chemin du fichier de log :</label><br /><span>Chemin absolu du journal de securite utilise par l'extension et lu par fail2ban. Defaut : <code>/var/log/security_audit.log</code>. Le fichier doit etre accessible en ecriture par www-data. Si vous changez ce chemin, mettez a jour vos jails fail2ban en consequence.</span></dt>
 			<dd>
-				<code>{STATS_AUDIT_LOG_PATH}</code>
+				<input type="text" id="stats_audit_log_path" name="stats_audit_log_path" value="{STATS_AUDIT_LOG_PATH}" style="width:400px;" />
 				<!-- IF STATS_AUDIT_LOG_STATUS == 'ok' -->
 					<span style="color:#27ae60; margin-left:8px;">&#10003; Accessible en ecriture</span>
 				<!-- ELSEIF STATS_AUDIT_LOG_STATUS == 'not_writable' -->
