@@ -86,6 +86,14 @@ Strict and observation signals depending on geo context:
 - `bin/cross_ip_audit.php` detects distributed cross-IP attachment download patterns (`PHPBB-XIP`).
 - Included Fail2ban snippets: `fail2ban/phpbb-guest-cookie-clone.conf`, `fail2ban/phpbb-crossip-soft.conf`, `fail2ban/phpbb-crossip-hard.conf`, `fail2ban/jail.guest-cookie-clone.local.example`, `fail2ban/jail.crossip.local.example`.
 
+## Inter-extension dependencies
+
+| Extension | Role | Type |
+|---|---|---|
+| `bastien59960/reactions` | Stats tracks whether reactions assets (CSS/JS) were loaded per session, using dedicated columns in its own tables | **Optional** — columns are added by a stats migration; the feature degrades gracefully and silently if reactions is absent |
+
+`stats` has **no hard dependency** on any other extension in this project.
+
 ## Requirements
 
 - PHP `>= 7.1.3`

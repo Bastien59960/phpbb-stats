@@ -149,3 +149,17 @@ Pour l'instant:
 - Les fichiers PHP modifies passent `php -l`.
 - Le correctif ACP n'introduit pas de changement de schema.
 - Le commit de ce lot embarque aussi la migration forçant le chemin du journal de securite.
+
+## Dépendances inter-extensions
+
+### Utilise (optionnel)
+
+- **`bastien59960/reactions`** : les colonnes `reactions_extension_expected`, `reactions_css_seen`, `reactions_js_seen` dans `bastien59_stats` et `bastien59_stats_behavior_seen` (migration `release_1_10_0`) tracent la présence et le chargement des assets de l'extension reactions par session visiteur. La migration vérifie l'existence de ces colonnes (`sql_column_exists`) avant usage. Si reactions est absent ou non migré, ces colonnes restent à `0` sans impact fonctionnel sur les autres features de stats.
+
+### Exposée à (consommateurs)
+
+Aucun autre module du projet ne lit directement les tables de stats.
+
+### Résumé
+
+`stats` n'a aucune dépendance forte. Son intégration avec `reactions` est un enrichissement optionnel : stats peut fonctionner entièrement sans reactions.

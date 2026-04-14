@@ -103,6 +103,14 @@ Le `cron_lock` phpBB reste orphelin pendant toute cette durée.
 - Script CLI `bin/cross_ip_audit.php` pour détecter le téléchargement distribué cross-IP (`PHPBB-XIP`).
 - Snippets Fail2ban inclus: `fail2ban/phpbb-guest-cookie-clone.conf`, `fail2ban/phpbb-crossip-soft.conf`, `fail2ban/phpbb-crossip-hard.conf`, `fail2ban/jail.guest-cookie-clone.local.example`, `fail2ban/jail.crossip.local.example`.
 
+## Dépendances inter-extensions
+
+| Extension | Rôle | Type |
+|---|---|---|
+| `bastien59960/reactions` | Stats trace le chargement des assets reactions (CSS/JS) par session dans ses propres colonnes | **Optionnelle** — colonnes ajoutées par une migration stats ; dégradation transparente si reactions est absent |
+
+`stats` n'a **aucune dépendance forte** sur d'autres extensions du projet.
+
 ## Pré-requis
 
 - PHP `>= 7.1.3`
